@@ -140,7 +140,7 @@ function pantallaAcceso(modo, aviso) {
   var enlaces = h('div', { class: 'enlaces' });
   if (modo === 'olvido') enlaces.appendChild(h('button', { type: 'button', onclick: function () { pantallaAcceso('entrar'); } }, 'Volver a entrar'));
   if (modo === 'entrar') enlaces.appendChild(h('button', { type: 'button', onclick: function () { pantallaAcceso('olvido'); } }, 'He olvidado la contraseña'));
-  vista.appendChild(h('div', { class: 'tarjeta acceso' }, [h('h2', {}, 'MCD · Gestión documental'), h('p', { class: 'sub' }, ayuda[modo]), form, mensaje, enlaces]));
+  vista.appendChild(h('div', { class: 'tarjeta acceso' }, [h('img', { class: 'logo-acceso', src: 'logo.svg', alt: 'MCD' }), h('h2', {}, 'Gestión documental'), h('p', { class: 'sub' }, ayuda[modo]), form, mensaje, enlaces]));
   (modo === 'nueva' ? clave : email).focus();
 }
 function salir() { sb.auth.signOut().then(function () { S.rol = null; S.datos = null; S.denegado = false; pantallaAcceso('entrar'); }); }

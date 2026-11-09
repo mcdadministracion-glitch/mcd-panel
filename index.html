@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MCD · Gestión documental</title>
 <meta name="robots" content="noindex">
+<link rel="icon" type="image/svg+xml" href="icono.svg">
+<meta name="theme-color" content="#000000">
 <style>
   :root {
     --fondo:#f5f6f8; --panel:#fff; --texto:#1d2433; --suave:#5b6475; --borde:#e3e6eb;
@@ -18,8 +20,10 @@
     --error:#f59a91; --error-f:#3a1a17; --gris-f:#242a34; --sombra:none; } }
   * { box-sizing:border-box; }
   body { margin:0; font:14px/1.45 -apple-system,"Segoe UI",Roboto,Arial,sans-serif; background:linear-gradient(145deg,var(--fondo),var(--superficie)); color:var(--texto); min-height:100vh; }
-  header { background:#142d45; border-bottom:3px solid #53c5af; padding:16px max(20px,calc((100% - 1240px)/2)); display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
-  .logo { color:#fff; font-weight:700; font-size:22px; letter-spacing:.04em; } .logo span { color:#dae7ee; font-weight:500; font-size:15px; letter-spacing:0; margin-left:12px; }
+  header { background:#000; border-bottom:3px solid; border-image:linear-gradient(90deg,#00d8ec,#0a86f2,#0716c8) 1; padding:10px max(20px,calc((100% - 1240px)/2)); display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  .logo { display:flex; align-items:center; gap:14px; color:#fff; } .logo img { height:56px; width:auto; display:block; }
+  .logo span { color:#cfe6f5; font-weight:500; font-size:15px; padding-left:14px; border-left:1px solid #1d3a5c; }
+  .logo-acceso { display:block; margin:0 auto 14px; height:110px; width:auto; padding:14px 22px; background:#000; border-radius:14px; }
   .usuario { margin-left:auto; color:#dae7ee; font-size:13px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .usuario .boton { color:#fff; border-color:#5b7a99; background:transparent; }
   nav { background:var(--panel); border-bottom:1px solid var(--borde); padding:0 max(12px,calc((100% - 1240px)/2)); display:flex; gap:6px; overflow-x:auto; }
@@ -99,7 +103,7 @@
 </head>
 <body>
 <header>
-  <div class="logo">MCD<span>Gestión documental</span></div>
+  <div class="logo"><img src="logo.svg" alt="MCD"><span>Gestión documental</span></div>
   <span id="estadoServicio" class="pill" hidden>Servicio…</span>
   <div class="usuario" id="usuario"></div>
 </header>
