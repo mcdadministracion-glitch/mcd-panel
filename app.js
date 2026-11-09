@@ -109,25 +109,22 @@ function pantallaAcceso(modo, aviso) {
   document.getElementById('menu').textContent = ''; document.getElementById('usuario').textContent = '';
   document.getElementById('estadoServicio').hidden = true; document.getElementById('pie').hidden = true;
   var email = h('input', { type: 'email', autocomplete: 'username', required: 'required', placeholder: 'nombre@empresa.com' });
-  var clave = h('input', { type: 'password', autocomplete: modo === 'registro' ? 'new-password' : 'current-password', minlength: '8', placeholder: 'Mínimo 8 caracteres' });
+  var clave = h('input', { type: 'password', autocomplete: modo === 'nueva' ? 'new-password' : 'current-password', minlength: '8', placeholder: 'Mínimo 8 caracteres' });
   var mensaje = h('div', { class: 'mensaje' + (aviso ? ' ' + aviso.tipo : '') }, aviso ? aviso.texto : '');
-  var titulos = { entrar: 'Entrar', registro: 'Crear mi cuenta', olvido: 'Recuperar contraseña', nueva: 'Nueva contraseña' };
-  var ayuda = { entrar: 'Usa el correo que te ha dado de alta el administrador.',
-    registro: 'Crea tu contraseña. Solo podrás ver datos si el administrador ha dado de alta tu correo.',
+  var titulos = { entrar: 'Entrar', olvido: 'Recuperar contraseña', nueva: 'Guardar contraseña' };
+  var ayuda = { entrar: 'El acceso es solo por invitación. Si aún no la tienes, pídesela al administrador.',
     olvido: 'Te enviaremos un correo con un enlace para poner una contraseña nueva.',
-    nueva: 'Escribe la contraseña nueva para tu cuenta.' };
+    nueva: 'Elige la contraseña con la que entrarás al panel (mínimo 8 caracteres).' };
   var boton = h('button', { class: 'boton principal', type: 'submit' }, titulos[modo]);
   var form = h('form', { class: 'formulario', onsubmit: function (e) {
     e.preventDefault(); boton.disabled = true; mensaje.className = 'mensaje'; mensaje.textContent = 'Un momento…';
     var correo = email.value.trim().toLowerCase(), p;
     if (modo === 'entrar') p = sb.auth.signInWithPassword({ email: correo, password: clave.value });
-    else if (modo === 'registro') p = sb.auth.signUp({ email: correo, password: clave.value, options: { emailRedirectTo: location.origin + location.pathname } });
     else if (modo === 'olvido') p = sb.auth.resetPasswordForEmail(correo, { redirectTo: location.origin + location.pathname });
     else p = sb.auth.updateUser({ password: clave.value });
     p.then(function (r) {
       if (r.error) throw r.error;
       if (modo === 'olvido') { pantallaAcceso('entrar', { tipo: 'ok', texto: 'Si el correo existe, recibirás un enlace para cambiar la contraseña.' }); return; }
-      if (modo === 'registro' && r.data && r.data.user && !r.data.session) { pantallaAcceso('entrar', { tipo: 'ok', texto: 'Cuenta creada. Revisa tu correo para confirmarla y después entra.' }); return; }
       if (modo === 'nueva') { history.replaceState(null, '', location.pathname); arrancar(); return; }
       arrancar();
     }).catch(function (err) { boton.disabled = false; mensaje.className = 'mensaje error'; mensaje.textContent = mensajeError(err); });
@@ -136,11 +133,12 @@ function pantallaAcceso(modo, aviso) {
     modo === 'olvido' ? null : h('label', {}, [modo === 'nueva' ? 'Contraseña nueva' : 'Contraseña', clave]),
     boton
   ]);
-  if (modo === 'nueva' || modo === 'olvido') email.required = modo === 'olvido';
-  if (modo === 'nueva') { email.disabled = true; email.required = false; }
+  if (modo === 'nueva') {
+    email.disabled = true; email.required = false; clave.required = true;
+    sb.auth.getUser().then(function (r) { if (r.data && r.data.user) email.value = r.data.user.email || ''; });
+  }
   var enlaces = h('div', { class: 'enlaces' });
-  if (modo !== 'entrar') enlaces.appendChild(h('button', { type: 'button', onclick: function () { pantallaAcceso('entrar'); } }, 'Ya tengo cuenta'));
-  if (modo === 'entrar') enlaces.appendChild(h('button', { type: 'button', onclick: function () { pantallaAcceso('registro'); } }, 'Crear mi cuenta'));
+  if (modo === 'olvido') enlaces.appendChild(h('button', { type: 'button', onclick: function () { pantallaAcceso('entrar'); } }, 'Volver a entrar'));
   if (modo === 'entrar') enlaces.appendChild(h('button', { type: 'button', onclick: function () { pantallaAcceso('olvido'); } }, 'He olvidado la contraseña'));
   vista.appendChild(h('div', { class: 'tarjeta acceso' }, [h('h2', {}, 'MCD · Gestión documental'), h('p', { class: 'sub' }, ayuda[modo]), form, mensaje, enlaces]));
   (modo === 'nueva' ? clave : email).focus();
@@ -432,15 +430,26 @@ function vUsuarios(v, usuarios) {
   var rol = h('select', {}, ['Lector', 'Revisor', 'Administrador'].map(function (r) { return h('option', { value: r }, r); }));
   var activo = h('input', { type: 'checkbox' }); activo.checked = true; var msg = h('div', { class: 'mensaje' });
   v.appendChild(h('h3', {}, 'Usuarios del panel'));
-  v.appendChild(h('div', { class: 'tarjeta' }, [h('p', { class: 'sub' }, 'Da de alta el correo y dile a la persona que entre en el panel y pulse "Crear mi cuenta" con ese mismo correo.'),
+  var reenviar = h('button', { class: 'boton', type: 'button', onclick: function () {
+    if (!email.value.trim()) { msg.className = 'mensaje error'; msg.textContent = 'Elige primero un usuario de la lista.'; return; }
+    rpc('panel_reenviar_invitacion', { p_email: email.value.trim() })
+      .then(function () { msg.className = 'mensaje ok'; msg.textContent = 'Invitación pendiente: se enviará en menos de un minuto.'; cargar(false); })
+      .catch(function (e) { msg.className = 'mensaje error'; msg.textContent = mensajeError(e); });
+  } }, 'Reenviar invitación');
+  v.appendChild(h('div', { class: 'tarjeta' }, [h('p', { class: 'sub' }, 'El acceso es solo por invitación. Al guardar un correo nuevo, le llegará en menos de un minuto un correo para elegir su contraseña (si el ordenador del servicio está encendido).'),
     h('div', { class: 'formulario' }, [h('label', {}, ['Correo', email]), h('label', {}, ['Nombre', nombre]), h('label', {}, ['Rol', rol]), h('label', { class: 'en-linea' }, [activo, ' Activo']),
-      h('button', { class: 'boton principal', onclick: function () {
+      h('div', { class: 'en-linea' }, [h('button', { class: 'boton principal', onclick: function () {
         if (!email.value.trim()) { msg.className = 'mensaje error'; msg.textContent = 'Escribe el correo de la persona.'; return; }
         rpc('panel_guardar_usuario', { p_email: email.value.trim(), p_nombre: nombre.value.trim(), p_rol: rol.value, p_activo: activo.checked })
           .then(function () { cargar(true); }).catch(function (e) { msg.className = 'mensaje error'; msg.textContent = mensajeError(e); });
-      } }, 'Guardar usuario')]), msg]));
-  tabla(v, ['Correo', 'Nombre', 'Rol', 'Activo'], usuarios.map(function (u) {
-    return { celdas: [u.email, u.nombre, u.rol, u.activo ? 'Sí' : 'No'], abrir: function () { email.value = u.email; nombre.value = u.nombre || ''; rol.value = u.rol; activo.checked = !!u.activo; email.focus(); } };
+      } }, 'Guardar e invitar'), reenviar])]), msg]));
+  function estadoInvitacion(u) {
+    if (!u.activo) return 'Desactivado';
+    if (u.invitacion_error) return 'Error al invitar';
+    return u.invitado_en ? 'Enviada ' + fecha(String(u.invitado_en).slice(0, 10)) : 'Pendiente de enviar';
+  }
+  tabla(v, ['Correo', 'Nombre', 'Rol', 'Activo', 'Invitación'], usuarios.map(function (u) {
+    return { celdas: [u.email, u.nombre, u.rol, u.activo ? 'Sí' : 'No', estadoInvitacion(u)], abrir: function () { email.value = u.email; nombre.value = u.nombre || ''; rol.value = u.rol; activo.checked = !!u.activo; email.focus(); } };
   }));
   var empresaExportar = h('select', {}, EMPRESAS.map(function (e) { return h('option', { value: e }, e); })), mesExportar = h('input', { type: 'month' }); mesExportar.value = S.mes;
   var estado = h('div', { class: 'mensaje' });
@@ -688,8 +697,19 @@ function arrancar() {
     cargar(true);
   });
 }
-if (/type=recovery/.test(location.hash)) {
-  sb.auth.onAuthStateChange(function (evento) { if (evento === 'PASSWORD_RECOVERY') pantallaAcceso('nueva'); });
+// Enlaces que llegan por correo: invitación (primera contraseña) o recuperación de contraseña
+var errorEnlace = /error_description=([^&]+)/.exec(location.hash);
+if (errorEnlace) {
+  history.replaceState(null, '', location.pathname);
+  pantallaAcceso('entrar', { tipo: 'error', texto: /expired|invalid/i.test(decodeURIComponent(errorEnlace[1]))
+    ? 'El enlace del correo ha caducado o ya se usó. Pide al administrador que te reenvíe la invitación, o usa "He olvidado la contraseña".'
+    : 'No se ha podido usar el enlace del correo. Pide una invitación nueva al administrador.' });
+} else if (/type=(invite|recovery)/.test(location.hash)) {
+  var mostrada = false;
+  sb.auth.onAuthStateChange(function (evento, sesion) {
+    if (!mostrada && sesion && (evento === 'PASSWORD_RECOVERY' || evento === 'SIGNED_IN' || evento === 'INITIAL_SESSION')) { mostrada = true; pantallaAcceso('nueva'); }
+  });
+  setTimeout(function () { if (!mostrada) pantallaAcceso('entrar', { tipo: 'error', texto: 'El enlace no es válido o ha caducado.' }); }, 8000);
 } else arrancar();
 setInterval(function () {
   var escribiendo = document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
