@@ -143,6 +143,17 @@
   .subida.fallo { background:var(--error-f); } .subida.fallo .subida-estado { color:var(--error); }
   .punto.espera { background:#9aa6b8; animation:latir 1.2s ease-in-out infinite; } @keyframes latir { 50% { opacity:.3; } }
   @media (prefers-reduced-motion: reduce) { .punto.espera { animation:none; } }
+  .tickets-subir { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:10px; }
+  .tickets-subir.encima { outline:3px dashed var(--marca); outline-offset:4px; border-radius:14px; }
+  .boton-grande { display:flex; align-items:center; gap:14px; padding:18px 20px; border-radius:14px; border:2px solid var(--borde); background:var(--panel);
+    color:var(--marca); cursor:pointer; min-height:76px; }
+  .boton-grande:hover { border-color:var(--marca); background:var(--marca-suave); }
+  .boton-grande .icono-panel { width:30px; height:30px; flex-shrink:0; }
+  .boton-grande b { display:block; font-size:16px; } .boton-grande small { display:block; color:var(--suave); font-size:13px; }
+  .boton-grande.principal { background:var(--marca); border-color:var(--marca); color:#fff; }
+  .boton-grande.principal small { color:#dbe7ff; } .boton-grande.principal:hover { background:var(--marca-fuerte); }
+  .total-grande { font-size:24px; font-weight:800; letter-spacing:-.02em; font-variant-numeric:tabular-nums; }
+  @media (max-width:700px) { .tickets-subir { grid-template-columns:1fr; } .boton-grande { min-height:84px; } }
   .lista-empresas { display:grid; gap:2px; }
   .empresa-fila { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; padding:10px 0; border-top:1px solid var(--borde); }
   .empresa-fila:first-child { border-top:0; }
@@ -277,6 +288,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=combustible-20261110"></script>
+<script src="app.js?v=tickets-20261110"></script>
 </body>
 </html>

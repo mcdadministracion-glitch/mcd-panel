@@ -66,8 +66,8 @@ function consulta(q) { return q.then(function (r) { if (r.error) throw new Error
 // Estado de la pantalla
 // ---------------------------------------------------------------------
 var EMPRESAS = [];
-var S = { vista: 'inicio', empresa: null, todasEmpresas: true, buscar: '', filtro: 'Activos', periodo: '', periodoComb: 'mes', pagina: 1, carpeta: '', mes: mesActual(), datos: null, pendientes: 0, rol: null, usuario: null, denegado: false };
-var VISTAS = [['inicio', 'Inicio'], ['facturas', 'Facturas'], ['albaranes', 'Albaranes'], ['revision', 'Pendientes'], ['combustible', 'Combustible'], ['documentos', 'Archivos'], ['negocio', 'Vencimientos']];
+var S = { vista: 'inicio', empresa: null, todasEmpresas: true, buscar: '', filtro: 'Activos', periodo: '', periodoComb: 'mes', periodoTck: 'mes', estadoTck: '', catTck: '', pagina: 1, carpeta: '', mes: mesActual(), datos: null, pendientes: 0, rol: null, usuario: null, denegado: false };
+var VISTAS = [['inicio', 'Inicio'], ['facturas', 'Facturas'], ['albaranes', 'Albaranes'], ['revision', 'Pendientes'], ['combustible', 'Combustible'], ['tickets', 'Tickets'], ['documentos', 'Archivos'], ['negocio', 'Vencimientos']];
 var temporizadorBusqueda = null, secuenciaCarga = 0;
 
 // ---------------------------------------------------------------------
@@ -109,6 +109,13 @@ var COLUMNAS_EXCEL = {
 var TITULO_EXCEL = { facturas: 'Facturas', albaranes: 'Albaranes' };
 var bibliotecaExcel;
 
+// Número seguro para Excel: acepta "10,50" y nunca escribe NaN (un NaN estropea el archivo)
+function numeroExcel(v) {
+  if (v === null || v === undefined || v === '') return null;
+  var s = String(v).replace(/\s/g, '');
+  var n = typeof v === 'number' ? v : Number(s.indexOf(',') >= 0 ? s.replace(/\./g, '').replace(',', '.') : s);
+  return isFinite(n) ? n : null;
+}
 function prepararExcel() {
   if (window.ExcelJS) return Promise.resolve(window.ExcelJS);
   if (!bibliotecaExcel) bibliotecaExcel = new Promise(function (resolve, reject) {
@@ -178,7 +185,7 @@ function hojaExcel(libro, tabla, filas) {
       var v = x[c[0]];
       if (c[0] === 'fecha_vencimiento' && (v === null || v === undefined || v === '')) v = 'No consta';
       else if (c[2] === FECHA && typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) v = new Date(v.slice(0, 10) + 'T00:00:00Z');
-      else if ((c[2] === EUR || c[2] === PCT) && v !== null && v !== undefined && v !== '') v = Number(v);
+      else if ((c[2] === EUR || c[2] === PCT) && v !== null && v !== undefined && v !== '') v = numeroExcel(v);
       else if (v !== null && typeof v === 'object') v = JSON.stringify(v);
       if (typeof v === 'string' && /^[=+\-@]/.test(v)) v = "'" + v;            // evita fórmulas inyectadas desde un documento
       fila[c[0]] = v === undefined ? null : v;
@@ -299,6 +306,8 @@ function iconoPanel(vista) {
     revision:'M12 3 2 20h20z M12 9v5 M12 17h.01',
     documentos:'M3 6h7l2 2h9v12H3z', negocio:'M4 3v17h17 M8 15v-4 M13 15V7 M18 15V5',
     combustible:'M4 21V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16 M3 21h12 M7 8h4 M14 9h2a2 2 0 0 1 2 2v5a1.5 1.5 0 0 0 3 0V8l-3-3',
+    tickets:'M6 2h12v20l-2-1.5-2 1.5-2-1.5-2 1.5-2-1.5L6 22z M9 7h6 M9 11h6 M9 15h4',
+    camara:'M3 8h4l2-3h6l2 3h4v11H3z M12 17a4 4 0 1 0 0-8 4 4 0 1 0 0 8',
     excel:'M4 3h11l5 5v13H4z M14 3v6h6 M8 12l5 6 M13 12l-5 6', subir:'M12 16V4 M7 9l5-5 5 5 M4 15v5h16v-5', usuarios:'M8 11a4 4 0 1 0 0-8 4 4 0 1 0 0 8 M2 21v-3a6 6 0 0 1 12 0v3 M16 7a3 3 0 0 1 0 6 M17 16a5 5 0 0 1 5 5'
   };
   var ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg'), path = document.createElementNS(ns, 'path');
@@ -393,7 +402,7 @@ function salir() { sb.auth.signOut().then(function () { ++secuenciaCarga; S.rol 
 // ---------------------------------------------------------------------
 function cargar(mostrarCargando, conservarBarra) {
   if (S.denegado || !S.rol && S.vista !== 'inicio') return;
-  var solicitud = { numero: ++secuenciaCarga, vista: S.vista, empresa: S.empresa, todasEmpresas: !!S.todasEmpresas, carpeta: S.carpeta, mes: S.mes, pagina: S.pagina, buscar: S.buscar, filtro: S.filtro, periodo: S.periodo, periodoComb: S.periodoComb };
+  var solicitud = { numero: ++secuenciaCarga, vista: S.vista, empresa: S.empresa, todasEmpresas: !!S.todasEmpresas, carpeta: S.carpeta, mes: S.mes, pagina: S.pagina, buscar: S.buscar, filtro: S.filtro, periodo: S.periodo, periodoComb: S.periodoComb, periodoTck: S.periodoTck, estadoTck: S.estadoTck };
   var vista = document.getElementById('vista');
   if (mostrarCargando) {
     var destino = conservarBarra && document.getElementById('cuerpo') || vista;
@@ -404,6 +413,7 @@ function cargar(mostrarCargando, conservarBarra) {
   else if (solicitud.vista === 'facturas' || solicitud.vista === 'albaranes') promesa = cargarTabla(solicitud);
   else if (solicitud.vista === 'revision') promesa = rpc('panel_revision');
   else if (solicitud.vista === 'combustible') promesa = cargarCombustible(solicitud);
+  else if (solicitud.vista === 'tickets') promesa = cargarTickets(solicitud);
   else if (solicitud.vista === 'usuarios') promesa = consulta(sb.from('usuarios').select('*').order('email')).then(function (r) { return r.data; });
   else if (solicitud.vista === 'negocio') promesa = rpc('panel_negocio', { p_empresa: solicitud.empresa, p_mes: solicitud.mes });
   else promesa = cargarCarpeta(solicitud.carpeta);
@@ -457,14 +467,15 @@ function pintar() {
   var cursor = busqueda ? busqueda.selectionStart : null;
   var vista = document.getElementById('vista'); vista.textContent = '';
   var titulos = { inicio: 'Hola' + (S.usuario && S.usuario.nombre ? ', ' + S.usuario.nombre.split(' ')[0] : ''), facturas: 'Facturas', albaranes: 'Albaranes',
-    revision: 'Pendientes de revisar', combustible: 'Combustible', documentos: 'Archivos', negocio: 'Vencimientos y costes', usuarios: 'Usuarios del panel' };
+    revision: 'Pendientes de revisar', combustible: 'Combustible', tickets: 'Tickets', documentos: 'Archivos', negocio: 'Vencimientos y costes', usuarios: 'Usuarios del panel' };
   var ayudas = { inicio: 'Esto es lo que hay hoy en el sistema.', facturas: 'Pulsa una factura para verla y corregirla. El botón Excel descarga lo que ves filtrado.',
     albaranes: 'Pulsa un albarán para verlo. El botón Excel descarga lo que ves filtrado.', revision: 'Documentos que necesitan que alguien los mire.',
     combustible: 'Cada repostaje de las facturas de gasolinera comparado con el precio de ese día en la tabla que llega por correo.',
+    tickets: 'Gastos generales (gasolina, comidas, aparcamientos…). No son de ninguna empresa. Sube la foto y se lee sola.',
     documentos: 'Los originales y las copias tachadas que se enviaron a la IA.', negocio: 'Pagos y cobros vencidos, coste por camión y movimientos del mes.',
     usuarios: 'Quién puede entrar al panel. El acceso es solo por invitación.' };
   vista.appendChild(h('div', { class: 'cab-vista' }, [h('div', {}, [h('h1', {}, titulos[S.vista]), h('p', { class: 'sub' }, ayudas[S.vista])])]));
-  ({ inicio: vInicio, facturas: vFacturas, albaranes: vAlbaranes, revision: vRevision, combustible: vCombustible, documentos: vDocumentos, usuarios: vUsuarios, negocio: vNegocio })[S.vista](vista, S.datos);
+  ({ inicio: vInicio, facturas: vFacturas, albaranes: vAlbaranes, revision: vRevision, combustible: vCombustible, tickets: vTickets, documentos: vDocumentos, usuarios: vUsuarios, negocio: vNegocio })[S.vista](vista, S.datos);
   if (busqueda && document.getElementById('busquedaTabla')) { var n = document.getElementById('busquedaTabla'); n.focus(); n.setSelectionRange(cursor, cursor); }
 }
 
@@ -710,7 +721,7 @@ function vCombustible(v, d) {
       d.repostajes.forEach(function (x) {
         var fila = {}; colsR.forEach(function (c) { var val = x[c[0]];
           if (c[2] === FECHA && val) val = new Date(String(val).slice(0, 10) + 'T00:00:00Z');
-          else if ((c[2] === EUR || c[2] === 'l4' || c[0] === 'litros') && val !== null && val !== undefined) val = Number(val);
+          else if ((c[2] === EUR || c[2] === 'l4' || c[0] === 'litros') && val !== null && val !== undefined) val = numeroExcel(val);
           if (typeof val === 'string' && /^[=+\-@]/.test(val)) val = "'" + val;
           fila[c[0]] = val === undefined ? null : val; });
         hr.addRow(fila);
@@ -721,7 +732,7 @@ function vCombustible(v, d) {
       var hp = libro.addWorksheet('Precios por día', { views: [{ state: 'frozen', ySplit: 1 }] });
       hp.columns = [{ header: 'Fecha', key: 'fecha', width: 13, style: { numFmt: 'dd/mm/yyyy' } }, { header: 'Combustible', key: 'combustible', width: 16 },
         { header: 'Precio (€/l)', key: 'precio_litro', width: 14, style: { numFmt: '0.0000' } }, { header: 'IVA incluido', key: 'iva', width: 12 }, { header: 'Proveedor', key: 'proveedor', width: 24 }];
-      d.precios.forEach(function (p) { hp.addRow({ fecha: new Date(String(p.fecha).slice(0, 10) + 'T00:00:00Z'), combustible: p.combustible, precio_litro: Number(p.precio_litro),
+      d.precios.forEach(function (p) { hp.addRow({ fecha: new Date(String(p.fecha).slice(0, 10) + 'T00:00:00Z'), combustible: p.combustible, precio_litro: numeroExcel(p.precio_litro),
         iva: p.iva_incluido === true ? 'Sí' : p.iva_incluido === false ? 'No' : 'No consta', proveedor: p.proveedor || '' }); });
       hp.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
       hp.getRow(1).eachCell(function (c) { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0A4FC4' } }; });
@@ -775,6 +786,209 @@ function vCombustible(v, d) {
   var conIva = d.precios.filter(function (p) { return p.iva_incluido === true; }).length, sinIva = d.precios.filter(function (p) { return p.iva_incluido === false; }).length;
   v.appendChild(h('p', { class: 'sub' }, dias.length ? (conIva && !sinIva ? 'Los precios de la tabla incluyen IVA.' : sinIva && !conIva ? 'Los precios de la tabla son sin IVA.' :
     'La tabla no dice si el precio lleva IVA; se compara en la misma base que la factura.') : ''));
+}
+
+// ---------------------------------------------------------------------
+// TICKETS: gastos generales (gasolina, comidas, aparcamientos...) subidos en foto
+// ---------------------------------------------------------------------
+var CATEGORIAS_TICKET = ['Combustible', 'Comida', 'Aparcamiento', 'Peaje', 'Alojamiento', 'Transporte', 'Otros'];
+var SUBIDAS_TCK = [];
+function cargarTickets(s) {
+  var rango = rangoPeriodo(s.periodoTck);
+  var q = sb.from('tickets').select('*').order('fecha', { ascending: false, nullsFirst: true }).order('id_doc', { ascending: false }).limit(3000);
+  if (rango) q = q.gte('fecha', rango[0]).lt('fecha', rango[1]);
+  if (s.estadoTck === 'Descartado') q = q.eq('estado', 'Descartado'); else q = q.neq('estado', 'Descartado');
+  if (s.estadoTck === 'Revisar') q = q.eq('estado', 'Revisar');
+  return consulta(q).then(function (r) { return { tickets: r.data || [] }; });
+}
+async function buscarTicket(huella) {
+  var r = await consulta(sb.from('tickets').select('*').eq('hash_sha256', huella).limit(1));
+  if (r.data && r.data[0]) return r.data[0];
+  var rv = await consulta(sb.from('revision').select('id_doc,motivo').eq('hash_sha256', huella).limit(1));
+  return rv.data && rv.data[0] ? { revision: true, id_doc: rv.data[0].id_doc, motivo: rv.data[0].motivo } : null;
+}
+function textoTicket(t) {
+  if (t.revision) return 'No se pudo leer: está en Pendientes (' + (t.motivo || 'revisión manual') + ')';
+  return 'Ticket ' + t.id_doc + ' · ' + t.categoria + ' · ' + (t.total !== null && t.total !== undefined ? euros(t.total) : 'sin total') + (t.estado === 'Revisar' ? ' · revisar' : '');
+}
+function pintarSubidasTck() {
+  var ul = document.getElementById('listaSubidasTck'); if (!ul) return;
+  ul.textContent = ''; ul.hidden = !SUBIDAS_TCK.length;
+  SUBIDAS_TCK.slice(-8).reverse().forEach(function (s) {
+    var abrir = s.ticket && !s.ticket.revision ? h('button', { type: 'button', class: 'boton enlace', onclick: function () { fichaTicket(s.ticket); } }, 'Abrir') : null;
+    ul.appendChild(h('li', { class: 'subida ' + (s.clase || '') }, [h('span', { class: 'punto ' + (s.clase === 'exito' ? 'ok' : s.clase === 'fallo' ? 'error' : 'espera') }),
+      h('span', { class: 'subida-nombre' }, s.nombre), abrir, h('span', { class: 'subida-estado' }, s.texto)]));
+  });
+}
+async function seguirTicket(s) {
+  var inicio = Date.now();
+  while (Date.now() - inicio < 5 * 60 * 1000) {
+    await new Promise(function (r) { setTimeout(r, 5000); });
+    try {
+      var t = await buscarTicket(s.huella);
+      if (t) { s.ticket = t; s.clase = t.revision || t.estado === 'Revisar' ? 'aviso' : 'exito'; s.texto = 'Leído: ' + textoTicket(t); pintarSubidasTck(); if (S.vista === 'tickets') cargar(false); return; }
+      var seg = Math.round((Date.now() - inicio) / 1000);
+      s.texto = seg < 20 ? 'Subido. Esperando a que el servicio lo recoja…' : 'Leyendo el ticket… (' + seg + ' s)'; pintarSubidasTck();
+    } catch (e) { /* se reintenta */ }
+  }
+  s.clase = 'aviso'; s.texto = 'Sigue en cola. Aparecerá cuando el servicio lo lea (¿está encendido el ordenador del servicio?)'; pintarSubidasTck();
+}
+async function subirTickets(ficheros) {
+  for (var f of ficheros) {
+    var nombre = f.name.replace(/[\\/:*?"<>|#%]/g, '_').replace(/^\.+/, '') || 'foto.jpg';
+    var s = { nombre: f.name || 'Foto', texto: 'Comprobando…', clase: '' }; SUBIDAS_TCK.push(s); pintarSubidasTck();
+    if (f.size > 15 * 1024 * 1024) { s.clase = 'fallo'; s.texto = 'No se sube: pesa más de 15 MB'; pintarSubidasTck(); continue; }
+    if (!/\.(pdf|jpe?g|png|webp|heic|heif|tiff?|bmp|gif)$/i.test(nombre)) { s.clase = 'fallo'; s.texto = 'No se sube: debe ser una foto o un PDF'; pintarSubidasTck(); continue; }
+    try {
+      s.huella = await huellaArchivo(f);
+      var ya = await buscarTicket(s.huella);
+      if (ya) { s.ticket = ya; s.clase = 'aviso'; s.texto = 'Ya estaba subido: ' + textoTicket(ya); pintarSubidasTck(); continue; }
+      s.texto = 'Subiendo…'; pintarSubidasTck();
+      var r = await sb.storage.from('entrada').upload(Date.now() + '_ticket_' + nombre, f, { contentType: f.type || 'application/octet-stream', upsert: false });
+      if (r.error) throw r.error;
+      s.texto = 'Subido. Esperando a que el servicio lo recoja…'; pintarSubidasTck();
+      seguirTicket(s);
+    } catch (e) { s.clase = 'fallo'; s.texto = 'No se ha subido: ' + mensajeError(e); pintarSubidasTck(); }
+  }
+}
+
+function vTickets(v, d) {
+  if (S.rol === 'Revisor' || S.rol === 'Administrador') {
+    var camara = h('input', { type: 'file', accept: 'image/*', capture: 'environment', class: 'oculto', id: 'camaraTicket' });
+    var galeria = h('input', { type: 'file', accept: 'image/*,.pdf,.heic,.heif', multiple: 'multiple', class: 'oculto', id: 'galeriaTicket' });
+    [camara, galeria].forEach(function (inp) { inp.addEventListener('change', function () { if (inp.files.length) { subirTickets(Array.from(inp.files)); inp.value = ''; } }); });
+    var zona = h('div', { class: 'tickets-subir' }, [
+      h('label', { class: 'boton-grande principal', for: 'camaraTicket' }, [iconoPanel('camara'), h('span', {}, [h('b', {}, 'Hacer foto del ticket'), h('small', {}, 'Abre la cámara del móvil')])]),
+      h('label', { class: 'boton-grande', for: 'galeriaTicket' }, [iconoPanel('subir'), h('span', {}, [h('b', {}, 'Elegir fotos'), h('small', {}, 'De la galería o del ordenador (varias a la vez)')])])]);
+    ['dragover', 'dragenter'].forEach(function (ev) { zona.addEventListener(ev, function (e) { e.preventDefault(); zona.classList.add('encima'); }); });
+    ['dragleave', 'drop'].forEach(function (ev) { zona.addEventListener(ev, function () { zona.classList.remove('encima'); }); });
+    zona.addEventListener('drop', function (e) { e.preventDefault(); if (e.dataTransfer.files.length) subirTickets(Array.from(e.dataTransfer.files)); });
+    v.appendChild(h('section', { class: 'tarjeta' }, [camara, galeria, zona,
+      h('p', { class: 'sub' }, 'Consejo: foto de frente, con buena luz y el ticket entero. Se lee en un minuto y se tachan los datos personales antes de mandarlo a la IA.'),
+      h('ul', { class: 'lista-subidas', id: 'listaSubidasTck', 'aria-live': 'polite', hidden: 'hidden' })]));
+    setTimeout(pintarSubidasTck, 0);
+  }
+
+  // Filtros
+  var periodo = h('select', { 'aria-label': 'Fecha' }, PERIODOS.map(function (o) { return h('option', { value: o[0] }, o[1]); }));
+  periodo.value = S.periodoTck;
+  periodo.addEventListener('change', function () { S.periodoTck = periodo.value; cargar(true); });
+  var estado = h('select', { 'aria-label': 'Estado' }, [['', 'Todos los válidos'], ['Revisar', 'A revisar'], ['Descartado', 'Descartados']].map(function (o) { return h('option', { value: o[0] }, o[1]); }));
+  estado.value = S.estadoTck;
+  estado.addEventListener('change', function () { S.estadoTck = estado.value; cargar(true); });
+  var lista = d.tickets.filter(function (t) { return !S.catTck || t.categoria === S.catTck; });
+  var porCat = {}; d.tickets.forEach(function (t) { porCat[t.categoria] = (porCat[t.categoria] || 0) + (Number(t.total) || 0); });
+  var cats = h('div', { class: 'chips' }, [h('button', { type: 'button', class: !S.catTck ? 'activo' : '', onclick: function () { S.catTck = ''; pintar(); } }, 'Todas')]
+    .concat(CATEGORIAS_TICKET.filter(function (c) { return porCat[c] !== undefined; }).map(function (c) {
+      return h('button', { type: 'button', class: S.catTck === c ? 'activo' : '', onclick: function () { S.catTck = c; pintar(); } }, c + ' · ' + euros(porCat[c]));
+    })));
+  var estadoX = h('span', { class: 'estado-excel', role: 'status' });
+  var excel = h('button', { type: 'button', class: 'boton descarga', onclick: async function () {
+    excel.disabled = true; estadoX.textContent = 'Preparando…';
+    try {
+      var X = await prepararExcel(), libro = new X.Workbook(); libro.creator = 'MCD';
+      var cols = [['fecha', 'Fecha', FECHA], ['comercio', 'Comercio'], ['nif', 'NIF'], ['categoria', 'Categoría'], ['concepto', 'Concepto'],
+        ['base_imponible', 'Base (€)', EUR], ['iva_porcentaje', 'IVA (%)', PCT], ['cuota_iva', 'IVA (€)', EUR], ['total', 'Total (€)', EUR],
+        ['forma_pago', 'Forma de pago'], ['matricula', 'Matrícula'], ['litros', 'Litros'], ['estado', 'Estado'], ['observaciones', 'Observaciones'], ['id_doc', 'Número']];
+      var hj = libro.addWorksheet('Tickets', { views: [{ state: 'frozen', ySplit: 1 }] });
+      hj.columns = cols.map(function (c) { return { header: c[1], key: c[0], width: /comercio|concepto|observ/.test(c[0]) ? 32 : 14,
+        style: c[2] === EUR ? { numFmt: '#,##0.00 "€"' } : c[2] === FECHA ? { numFmt: 'dd/mm/yyyy' } : {} }; });
+      lista.forEach(function (t) { var fila = {}; cols.forEach(function (c) { var val = t[c[0]];
+        if (c[2] === FECHA && val) val = new Date(String(val).slice(0, 10) + 'T00:00:00Z');
+        else if ((c[2] === EUR || c[2] === PCT || c[0] === 'litros') && val !== null && val !== undefined) val = numeroExcel(val);
+        if (typeof val === 'string' && /^[=+\-@]/.test(val)) val = "'" + val;
+        fila[c[0]] = val === undefined ? null : val; }); hj.addRow(fila); });
+      hj.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      hj.getRow(1).eachCell(function (c) { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0A4FC4' } }; });
+      if (lista.length) {
+        hj.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: cols.length } };
+        var tot = hj.addRow({ fecha: null, comercio: 'TOTAL (' + lista.length + ')', total: { formula: 'SUBTOTAL(9,I2:I' + (lista.length + 1) + ')' },
+          cuota_iva: { formula: 'SUBTOTAL(9,H2:H' + (lista.length + 1) + ')' }, base_imponible: { formula: 'SUBTOTAL(9,F2:F' + (lista.length + 1) + ')' } });
+        tot.font = { bold: true };
+      }
+      var rs = libro.addWorksheet('Por categoría');
+      rs.columns = [{ header: 'Categoría', key: 'c', width: 18 }, { header: 'Tickets', key: 'n', width: 10 }, { header: 'Total (€)', key: 't', width: 14, style: { numFmt: '#,##0.00 "€"' } }];
+      CATEGORIAS_TICKET.forEach(function (c) { var de = lista.filter(function (t) { return t.categoria === c; });
+        if (de.length) rs.addRow({ c: c, n: de.length, t: Math.round(de.reduce(function (s, t) { return s + (Number(t.total) || 0); }, 0) * 100) / 100 }); });
+      rs.getRow(1).font = { bold: true };
+      await guardarLibro(libro, ['MCD', 'Tickets', S.catTck || 'todos', nombrePeriodo(S.periodoTck), new Date().toISOString().slice(0, 10)].join('_'));
+      estadoX.textContent = lista.length + ' tickets descargados';
+    } catch (e) { estadoX.textContent = 'No se ha descargado: ' + mensajeError(e); }
+    finally { excel.disabled = false; }
+  } }, [iconoPanel('excel'), 'Descargar Excel']);
+  var total = lista.reduce(function (s, t) { return s + (Number(t.total) || 0); }, 0);
+  v.appendChild(h('div', { class: 'herramientas' }, [
+    h('div', { class: 'fila-herramientas' }, [h('div', {}, [h('div', { class: 'sub' }, 'Total ' + (S.catTck ? 'de ' + S.catTck.toLowerCase() : 'del periodo')),
+      h('div', { class: 'total-grande' }, euros(total) + ' · ' + lista.length + ' ticket' + (lista.length === 1 ? '' : 's'))]), h('div', { class: 'descarga-directa' }, [excel, estadoX])]),
+    h('div', { class: 'fila-herramientas' }, [h('label', { class: 'campo-corto' }, ['Fecha', periodo]), h('label', { class: 'campo-corto' }, ['Estado', estado])]),
+    cats]));
+  if (!lista.length) { v.appendChild(h('div', { class: 'tarjeta vacio' }, d.tickets.length ? 'No hay tickets de esta categoría.' : 'Todavía no hay tickets en este periodo. Haz una foto para subir el primero.')); return; }
+  tabla(v, ['Fecha', { t: 'Comercio', largo: 1 }, 'Categoría', { t: 'Total', num: 1 }, { t: 'IVA', num: 1 }, 'Pago', 'Estado'], lista.map(function (t) {
+    return { abrir: function () { fichaTicket(t); },
+      celdas: [t.fecha ? fecha(t.fecha) : '—', t.comercio || '—', t.categoria, { t: t.total === null ? '—' : euros(t.total), num: 1 },
+        { t: t.cuota_iva === null || t.cuota_iva === undefined ? '—' : euros(t.cuota_iva), num: 1 }, t.forma_pago || '—', pillEstado(t.estado)] };
+  }), 'Ticket');
+}
+
+function fichaTicket(t) {
+  var editable = S.rol === 'Revisor' || S.rol === 'Administrador';
+  var campos = [['fecha', 'Fecha', 'date'], ['comercio', 'Comercio'], ['nif', 'NIF del comercio'], ['categoria', 'Categoría', 'cat'], ['concepto', 'Concepto'],
+    ['base_imponible', 'Base (€)'], ['iva_porcentaje', 'IVA (%)'], ['cuota_iva', 'IVA (€)'], ['total', 'Total (€)'], ['forma_pago', 'Forma de pago'], ['matricula', 'Matrícula'], ['litros', 'Litros']];
+  var entradas = {}, rejilla = h('div', { class: 'campos-ficha' });
+  campos.forEach(function (c) {
+    var valor = t[c[0]] === null || t[c[0]] === undefined ? '' : String(t[c[0]]).slice(0, c[2] === 'date' ? 10 : 300);
+    if (!editable) { rejilla.appendChild(h('div', { class: 'campo-ficha' }, [h('span', { class: 'etiqueta-ficha' }, c[1]), h('div', { class: 'valor-ficha' }, c[2] === 'date' ? fecha(valor) || '—' : valor || '—')])); return; }
+    var e = c[2] === 'cat' ? h('select', { id: 'tck-' + c[0] }, CATEGORIAS_TICKET.map(function (x) { return h('option', { value: x }, x); })) : h('input', { id: 'tck-' + c[0], type: c[2] === 'date' ? 'date' : 'text' });
+    if (/base|iva|total|litros/.test(c[0])) e.setAttribute('inputmode', 'decimal');
+    e.value = valor; entradas[c[0]] = e;
+    rejilla.appendChild(h('div', { class: 'campo-ficha' + (c[0] === 'concepto' || c[0] === 'comercio' ? ' campo-ancho' : '') }, [h('label', { for: 'tck-' + c[0] }, c[1]), e]));
+  });
+  var mensaje = h('div', { class: 'mensaje-ficha', role: 'status' });
+  var visor = h('div', { class: 'visor-documento' }, h('p', { class: 'vacio' }, 'Buscando la foto…'));
+  var cuerpo = h('div', { class: 'contenido-revision' }, [h('div', { class: 'zona-revision' }, [
+    h('section', { class: 'vista-documento' }, [h('div', { class: 'cab-documento' }, [h('h3', {}, 'Foto del ticket')]), visor]),
+    h('section', { class: 'editor-documento' }, [h('div', { class: 'resumen-ficha' }, [h('span', { class: 'pill marca' }, t.categoria), pillEstado(t.estado)]),
+      t.observaciones ? h('p', { class: 'ayuda-campo' }, t.observaciones) : null,
+      h('fieldset', { class: 'seccion-ficha' }, [h('legend', {}, 'Datos del ticket'), rejilla])])])]);
+  function cambios() { var c = {}; Object.keys(entradas).forEach(function (k) { var antes = t[k] === null || t[k] === undefined ? '' : String(t[k]).slice(0, k === 'fecha' ? 10 : 300); if (entradas[k].value !== antes) c[k] = entradas[k].value; }); return c; }
+  function guardar(revisado) {
+    var c = cambios(); if (!Object.keys(c).length && !revisado) { mensaje.textContent = 'No hay cambios.'; return; }
+    mensaje.className = 'mensaje-ficha'; mensaje.textContent = 'Guardando…';
+    rpc('panel_guardar_ticket', { p_id: t.id_doc, p_cambios: c, p_revisado: !!revisado }).then(function () {
+      fichaSucia = null;
+      if (revisado) { cerrarModal(); avisoBreve('Ticket ' + t.id_doc + ' revisado'); } else { mensaje.className = 'mensaje-ficha exito'; mensaje.textContent = 'Cambios guardados.'; }
+      cargar(false);
+    }).catch(function (e) { mensaje.className = 'mensaje-ficha fallo'; mensaje.textContent = mensajeError(e); });
+  }
+  var pie = h('div', { class: 'pie-revision' }, [h('span', { class: 'cambios-ficha' }, editable ? 'Corrige lo que haga falta y guarda.' : 'Consulta de solo lectura'), mensaje]);
+  if (editable) pie.appendChild(h('div', { class: 'acciones-revision' }, [
+    h('button', { type: 'button', class: 'boton peligro', onclick: function () {
+      if (!confirm('¿Descartar este ticket?')) return;
+      rpc('panel_descartar_ticket', { p_id: t.id_doc }).then(function () { fichaSucia = null; cerrarModal(); avisoBreve('Ticket ' + t.id_doc + ' descartado'); cargar(false); })
+        .catch(function (e) { mensaje.className = 'mensaje-ficha fallo'; mensaje.textContent = mensajeError(e); });
+    } }, 'Descartar'),
+    h('button', { type: 'button', class: 'boton principal', onclick: function () { guardar(false); } }, 'Guardar cambios'),
+    h('button', { type: 'button', class: 'boton revisar', onclick: function () { guardar(true); } }, 'Guardar y marcar revisado')]));
+  cuerpo.appendChild(pie);
+  abrirModal('Ticket ' + t.id_doc, cuerpo);
+  document.getElementById('caja').classList.add('revision-amplia');
+  fichaSucia = function () { return editable && Object.keys(cambios()).length > 0; };
+  // Foto: originales/AAAA-MM/<id>_<archivo> (el mes en que se leyó)
+  var numero = secuenciaFicha, d0 = new Date(t.creado_en || Date.now());
+  var meses = [0, -1].map(function (k) { var x = new Date(d0.getFullYear(), d0.getMonth() + k, 1); return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0'); });
+  (async function () {
+    for (var m of meses) {
+      var l = await sb.storage.from('documentos').list('originales/' + m, { limit: 5, search: t.id_doc + '_' });
+      var x = !l.error && (l.data || []).filter(function (o) { return o.id && o.name.indexOf(t.id_doc + '_') === 0; })[0];
+      if (x) {
+        await rpc('panel_registrar_acceso_archivo', { p_id: t.id_doc, p_tipo: 'original', p_accion: 'Ver documento' });
+        var url = await urlFirmada('originales/' + m + '/' + x.name);
+        if (numero !== secuenciaFicha) return;
+        visor.textContent = ''; visor.appendChild(visorPara(url, x.name)); return;
+      }
+    }
+    if (numero === secuenciaFicha) { visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, 'No se encuentra la foto de este ticket.')); }
+  })().catch(function () { if (numero === secuenciaFicha) { visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, 'La foto no está disponible ahora mismo.')); } });
 }
 
 // ---------------------------------------------------------------------
