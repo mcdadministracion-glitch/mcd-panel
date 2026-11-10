@@ -99,22 +99,109 @@
   .en-linea { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
   @media (max-width:900px) { .zona-revision { display:block; height:auto; max-height:calc(96vh - 180px); overflow:auto; } .vista-documento { height:320px; border-right:0; border-bottom:1px solid var(--borde); } .pie-revision { display:block; padding:12px; } .acciones-revision { margin-top:10px; } }
   @media (max-width:640px) { main { padding:12px; } header { padding:12px; } .usuario { flex-basis:100%; } input[type=search], select { min-width:0; width:100%; } .campos-ficha, .otros-datos { grid-template-columns:1fr; } .modal { padding:4px; } }
+
+  /* Estructura de trabajo: navegación estable y espacio de lectura. */
+  :root { --fondo:#f3f6f7; --panel:#fff; --texto:#182d38; --suave:#506570; --borde:#d9e3e7;
+    --marca:#11646b; --marca-suave:#e5f3f1; --acento:#11646b; --rail:#15323c; --gris-f:#edf2f4;
+    --superficie:#edf4f4; --sombra:0 2px 5px rgba(16,43,52,.035); color-scheme:light; }
+  body { background:var(--fondo); color:var(--texto); font-size:15px; }
+  [hidden] { display:none !important; }
+  header { min-height:74px; background:var(--rail); padding:12px clamp(16px,2.5vw,40px); border:0; gap:16px; }
+  .logo img { height:45px; } .logo span { font-size:15px; color:#edf6f8; border-color:#49707b; }
+  header .usuario { min-width:0; overflow-wrap:anywhere; }
+  .icono-panel { width:20px; height:20px; display:inline-block; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; flex-shrink:0; }
+  nav:empty { display:none; }
+  nav { background:var(--rail); border:none; padding:18px 12px; }
+  nav button { display:flex; align-items:center; gap:12px; padding:12px 15px; min-height:44px; border:none; border-radius:8px; color:#d5e4e7; text-align:left; }
+  nav button:hover { background:#254751; color:white; }
+  nav button.activo { color:white; background:#28626a; box-shadow:inset 3px 0 #7dd4cb; }
+  nav .nav-usuarios { margin-top:18px; border-top:1px solid #42606a; border-radius:0; padding-top:18px; }
+  nav .num { margin-left:auto; }
+  .nav-movil { display:none; }
+  main { width:100%; min-width:0; padding:clamp(18px,3vw,44px); max-width:1540px; }
+  h1,h2,h3 { line-height:1.18; }
+  .cab-vista,.excel-cab { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:14px; }
+  .cab-vista { margin:0 0 25px; } h1 { margin:0; font-size:clamp(29px,3.2vw,46px); letter-spacing:-.048em; }
+  main h2 { margin:26px 0 12px; font-size:21px; letter-spacing:-.025em; }
+  .tarjeta,.tabla,.excel-zona { border-radius:15px; box-shadow:var(--sombra); }
+  .metricas { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; margin-bottom:22px; }
+  .metrica { position:relative; display:grid; grid-template-columns:1fr auto; align-items:start; text-align:left; cursor:pointer; color:var(--texto); background:var(--panel); border:1px solid var(--borde); border-radius:16px; padding:20px; font:inherit; }
+  .metrica:hover { border-color:var(--marca); }
+  .metrica-icono { grid-column:1; background:var(--marca-suave); color:var(--marca); border-radius:10px; display:grid; place-items:center; width:39px; height:39px; margin-bottom:14px; }
+  .metrica-albaranes .metrica-icono { background:#e8effb; color:#315582; }
+  .metrica-revision .metrica-icono { background:#fff0d6; color:#8b5010; }
+  .metrica-nombre { grid-column:1/-1; color:var(--suave); font-size:14px; font-weight:600; }
+  .metrica strong { grid-column:1; font-size:clamp(30px,3vw,44px); line-height:1.15; letter-spacing:-.05em; font-variant-numeric:tabular-nums; }
+  .flecha { position:absolute; top:20px; right:18px; color:var(--suave); }
+  .empresa.tarjeta { border:1px solid var(--borde); padding:18px; }
+  .empresa h3 { font-size:20px; color:var(--texto); } .empresa .datos { margin:12px 0; }
+  .empresa .datos span,.empresa .datos b { padding:3px 0; }
+  .boton,.chips button { min-height:40px; font-weight:600; } .boton:disabled { cursor:wait; }
+  .boton.descarga,.boton.descarga:hover:not(:disabled) { color:white; background:#11646b; border-color:#11646b; }
+  .boton.descarga:hover:not(:disabled) { background:#0b5157; }
+  .barra { gap:12px; align-items:end; }
+  .barra label,.excel-form label:has(>select) { display:grid; gap:5px; color:var(--suave); font-size:13px; font-weight:600; }
+  .barra .contador { align-self:center; }
+  .excel-zona { margin:16px 0; padding:19px 22px; border:1px solid var(--borde); background:var(--panel); }
+  .excel-cab h2 { margin:0; font-size:19px; } .excel-cab p { margin:4px 0 0; color:var(--suave); }
+  .descarga-directa { display:grid; justify-items:start; gap:4px; }
+  .estado-excel,.excel-form [role=status] { color:var(--suave); font-size:13px; } .estado-excel:empty { display:none; }
+  .excel-opciones { margin-top:14px; border-top:1px solid var(--borde); }
+  summary { cursor:pointer; font-weight:600; color:var(--marca); padding:9px 0; }
+  .excel-opciones>summary { padding:12px 0 0; } .excel-form { margin-top:15px; }
+  .excel-form fieldset fieldset { border:1px solid var(--borde); border-radius:10px; padding:12px; }
+  .excel-form button { justify-self:start; }
+  .excel-form input[type=checkbox],td input[type=checkbox] { width:18px; height:18px; accent-color:var(--marca); cursor:pointer; }
+  .servicio-detalle { margin-top:24px; }
+  .tabla th { font-weight:650; } .tabla td,.tabla th { padding:11px 13px; } tbody tr:nth-child(even) { background:var(--fondo); }
+  input[type=file] { max-width:100%; min-width:0; }
+  .tabla:focus-visible { outline:3px solid #347fbe; }
+  .acceso { padding:30px; margin:8vh auto; } .acceso h2 { margin-top:16px; }
+  .saltar { position:fixed; z-index:20; top:-100px; left:12px; padding:12px; background:white; color:#104950; }
+  .saltar:focus { top:8px; }
+  @media(min-width:901px) {
+    body:has(#menu button) { display:grid; grid-template-columns:214px minmax(0,1fr); grid-template-rows:auto 1fr auto; align-content:start; }
+    body:has(#menu button)>header { grid-column:1/-1; }
+    #menu:not(:empty) { display:flex; flex-direction:column; grid-column:1; grid-row:2/4; align-self:start; position:sticky; top:0; min-height:calc(100vh - 74px); }
+    body:has(#menu button)>main,body:has(#menu button)>footer { grid-column:2; }
+  }
+  @media(max-width:900px) {
+    nav:not(:empty) { display:block; padding:8px 16px; } nav button { display:none; }
+    .nav-movil { display:block; width:100%; min-height:42px; background:#224955; color:white; border-color:#53737c; }
+    main { padding:18px; } .metrica { padding:15px; } .metricas { gap:8px; }
+  }
+  @media(max-width:600px) {
+    header { gap:8px; } header .usuario { font-size:12px; }
+    .cab-vista { margin-bottom:16px; } .cab-vista h1 { width:100%; }
+    .metricas { grid-template-columns:1fr; }
+    .metrica { grid-template-columns:34px 1fr auto; align-items:center; gap:12px; padding:11px 14px; }
+    .metrica-icono { grid-column:1; margin:0; width:34px; height:34px; }
+    .metrica-nombre { grid-column:2; } .metrica strong { grid-column:3; font-size:26px; } .metrica .flecha { display:none; }
+    .barra label,.excel-cab>.descarga-directa,.excel-form button { width:100%; } .excel-zona { padding:15px; }
+    .barra select,.excel-form select { max-width:100%; }
+  }
+  @media(prefers-color-scheme:dark) {
+    :root { color-scheme:dark; --fondo:#15232a; --panel:#1b2d35; --texto:#eef5f5; --suave:#b2c7cb; --borde:#385059; --gris-f:#263c44; --marca:#8cdbd2; --marca-suave:#254c4c; --superficie:#20353e; }
+    .chips button.activo,.boton.principal { color:#132b2d; }
+  }
+
 </style>
 </head>
 <body>
+<a class="saltar" href="#vista">Saltar al contenido</a>
 <header>
   <div class="logo"><img src="logo.svg" alt="MCD"><span>Gestión documental</span></div>
   <span id="estadoServicio" class="pill" hidden>Servicio…</span>
   <div class="usuario" id="usuario"></div>
 </header>
 <nav id="menu" aria-label="Secciones del panel"></nav>
-<main id="vista"><div class="cargando">Cargando…</div></main>
+<main id="vista" tabindex="-1"><div class="cargando">Cargando…</div></main>
 <footer id="pie" hidden><span id="actualizado"></span> · se actualiza solo cada 30 segundos · <button class="boton" id="btnActualizar">Actualizar ahora</button></footer>
 <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="tituloModal"><div class="caja" id="caja"></div></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js"></script>
+<script src="app.js?v=gestion-20261110"></script>
 </body>
 </html>

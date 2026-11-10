@@ -67,8 +67,8 @@ function consulta(q) { return q.then(function (r) { if (r.error) throw new Error
 // ---------------------------------------------------------------------
 var EMPRESAS = [];
 var S = { vista: 'inicio', empresa: null, buscar: '', filtro: 'Activos', pagina: 1, carpeta: '', mes: mesActual(), datos: null, pendientes: 0, rol: null, usuario: null, denegado: false };
-var VISTAS = [['inicio', 'Inicio'], ['facturas', 'Facturas'], ['albaranes', 'Albaranes'], ['revision', 'Revisión'], ['documentos', 'Documentos'], ['negocio', 'Negocio']];
-VISTAS.push(['tablas', 'Tablas']);
+var VISTAS = [['inicio', 'Inicio'], ['facturas', 'Facturas'], ['albaranes', 'Albaranes'], ['revision', 'Pendientes'], ['documentos', 'Documentos'], ['negocio', 'Negocio']];
+VISTAS.push(['tablas', 'Tablas y Excel']);
 var temporizadorBusqueda = null, secuenciaCarga = 0;
 
 // Catálogo cerrado. Las consultas se hacen con la sesión del panel y las políticas de Supabase.
@@ -76,15 +76,9 @@ var TABLAS_CONSULTA = {
   facturas:       { titulo: 'Facturas', empresa: 'empresa', orden: ['empresa', 'id_doc'] },
   lineas_factura: { titulo: 'Líneas de factura', empresa: 'empresa', orden: ['empresa', 'id_doc', 'linea', 'id'] },
   albaranes:      { titulo: 'Albaranes', empresa: 'empresa', orden: ['empresa', 'id_doc'] },
-  documentos:     { titulo: 'Registro de documentos', empresa: 'empresa', orden: ['empresa', 'id_doc'] },
   proveedores:    { titulo: 'Proveedores', empresa: 'empresa', orden: ['empresa', 'nif', 'id'] },
   empresas:       { titulo: 'Empresas', empresa: 'clave', orden: ['clave'] },
-  revision:       { titulo: 'Revisión manual', orden: ['id_doc'] },
-  periodicas:     { titulo: 'Facturas periódicas', empresa: 'empresa', orden: ['empresa', 'id'] },
-  estado_servicio:{ titulo: 'Estado del servicio', orden: ['clave'] },
-  ordenes:        { titulo: 'Órdenes del servicio', orden: ['id'] },
-  usuarios:       { titulo: 'Usuarios', orden: ['email'], admin: true },
-  auditoria:      { titulo: 'Auditoría', empresa: 'empresa', orden: ['id'], admin: true }
+  periodicas:     { titulo: 'Facturas periódicas', empresa: 'empresa', orden: ['empresa', 'id'] }
 };
 var tablaElegida = 'facturas', empresaTablas = '';
 var seleccionExcel = new Map();
@@ -113,9 +107,7 @@ function prepararExcel() {
 }
 
 function tablasVisibles() {
-  return Object.keys(TABLAS_CONSULTA).filter(function (clave) {
-    return !TABLAS_CONSULTA[clave].admin || S.rol === 'Administrador';
-  });
+  return S.rol && !S.denegado ? Object.keys(TABLAS_CONSULTA) : [];
 }
 
 function consultaRegistros(clave, empresa) {
@@ -157,7 +149,6 @@ function vTablas(v, d) {
     });
     barra.appendChild(h('label', {}, ['Empresa ', empresas]));
   }
-  v.appendChild(h('h2', {}, 'Tablas de datos'));
   v.appendChild(barra);
   if (d.error) {
     v.appendChild(h('p', { role: 'alert' }, d.error));
@@ -165,13 +156,42 @@ function vTablas(v, d) {
     return;
   }
   barra.appendChild(h('span', { class: 'contador' }, contadorTabla(d, 'registros')));
-  var descargar = h('button', { class: 'boton principal', onclick: function () { opcionesExcel(d); } });
-  function actualizarBoton() {
-    descargar.textContent = 'Descargar Excel' + (seleccionExcel.size ? ' (' + seleccionExcel.size + ' marcadas)' : '');
-  }
-  actualizarBoton(); barra.appendChild(descargar);
   var columnas = Object.keys(d.filas[0] || {});
-  tabla(v, ['Marcar'].concat(columnas), d.filas.map(function (fila) {
+  var prioridad = {
+    facturas: ['num_factura','fecha','nombre','total','fecha_vencimiento','estado','empresa'],
+    albaranes: ['num_albaran','fecha','nombre','origen','destino','importe','estado_factura','empresa'],
+    lineas_factura: ['id_doc','linea','descripcion','cantidad','precio_unitario','importe','empresa'],
+    proveedores: ['empresa','nif','fecha_alta','id_doc'],
+    empresas: ['nombre','cif','clave','activa'],
+    periodicas: ['empresa','categoria','nif','mes_inicio','periodo_meses','dia_limite','activa']
+  }[tablaElegida];
+  columnas = prioridad.filter(function (c) { return columnas.includes(c); }).concat(columnas.filter(function (c) { return !prioridad.includes(c); }));
+  var rapido = descargaDirecta('Descargar tabla', function () {
+    return { claves: [tablaElegida], empresa: empresaTablas, filas: seleccionExcel.size ? Array.from(seleccionExcel.values()) : null };
+  });
+  var opciones = h('details', { class: 'excel-opciones' }, [h('summary', {}, 'Personalizar descarga')]);
+  var limpiar = h('button', { type: 'button', class: 'boton', onclick: function () {
+    seleccionExcel.clear();
+    v.querySelectorAll('td input[type=checkbox]').forEach(function (marca) { marca.checked = false; });
+    actualizarBoton();
+  } }, 'Quitar selección');
+  var opcionesCreadas = false;
+  opciones.addEventListener('toggle', function () {
+    if (opciones.open && !opcionesCreadas) { opciones.appendChild(opcionesExcel(d)); opcionesCreadas = true; }
+  });
+  function actualizarBoton() {
+    limpiar.hidden = !seleccionExcel.size;
+    rapido.querySelector('button').textContent = seleccionExcel.size ? 'Descargar ' + seleccionExcel.size + (seleccionExcel.size === 1 ? ' fila marcada' : ' filas marcadas') : 'Descargar ' + TABLAS_CONSULTA[tablaElegida].titulo.toLowerCase();
+    if (opcionesCreadas) {
+      opciones.lastChild.remove(); opcionesCreadas = false;
+      if (opciones.open) { opciones.appendChild(opcionesExcel(d)); opcionesCreadas = true; }
+    }
+  }
+  actualizarBoton();
+  v.appendChild(h('section', { class: 'excel-zona', 'aria-label': 'Descarga de Excel' }, [
+    h('div', { class: 'excel-cab' }, [h('div', {}, [h('h2', {}, 'Descargar en Excel'),
+      h('p', {}, (empresaTablas || 'Todas las empresas') + ' · ' + d.total + ' registros en la tabla')]), h('div', { class: 'en-linea' }, [limpiar, rapido])]), opciones]));
+  tabla(v, ['Marcar'].concat(columnas.map(function (c) { return etiquetaColumna(c, tablaElegida); })), d.filas.map(function (fila) {
     var id = claveRegistro(tablaElegida, fila);
     var marca = h('input', { type: 'checkbox', 'aria-label': 'Marcar fila ' + (fila.id_doc || fila.id || fila.clave || fila.email || id) });
     marca.checked = seleccionExcel.has(id);
@@ -182,12 +202,21 @@ function vTablas(v, d) {
     });
     return { celdas: [marca].concat(columnas.map(function (c) {
       var valor = fila[c];
+      if (c === 'fecha_vencimiento' && valor == null) return 'No consta';
+      if (typeof valor === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(valor) && c.startsWith('fecha')) return fecha(valor);
+      if (typeof valor === 'number') return valor.toLocaleString('es-ES', { maximumFractionDigits: 5 });
       if (valor === null || valor === undefined) return '—';
       if (typeof valor === 'boolean') return valor ? 'Sí' : 'No';
       return typeof valor === 'object' ? JSON.stringify(valor) : String(valor);
     })) };
   }));
   paginacion(v, d);
+}
+
+function etiquetaColumna(c, clave) {
+  if (c === 'nombre' && clave === 'empresas') return 'Nombre de la empresa';
+  if (c === 'fecha_vencimiento') return 'Vencimiento';
+  return ETIQUETAS[c] || (c.charAt(0).toUpperCase() + c.slice(1)).replace(/_/g, ' ');
 }
 
 function opcionesExcel(datos) {
@@ -206,21 +235,28 @@ function opcionesExcel(datos) {
   var grupoEmpresa = h('label', {}, ['Empresa del libro', empresa]);
   var columnas = Object.keys(datos.filas[0] || {});
   var casillasColumnas = [], casillasTablas = [];
+  function cambiarMarcas(lista) {
+    return h('div', { class: 'en-linea' }, [true, false].map(function (valor) {
+      return h('button', { type: 'button', class: 'abrir-fila', onclick: function () {
+        lista.forEach(function (c) { if (!c.disabled) c.checked = valor; });
+      } }, valor ? 'Marcar todas' : 'Desmarcar todas');
+    }));
+  }
   function casilla(valor, titulo, lista) {
     var input = h('input', { type: 'checkbox', value: valor });
     input.checked = true; lista.push(input);
     return h('label', { style: 'display:inline-flex;align-items:center;gap:5px;margin:4px 12px 4px 0' }, [input, titulo]);
   }
-  var campos = h('details', {}, [h('summary', {}, 'Elegir columnas'),
-    h('div', {}, columnas.map(function (c) { return casilla(c, c, casillasColumnas); }))]);
-  var tablas = h('fieldset', {}, [h('legend', {}, 'Tablas del libro'),
+  var campos = h('details', {}, [h('summary', {}, 'Elegir columnas'), cambiarMarcas(casillasColumnas),
+    h('div', {}, columnas.map(function (c) { return casilla(c, etiquetaColumna(c, clave), casillasColumnas); }))]);
+  var tablas = h('fieldset', {}, [h('legend', {}, 'Tablas del libro'), cambiarMarcas(casillasTablas),
     h('div', {}, catalogo.map(function (c) { return casilla(c, TABLAS_CONSULTA[c].titulo, casillasTablas); }))]);
   var estado = h('p', { role: 'status' });
   var boton = h('button', { class: 'boton principal', type: 'submit' }, 'Descargar .xlsx');
   var controles = h('fieldset', { style: 'border:0;padding:0;min-width:0;display:grid;gap:12px' }, [
     h('label', {}, ['Qué descargar', modo]), grupoEmpresa, tablas, campos, boton
   ]);
-  var form = h('form', {}, [controles, estado]);
+  var form = h('form', { class: 'excel-form' }, [controles, estado]);
   function mostrarOpciones() {
     var varias = modo.value === 'varias';
     grupoEmpresa.hidden = tablas.hidden = !varias;
@@ -238,11 +274,6 @@ function opcionesExcel(datos) {
   }
   modo.addEventListener('change', mostrarOpciones); empresa.addEventListener('change', mostrarOpciones);
   mostrarOpciones();
-  abrirModal('Descargar Excel', form);
-  var apertura = secuenciaFicha;
-  function comprobarSesion() {
-    if (apertura !== secuenciaFicha || S.vista !== 'tablas' || S.denegado || !S.rol) throw new Error('Descarga cancelada.');
-  }
   form.addEventListener('submit', async function (evento) {
     evento.preventDefault();
     if (controles.disabled) return;
@@ -257,38 +288,59 @@ function opcionesExcel(datos) {
       modo.value === 'pagina' ? datos.filas : null;
     controles.disabled = true;
     try {
-      estado.textContent = 'Preparando el libro…';
-      var excel = await prepararExcel();
-      var libro = new excel.Workbook();
-      for (var nombre of claves) {
-        comprobarSesion();
-        var hoja = libro.addWorksheet(TABLAS_CONSULTA[nombre].titulo);
-        var procesar = escritorHoja(hoja, elegidas);
-        if (filasVista) procesar(filasVista);
-        else await exportarTablaCompleta(nombre, filtro, procesar, function (leidas) {
-          comprobarSesion(); estado.textContent = hoja.name + ' · ' + leidas + ' filas leídas';
-        });
-      }
-      estado.textContent = 'Generando archivo…';
-      var buffer = await libro.xlsx.writeBuffer();
-      comprobarSesion();
-      var url = URL.createObjectURL(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
-      var archivo = ['MCD', varias ? 'Tablas' : clave, filtro, new Date().toISOString().slice(0, 10)].filter(Boolean).join('_');
-      var enlace = h('a', { href: url, download: archivo.replace(/[<>:"/\\|?*]/g, '_') + '.xlsx' });
-      document.body.appendChild(enlace); enlace.click(); enlace.remove();
-      setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
-      estado.textContent = 'Archivo Excel preparado para descargar.';
-    } catch (error) {
-      estado.textContent = 'No se ha descargado el archivo. ' + mensajeError(error);
+      await generarDescarga({ claves: claves, empresa: filtro, columnas: elegidas, filas: filasVista }, estado);
     } finally { controles.disabled = false; }
   });
+  return form;
 }
 
-async function exportarTablaCompleta(clave, empresa, escribir, progreso) {
+function descargaDirecta(titulo, obtener) {
+  var estado = h('span', { role: 'status', class: 'estado-excel' });
+  var boton = h('button', { type: 'button', class: 'boton descarga', onclick: async function () {
+    boton.disabled = true;
+    try { await generarDescarga(obtener(), estado); } finally { boton.disabled = false; }
+  } }, titulo);
+  return h('div', { class: 'descarga-directa' }, [boton, estado]);
+}
+
+async function generarDescarga(plan, estado) {
+  var vista = S.vista, usuario = S.usuario && S.usuario.email;
+  function comprobar() {
+    if (!estado.isConnected || S.vista !== vista || S.denegado || !S.rol || (S.usuario && S.usuario.email) !== usuario)
+      throw new Error('La consulta ha cambiado.');
+  }
+  estado.setAttribute('aria-busy', 'true');
+  try {
+    estado.textContent = 'Preparando Excel…';
+    var excel = await prepararExcel(), libro = new excel.Workbook();
+    for (var clave of plan.claves) {
+      comprobar();
+      if (tablasVisibles().indexOf(clave) < 0) throw new Error('Tabla no disponible.');
+      var hoja = libro.addWorksheet(TABLAS_CONSULTA[clave].titulo);
+      var escribir = escritorHoja(hoja, plan.columnas);
+      if (plan.filas) escribir(plan.filas);
+      else await exportarTablaCompleta(clave, plan.empresa, escribir, function (n) {
+        comprobar(); estado.textContent = hoja.name + ' · ' + n + ' filas leídas';
+      }, plan.filtros);
+    }
+    var buffer = await libro.xlsx.writeBuffer();
+    comprobar();
+    var url = URL.createObjectURL(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    var nombre = [ 'MCD', plan.claves.length > 1 ? 'Tablas' : plan.claves[0], plan.empresa, new Date().toISOString().slice(0, 10) ].filter(Boolean).join('_');
+    var enlace = h('a', { href: url, download: nombre.replace(/[<>:"/\\|?*]/g, '_') + '.xlsx' });
+    document.body.appendChild(enlace); enlace.click(); enlace.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+    estado.textContent = 'Archivo descargado.';
+  } catch (err) { estado.textContent = 'No se ha descargado el archivo. ' + mensajeError(err); }
+  finally { estado.removeAttribute('aria-busy'); }
+}
+
+async function exportarTablaCompleta(clave, empresa, escribir, progreso, filtros) {
   var desde = 0, total, vistos = new Set();
   do {
     progreso(desde);
-    var r = await consulta(consultaRegistros(clave, empresa).range(desde, desde + 499));
+    var q = filtros ? consultaDocumentos(filtros) : consultaRegistros(clave, empresa);
+    var r = await consulta(q.range(desde, desde + 499));
     if (total === undefined) total = r.count;
     if (!Number.isInteger(total) || r.count !== total || (!r.data.length && desde < total)) {
       throw new Error('La tabla ha cambiado durante la descarga. Vuelve a intentarlo.');
@@ -335,14 +387,34 @@ function escritorHoja(hoja, columnas) {
   };
 }
 
+function iconoPanel(vista) {
+  var trazos = {
+    inicio:'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
+    facturas:'M6 3h12v18l-3-2-3 2-3-2-3 2z M9 8h6 M9 12h6',
+    albaranes:'M2 6h12v10H2z M14 10h4l4 4v2h-8 M8 18a2 2 0 1 1-4 0 2 2 0 1 1 4 0 M20 18a2 2 0 1 1-4 0 2 2 0 1 1 4 0',
+    revision:'M12 3 2 20h20z M12 9v5 M12 17h.01',
+    documentos:'M3 6h7l2 2h9v12H3z', negocio:'M4 3v17h17 M8 15v-4 M13 15V7 M18 15V5',
+    tablas:'M3 4h18v16H3z M3 10h18 M10 10v10', usuarios:'M8 11a4 4 0 1 0 0-8 4 4 0 1 0 0 8 M2 21v-3a6 6 0 0 1 12 0v3 M16 7a3 3 0 0 1 0 6 M17 16a5 5 0 0 1 5 5'
+  };
+  var ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg'), path = document.createElementNS(ns, 'path');
+  svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('aria-hidden','true'); svg.setAttribute('class','icono-panel');
+  path.setAttribute('d', trazos[vista]); svg.appendChild(path); return svg;
+}
+
 function pintarMenu() {
   var nav = document.getElementById('menu'); nav.textContent = '';
   if (!S.rol) return;
-  VISTAS.forEach(function (v) {
-    nav.appendChild(h('button', { class: S.vista === v[0] ? 'activo' : '', onclick: function () { irA(v[0]); } },
-      [v[1], v[0] === 'revision' && S.pendientes ? h('span', { class: 'num' }, S.pendientes) : null]));
+  var secciones = VISTAS.slice();
+  if (S.rol === 'Administrador') secciones.push(['usuarios', 'Gestionar accesos']);
+  var movil = h('select', { 'aria-label': 'Ir a sección', class: 'nav-movil' }, secciones.map(function (v) {
+    return h('option', { value: v[0] }, v[1]);
+  }));
+  movil.value = S.vista; movil.addEventListener('change', function () { irA(movil.value); });
+  nav.appendChild(movil);
+  secciones.forEach(function (v) {
+    nav.appendChild(h('button', { class: 'nav-' + v[0] + (S.vista === v[0] ? ' activo' : ''), 'aria-current': S.vista === v[0] ? 'page' : null, onclick: function () { irA(v[0]); } },
+      [iconoPanel(v[0]), v[1], v[0] === 'revision' && S.pendientes ? h('span', { class: 'num' }, S.pendientes) : null]));
   });
-  if (S.rol === 'Administrador') nav.appendChild(h('button', { class: S.vista === 'usuarios' ? 'activo' : '', onclick: function () { irA('usuarios'); } }, 'Usuarios'));
 }
 function irA(vista) {
   if (!S.rol || S.denegado || vista === S.vista) return;
@@ -417,7 +489,7 @@ function salir() { sb.auth.signOut().then(function () { ++secuenciaCarga; S.rol 
 // ---------------------------------------------------------------------
 function cargar(mostrarCargando, conservarBarra) {
   if (S.denegado || !S.rol && S.vista !== 'inicio') return;
-  var solicitud = { numero: ++secuenciaCarga, vista: S.vista, empresa: S.empresa, carpeta: S.carpeta, mes: S.mes, pagina: S.pagina, buscar: S.buscar, filtro: S.filtro };
+  var solicitud = { numero: ++secuenciaCarga, vista: S.vista, empresa: S.empresa, todasEmpresas: !!S.todasEmpresas, carpeta: S.carpeta, mes: S.mes, pagina: S.pagina, buscar: S.buscar, filtro: S.filtro };
   var vista = document.getElementById('vista');
   if (mostrarCargando) {
     var destino = conservarBarra && document.getElementById('cuerpo') || vista;
@@ -433,6 +505,7 @@ function cargar(mostrarCargando, conservarBarra) {
   else promesa = cargarCarpeta(solicitud.carpeta);
   promesa.then(function (d) {
     if (solicitud.numero !== secuenciaCarga) return;
+    if (!mostrarCargando && interaccionExcel()) return;
     if (solicitud.vista === 'tablas' && d.volverAlInicio) { S.pagina = 1; cargar(true); return; }
     var tablaAnterior = solicitud.vista === 'tablas' && !mostrarCargando && vista.querySelector('.tabla');
     var desplazamiento = tablaAnterior && [tablaAnterior.scrollLeft, tablaAnterior.scrollTop];
@@ -451,9 +524,10 @@ function cargar(mostrarCargando, conservarBarra) {
   });
 }
 function limpiarBusqueda(q) { return q.replace(/[,()"'\\%*]/g, ' ').trim().slice(0, 100); }
-function cargarTabla(s) {
+function consultaDocumentos(s) {
   var tabla = s.vista, campo = tabla === 'facturas' ? 'estado' : 'estado_factura';
-  var q = sb.from(tabla).select('*', { count: 'exact' }).eq('empresa', s.empresa);
+  var q = sb.from(tabla).select('*', { count: 'exact' });
+  if (!s.todasEmpresas) q = q.eq('empresa', s.empresa);
   if (s.filtro === 'Activos') q = q.not('estado', 'in', '("Descartado","Duplicado")');
   else if (s.filtro === 'Descartado' || s.filtro === 'Duplicado') q = q.eq('estado', s.filtro);
   else if (s.filtro) q = q.eq(campo, s.filtro);
@@ -463,9 +537,12 @@ function cargarTabla(s) {
                                     : ['id_doc', 'num_albaran', 'nombre', 'nif', 'matricula', 'concepto', 'observaciones', 'num_factura', 'origen', 'destino'];
     q = q.or(cols.map(function (c) { return c + '.ilike.%' + b + '%'; }).join(','));
   }
+  return q.order('fecha', { ascending: false, nullsFirst: false }).order('empresa').order('id_doc', { ascending: false });
+}
+function cargarTabla(s) {
   var desde = (s.pagina - 1) * 50;
-  return consulta(q.order('fecha', { ascending: false, nullsFirst: false }).order('id_doc', { ascending: false }).range(desde, desde + 49)).then(function (r) {
-    return { paginada: true, pagina: s.pagina, tamano: 50, total: r.count || 0, filas: r.data || [] };
+  return consulta(consultaDocumentos(s).range(desde, desde + 49)).then(function (r) {
+    return { filtros: s, paginada: true, pagina: s.pagina, tamano: 50, total: r.count || 0, filas: r.data || [] };
   });
 }
 function contarPendientes(ini) { return ini.empresas.reduce(function (t, e) { return t + Number(e.documentosConAvisos || 0); }, 0) + Number(ini.enRevisionManual || 0); }
@@ -492,6 +569,10 @@ function pintar() {
   var busqueda = document.activeElement && document.activeElement.id === 'busquedaTabla' ? document.activeElement : null;
   var cursor = busqueda ? busqueda.selectionStart : null;
   var vista = document.getElementById('vista'); vista.textContent = '';
+  var titulo = S.vista === 'inicio' ? 'Resumen de gestión' : S.vista === 'usuarios' ? 'Gestionar accesos' : VISTAS.find(function (v) { return v[0] === S.vista; })[1];
+  var cabecera = h('div', { class: 'cab-vista' }, [h('h1', {}, titulo)]);
+  if (S.vista === 'inicio') cabecera.appendChild(descargaDirecta('Descargar tablas en Excel', function () { return { claves: tablasVisibles() }; }));
+  vista.appendChild(cabecera);
   ({ inicio: vInicio, facturas: vFacturas, albaranes: vAlbaranes, revision: vRevision, documentos: vDocumentos, usuarios: vUsuarios, negocio: vNegocio, tablas: vTablas })[S.vista](vista, S.datos);
   if (busqueda && document.getElementById('busquedaTabla')) { var n = document.getElementById('busquedaTabla'); n.focus(); n.setSelectionRange(cursor, cursor); }
 }
@@ -501,6 +582,15 @@ function pintar() {
 // ---------------------------------------------------------------------
 function vInicio(v, d) {
   var s = d.servicio || {};
+  function tarjeta(clave, nombre, valor) {
+    return h('button', { class: 'metrica metrica-' + clave, onclick: function () { S.todasEmpresas = true; irA(clave); } }, [
+      h('span', { class: 'metrica-icono' }, iconoPanel(clave)), h('span', { class: 'metrica-nombre' }, nombre),
+      h('strong', {}, valor), h('span', { class: 'flecha', 'aria-hidden': 'true' }, '↗')]);
+  }
+  function sumar(campo) { return d.empresas.reduce(function (n, e) { return n + Number(e[campo] || 0); }, 0); }
+  v.appendChild(h('div', { class: 'metricas' }, [tarjeta('facturas', 'Facturas activas', sumar('facturas')),
+    tarjeta('albaranes', 'Albaranes activos', sumar('albaranes')), tarjeta('revision', 'Pendientes de revisión', contarPendientes(d))]));
+
   if (S.rol === 'Revisor' || S.rol === 'Administrador') {
     var archivo = h('input', { type: 'file', accept: '.pdf,.jpg,.jpeg,.png,.webp,.gif,.bmp,.tif,.tiff,.heic,.heif,.doc,.docx,.odt,.rtf,.xls,.xlsx,.ods,.csv,.txt,.xml,.xsig' });
     var estadoSubida = h('span', { class: 'mensaje-ficha', role: 'status' });
@@ -521,33 +611,46 @@ function vInicio(v, d) {
           .catch(function (e) { estadoSubida.className = 'mensaje-ficha fallo'; estadoSubida.textContent = mensajeError(e); });
       } }, 'Procesar ahora'), estadoSubida])]));
   }
-  v.appendChild(h('div', { class: 'fila indicadores' }, [
-    h('div', { class: 'tarjeta' }, [h('div', { class: 'etq' }, 'Documentos con avisos'), h('div', { class: 'cifra' }, contarPendientes(d)), h('button', { class: 'boton', type: 'button', onclick: function () { irA('revision'); } }, 'Ver la bandeja')]),
+  var detalleServicio = h('details', { class: 'servicio-detalle' }, [h('summary', {}, 'Actividad del servicio'), h('div', { class: 'fila' }, [
     h('div', { class: 'tarjeta' }, [h('div', { class: 'etq' }, 'Coste de la IA este mes'), h('div', { class: 'cifra' }, costeEuros(d.costeMes))]),
     h('div', { class: 'tarjeta' }, [h('div', { class: 'etq' }, 'Servicio'), h('div', { class: 'datos' }, s.conocido ? [
       h('span', {}, 'Última señal'), h('b', {}, hora(s.latido)), h('span', {}, 'Correo (Gmail)'), h('b', {}, s.gmail_conectado ? 'Conectado' : 'Desconectado'),
       h('span', {}, 'Última vuelta'), h('b', {}, s.ultima_vuelta ? hora(s.ultima_vuelta.hora) + ' · ' + s.ultima_vuelta.motivo : '—'),
       h('span', {}, 'En documentos_entrada'), h('b', {}, s.en_entrada === undefined ? '—' : s.en_entrada)
     ] : [h('span', {}, 'El servicio aún no ha enviado su estado'), h('b', {}, '')])])
-  ]));
+  ])]);
+  v.appendChild(h('h2', {}, 'Empresas'));
   v.appendChild(h('div', { class: 'fila' }, d.empresas.map(function (e, i) {
-    return h('div', { class: 'tarjeta empresa empresa-' + i }, [h('h3', {}, e.nombre), h('div', { class: 'sub' }, 'CIF ' + (e.cif || '')),
-      h('p', { class: 'sub' }, 'Historial: ' + e.facturasRegistradas + ' facturas · ' + e.albaranesRegistrados + ' albaranes. Descartados: ' + e.descartados + ' · Duplicados: ' + e.duplicados),
-      h('div', { class: 'datos' }, [h('span', {}, 'Facturas activas'), h('b', {}, e.facturas), h('span', {}, 'Emitidas activas'), h('b', {}, e.emitidas), h('span', {}, 'Recibidas activas'), h('b', {}, e.recibidas),
-        e.sinClasificar ? h('span', {}, 'Tipo sin clasificar') : null, e.sinClasificar ? h('b', {}, e.sinClasificar) : null,
-        h('span', {}, 'Albaranes activos'), h('b', {}, e.albaranes), h('span', {}, 'Albaranes sin factura'), h('b', {}, e.pendientes ? h('span', { class: 'pill error' }, e.pendientes) : '0'),
-        h('span', {}, 'A revisar'), h('b', {}, e.revisar ? h('span', { class: 'pill aviso' }, e.revisar) : '0')])]);
+    return h('div', { class: 'tarjeta empresa empresa-' + i }, [h('h3', {}, e.nombre), e.cif ? h('div', { class: 'sub' }, 'CIF ' + e.cif) : null,
+      h('div', { class: 'datos' }, [h('span', {}, 'Facturas activas'), h('b', {}, e.facturas || 0),
+        h('span', {}, 'Albaranes sin factura'), h('b', {}, e.pendientes || 0)]),
+      h('div', { class: 'en-linea' }, ['facturas', 'albaranes'].map(function (tipo) {
+        return h('button', { class: 'boton', onclick: function () { S.empresa = e.nombre; S.todasEmpresas = false; irA(tipo); } }, tipo === 'facturas' ? 'Ver facturas' : 'Ver albaranes');
+      })),
+      h('details', { class: 'detalle-empresa' }, [h('summary', {}, 'Desglose'), h('div', { class: 'datos' }, [
+        h('span', {}, 'Facturas registradas'), h('b', {}, e.facturasRegistradas || 0), h('span', {}, 'Albaranes registrados'), h('b', {}, e.albaranesRegistrados || 0),
+        h('span', {}, 'Emitidas activas'), h('b', {}, e.emitidas || 0), h('span', {}, 'Recibidas activas'), h('b', {}, e.recibidas || 0),
+        h('span', {}, 'Sin clasificar'), h('b', {}, e.sinClasificar || 0), h('span', {}, 'Albaranes activos'), h('b', {}, e.albaranes || 0),
+        h('span', {}, 'Para revisar'), h('b', {}, e.revisar || 0), h('span', {}, 'Descartados'), h('b', {}, e.descartados || 0),
+        h('span', {}, 'Duplicados'), h('b', {}, e.duplicados || 0)])])]);
   })));
-  v.appendChild(h('h3', {}, 'Últimos documentos'));
+  v.appendChild(h('h2', {}, 'Últimos documentos'));
   tabla(v, ['Empresa', 'ID', { t: 'Archivo', largo: 1 }, 'Estado', 'Alta'], d.ultimos.map(function (x) { return { celdas: [x.empresa, x.id, x.archivo, pillEstado(x.estado), fecha(x.fecha)] }; }));
+  v.appendChild(detalleServicio);
 }
 
 // ---------------------------------------------------------------------
 // FACTURAS y ALBARANES
 // ---------------------------------------------------------------------
 function barraEmpresa(v, opcionesFiltro) {
-  var chips = h('div', { class: 'chips' }, EMPRESAS.map(function (e) {
-    return h('button', { class: S.empresa === e ? 'activo' : '', onclick: function () { if (S.empresa === e) return; clearTimeout(temporizadorBusqueda); S.empresa = e; S.pagina = 1; cargar(true); } }, e);
+  var chips = h('div', { class: 'chips' }, [null].concat(EMPRESAS).map(function (e) {
+    var activo = e === null ? S.todasEmpresas : !S.todasEmpresas && S.empresa === e;
+    return h('button', { class: activo ? 'activo' : '', 'aria-pressed': activo ? 'true' : 'false', onclick: function () {
+      if (activo) return;
+      clearTimeout(temporizadorBusqueda); S.todasEmpresas = e === null;
+      if (e !== null) S.empresa = e;
+      S.pagina = 1; cargar(true);
+    } }, e || 'Todas');
   }));
   var buscar = h('input', { id: 'busquedaTabla', type: 'search', maxlength: '100', 'aria-label': 'Buscar en toda la tabla', placeholder: 'Buscar número, nombre, NIF, matrícula…' });
   buscar.value = S.buscar;
@@ -556,6 +659,16 @@ function barraEmpresa(v, opcionesFiltro) {
   filtro.addEventListener('change', function () { clearTimeout(temporizadorBusqueda); S.filtro = filtro.value; S.pagina = 1; cargar(true, true); });
   v.appendChild(h('div', { class: 'barra' }, [chips, buscar, filtro, h('span', { class: 'contador', id: 'contador' })]));
   v.appendChild(h('div', { id: 'cuerpo' }));
+}
+function botonExcelResultados(d) {
+  var filtros = d.filtros;
+  var descarga = descargaDirecta('Descargar resultados en Excel', function () {
+    return { claves: [filtros.vista], empresa: filtros.todasEmpresas ? '' : filtros.empresa, filtros: filtros };
+  });
+  document.getElementById('contador').parentElement.appendChild(descarga);
+  function desactivar() { descarga.querySelector('button').disabled = true; }
+  document.getElementById('busquedaTabla').addEventListener('input', desactivar);
+  document.querySelector('[aria-label="Filtrar por estado"]').addEventListener('change', desactivar);
 }
 function paginacion(c, d) {
   if (d.total <= d.tamano) return;
@@ -568,20 +681,22 @@ function contadorTabla(d, tipo) { return !d.total ? '0 ' + tipo : ((d.pagina - 1
 function vFacturas(v, d) {
   barraEmpresa(v, [['Activos', 'Activos'], ['', 'Historial completo'], ['Procesado', 'Procesado'], ['Revisar', 'A revisar'], ['Descartado', 'Descartados'], ['Duplicado', 'Duplicados']]);
   document.getElementById('contador').textContent = contadorTabla(d, 'facturas');
+  botonExcelResultados(d);
   var c = document.getElementById('cuerpo');
-  tabla(c, ['Nº factura', 'Tipo', 'Fecha', 'Cliente / proveedor', { t: 'Total', num: 1 }, 'Vence', 'Estado', 'Albaranes'], d.filas.map(function (f) {
-    return { abrir: function () { ficha('Factura', f, { empresa: S.empresa, hoja: 'facturas' }); },
-      celdas: [f.num_factura, f.tipo_factura, fecha(f.fecha), f.nombre, { t: euros(f.total), num: 1 }, vence(f.fecha_vencimiento), pillEstado(f.estado), pillEstado(f.comprobacion_albaranes)] };
+  tabla(c, ['Nº factura', 'Empresa', 'Tipo', 'Fecha', 'Cliente / proveedor', { t: 'Total', num: 1 }, 'Vence', 'Estado', 'Albaranes'], d.filas.map(function (f) {
+    return { abrir: function () { ficha('Factura', f, { empresa: f.empresa, hoja: 'facturas' }); },
+      celdas: [f.num_factura, f.empresa, f.tipo_factura, fecha(f.fecha), f.nombre, { t: euros(f.total), num: 1 }, vence(f.fecha_vencimiento), pillEstado(f.estado), pillEstado(f.comprobacion_albaranes)] };
   }), 'Factura');
   paginacion(c, d);
 }
 function vAlbaranes(v, d) {
   barraEmpresa(v, [['Activos', 'Activos'], ['', 'Historial completo'], ['PENDIENTE DE FACTURA', 'Pendientes de factura'], ['Facturado', 'Facturados'], ['Descartado', 'Descartados'], ['Duplicado', 'Duplicados']]);
   document.getElementById('contador').textContent = contadorTabla(d, 'albaranes');
+  botonExcelResultados(d);
   var c = document.getElementById('cuerpo');
-  tabla(c, ['Nº albarán', 'Fecha', 'Cliente / proveedor', 'Ruta', { t: 'Importe', num: 1 }, 'Factura', 'Días sin factura'], d.filas.map(function (f) {
-    return { abrir: function () { ficha('Albarán', f, { empresa: S.empresa, hoja: 'albaranes' }); },
-      celdas: [f.num_albaran, fecha(f.fecha), f.nombre, [f.origen, f.destino].filter(Boolean).join(' → '), { t: euros(f.importe), num: 1 },
+  tabla(c, ['Nº albarán', 'Empresa', 'Fecha', 'Cliente / proveedor', 'Ruta', { t: 'Importe', num: 1 }, 'Factura', 'Días sin factura'], d.filas.map(function (f) {
+    return { abrir: function () { ficha('Albarán', f, { empresa: f.empresa, hoja: 'albaranes' }); },
+      celdas: [f.num_albaran, f.empresa, fecha(f.fecha), f.nombre, [f.origen, f.destino].filter(Boolean).join(' → '), { t: euros(f.importe), num: 1 },
         f.factura_vinculada ? pillEstado('Facturado') : pillEstado(f.estado_factura), texto(f.dias_sin_factura)] };
   }), 'Albarán');
   paginacion(c, d);
@@ -628,6 +743,7 @@ function cargarCarpeta(prefijo) {
   });
 }
 function vDocumentos(v, d) {
+  if (S.rol === 'Administrador') exportarOriginales(v);
   var miga = h('div', { class: 'miga' }, h('button', { class: 'abrir-fila', type: 'button', onclick: function () { S.carpeta = ''; cargar(true); } }, 'Documentos'));
   d.camino.forEach(function (c, i) {
     miga.appendChild(h('span', {}, '›'));
@@ -729,10 +845,12 @@ function vUsuarios(v, usuarios) {
   tabla(v, ['Correo', 'Nombre', 'Rol', 'Activo', 'Invitación'], usuarios.map(function (u) {
     return { celdas: [u.email, u.nombre, u.rol, u.activo ? 'Sí' : 'No', estadoInvitacion(u)], abrir: function () { email.value = u.email; nombre.value = u.nombre || ''; rol.value = u.rol; activo.checked = !!u.activo; email.focus(); } };
   }));
-  var empresaExportar = h('select', {}, EMPRESAS.map(function (e) { return h('option', { value: e }, e); })), mesExportar = h('input', { type: 'month' }); mesExportar.value = S.mes;
+}
+function exportarOriginales(v) {
+  var empresaExportar = h('select', { 'aria-label': 'Empresa de los originales' }, EMPRESAS.map(function (e) { return h('option', { value: e }, e); })), mesExportar = h('input', { type: 'month', 'aria-label': 'Mes de los originales' }); mesExportar.value = S.mes;
   var estado = h('div', { class: 'mensaje' });
   v.appendChild(h('div', { class: 'tarjeta' }, [h('h3', {}, 'Exportar facturas para la gestoría'), h('p', { class: 'sub' }, 'Se descargan los archivos originales del mes elegido en un ZIP.'),
-    h('div', { class: 'en-linea' }, [empresaExportar, mesExportar, h('button', { class: 'boton', onclick: function () { exportar(empresaExportar.value, mesExportar.value, estado); } }, 'Descargar facturas')]), estado]));
+    h('div', { class: 'en-linea' }, [empresaExportar, mesExportar, h('button', { class: 'boton', onclick: function () { exportar(empresaExportar.value, mesExportar.value, estado); } }, 'Descargar originales ZIP')]), estado]));
 }
 function exportar(empresa, mes, estado) {
   if (!/^\d{4}-\d{2}$/.test(mes)) { estado.className = 'mensaje error'; estado.textContent = 'Selecciona el mes.'; return; }
@@ -992,7 +1110,11 @@ if (errorEnlace) {
   });
   setTimeout(function () { if (!mostrada) pantallaAcceso('entrar', { tipo: 'error', texto: 'El enlace no es válido o ha caducado.' }); }, 8000);
 } else arrancar();
+function interaccionExcel() {
+  return !!document.querySelector('.excel-opciones[open], [aria-busy="true"], .servicio-detalle[open], .detalle-empresa[open]');
+}
 setInterval(function () {
+  if (interaccionExcel()) return;
   var escribiendo = document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
   if (S.rol && !S.denegado && !document.getElementById('modal').classList.contains('abierto') && !escribiendo && !document.hidden) cargar(false);
 }, 30000);
