@@ -87,6 +87,30 @@ var TABLAS_CONSULTA = {
   auditoria:      { titulo: 'Auditoría', empresa: 'empresa', orden: ['id'], admin: true }
 };
 var tablaElegida = 'facturas', empresaTablas = '';
+var seleccionExcel = new Map();
+var bibliotecaExcel;
+
+function claveRegistro(clave, fila) {
+  var campos = TABLAS_CONSULTA[clave].orden;
+  return JSON.stringify(campos.map(function (campo) { return fila[campo]; }));
+}
+
+function prepararExcel() {
+  if (window.ExcelJS) return Promise.resolve(window.ExcelJS);
+  if (!bibliotecaExcel) bibliotecaExcel = new Promise(function (resolve, reject) {
+    var script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js';
+    script.integrity = 'sha384-Pqp51FUN2/qzfxZxBCtF0stpc9ONI6MYZpVqmo8m20SoaQCzf+arZvACkLkirlPz';
+    script.crossOrigin = 'anonymous';
+    script.onload = function () { resolve(window.ExcelJS); };
+    script.onerror = function () {
+      bibliotecaExcel = null; script.remove();
+      reject(new Error('No se pudo cargar el generador de Excel. Comprueba la conexión y vuelve a intentarlo.'));
+    };
+    document.head.appendChild(script);
+  });
+  return bibliotecaExcel;
+}
 
 function tablasVisibles() {
   return Object.keys(TABLAS_CONSULTA).filter(function (clave) {
@@ -94,12 +118,18 @@ function tablasVisibles() {
   });
 }
 
-function cargarRegistros(pagina) {
-  if (tablasVisibles().indexOf(tablaElegida) < 0) tablaElegida = 'facturas';
-  var config = TABLAS_CONSULTA[tablaElegida];
-  var consultaFilas = sb.from(tablaElegida).select('*', { count: 'exact' });
-  if (config.empresa && empresaTablas) consultaFilas = consultaFilas.eq(config.empresa, empresaTablas);
+function consultaRegistros(clave, empresa) {
+  if (tablasVisibles().indexOf(clave) < 0) throw new Error('Tabla no disponible para tu perfil.');
+  var config = TABLAS_CONSULTA[clave];
+  var consultaFilas = sb.from(clave).select('*', { count: 'exact' });
+  if (config.empresa && empresa) consultaFilas = consultaFilas.eq(config.empresa, empresa);
   config.orden.forEach(function (campo) { consultaFilas = consultaFilas.order(campo); });
+  return consultaFilas;
+}
+
+function cargarRegistros(pagina) {
+  if (tablasVisibles().indexOf(tablaElegida) < 0) { tablaElegida = 'facturas'; seleccionExcel.clear(); }
+  var consultaFilas = consultaRegistros(tablaElegida, empresaTablas);
   var tamano = 50, desde = (pagina - 1) * tamano;
   return consultaFilas.range(desde, desde + tamano - 1).then(function (r) {
     if (pagina > 1 && (r.status === 416 || (!r.error && !r.data.length))) return { volverAlInicio: true };
@@ -115,7 +145,7 @@ function vTablas(v, d) {
   }));
   lista.value = tablaElegida;
   lista.addEventListener('change', function () {
-    tablaElegida = lista.value; S.pagina = 1; cargar(true);
+    seleccionExcel.clear(); tablaElegida = lista.value; S.pagina = 1; cargar(true);
   });
   var barra = h('div', { class: 'barra' }, [h('label', {}, ['Tabla ', lista])]);
   if (config.empresa) {
@@ -123,7 +153,7 @@ function vTablas(v, d) {
       EMPRESAS.map(function (nombre) { return h('option', { value: nombre }, nombre); })));
     empresas.value = empresaTablas;
     empresas.addEventListener('change', function () {
-      empresaTablas = empresas.value; S.pagina = 1; cargar(true);
+      seleccionExcel.clear(); empresaTablas = empresas.value; S.pagina = 1; cargar(true);
     });
     barra.appendChild(h('label', {}, ['Empresa ', empresas]));
   }
@@ -135,16 +165,174 @@ function vTablas(v, d) {
     return;
   }
   barra.appendChild(h('span', { class: 'contador' }, contadorTabla(d, 'registros')));
+  var descargar = h('button', { class: 'boton principal', onclick: function () { opcionesExcel(d); } });
+  function actualizarBoton() {
+    descargar.textContent = 'Descargar Excel' + (seleccionExcel.size ? ' (' + seleccionExcel.size + ' marcadas)' : '');
+  }
+  actualizarBoton(); barra.appendChild(descargar);
   var columnas = Object.keys(d.filas[0] || {});
-  tabla(v, columnas, d.filas.map(function (fila) {
-    return { celdas: columnas.map(function (c) {
+  tabla(v, ['Marcar'].concat(columnas), d.filas.map(function (fila) {
+    var id = claveRegistro(tablaElegida, fila);
+    var marca = h('input', { type: 'checkbox', 'aria-label': 'Marcar fila ' + (fila.id_doc || fila.id || fila.clave || fila.email || id) });
+    marca.checked = seleccionExcel.has(id);
+    if (marca.checked) seleccionExcel.set(id, fila);
+    marca.addEventListener('change', function () {
+      if (marca.checked) seleccionExcel.set(id, fila); else seleccionExcel.delete(id);
+      actualizarBoton();
+    });
+    return { celdas: [marca].concat(columnas.map(function (c) {
       var valor = fila[c];
       if (valor === null || valor === undefined) return '—';
       if (typeof valor === 'boolean') return valor ? 'Sí' : 'No';
       return typeof valor === 'object' ? JSON.stringify(valor) : String(valor);
-    }) };
+    })) };
   }));
   paginacion(v, d);
+}
+
+function opcionesExcel(datos) {
+  var clave = tablaElegida, catalogo = tablasVisibles();
+  var filaMarcada = seleccionExcel.size > 0;
+  var modos = [['tabla', 'Tabla completa'], ['pagina', 'Página actual (' + datos.filas.length + ' filas)'],
+    ['marcadas', 'Filas marcadas (' + seleccionExcel.size + ')'], ['varias', 'Elegir varias tablas o todas']];
+  var modo = h('select', {}, modos.map(function (m) {
+    return h('option', { value: m[0], disabled: m[0] === 'marcadas' && !filaMarcada }, m[1]);
+  }));
+  modo.value = filaMarcada ? 'marcadas' : 'tabla';
+  var empresaActual = TABLAS_CONSULTA[clave].empresa ? empresaTablas : '';
+  var empresa = h('select', {}, [h('option', { value: '' }, 'Todas las empresas')].concat(
+    EMPRESAS.map(function (e) { return h('option', { value: e }, e); })));
+  empresa.value = empresaActual;
+  var grupoEmpresa = h('label', {}, ['Empresa del libro', empresa]);
+  var columnas = Object.keys(datos.filas[0] || {});
+  var casillasColumnas = [], casillasTablas = [];
+  function casilla(valor, titulo, lista) {
+    var input = h('input', { type: 'checkbox', value: valor });
+    input.checked = true; lista.push(input);
+    return h('label', { style: 'display:inline-flex;align-items:center;gap:5px;margin:4px 12px 4px 0' }, [input, titulo]);
+  }
+  var campos = h('details', {}, [h('summary', {}, 'Elegir columnas'),
+    h('div', {}, columnas.map(function (c) { return casilla(c, c, casillasColumnas); }))]);
+  var tablas = h('fieldset', {}, [h('legend', {}, 'Tablas del libro'),
+    h('div', {}, catalogo.map(function (c) { return casilla(c, TABLAS_CONSULTA[c].titulo, casillasTablas); }))]);
+  var estado = h('p', { role: 'status' });
+  var boton = h('button', { class: 'boton principal', type: 'submit' }, 'Descargar .xlsx');
+  var controles = h('fieldset', { style: 'border:0;padding:0;min-width:0;display:grid;gap:12px' }, [
+    h('label', {}, ['Qué descargar', modo]), grupoEmpresa, tablas, campos, boton
+  ]);
+  var form = h('form', {}, [controles, estado]);
+  function mostrarOpciones() {
+    var varias = modo.value === 'varias';
+    grupoEmpresa.hidden = tablas.hidden = !varias;
+    campos.hidden = varias || !columnas.length;
+    casillasTablas.forEach(function (c) {
+      c.disabled = !!empresa.value && !TABLAS_CONSULTA[c.value].empresa;
+      c.parentElement.hidden = c.disabled;
+      c.parentElement.style.display = c.disabled ? 'none' : 'inline-flex';
+    });
+    estado.textContent = varias && empresa.value ? 'Se incluyen las tablas que tienen datos por empresa.' :
+      !varias && empresaActual ? 'Empresa: ' + empresaActual : '';
+  }
+  function marcadas(casillas) {
+    return casillas.filter(function (c) { return c.checked && !c.disabled; }).map(function (c) { return c.value; });
+  }
+  modo.addEventListener('change', mostrarOpciones); empresa.addEventListener('change', mostrarOpciones);
+  mostrarOpciones();
+  abrirModal('Descargar Excel', form);
+  var apertura = secuenciaFicha;
+  function comprobarSesion() {
+    if (apertura !== secuenciaFicha || S.vista !== 'tablas' || S.denegado || !S.rol) throw new Error('Descarga cancelada.');
+  }
+  form.addEventListener('submit', async function (evento) {
+    evento.preventDefault();
+    if (controles.disabled) return;
+    var varias = modo.value === 'varias';
+    var claves = varias ? marcadas(casillasTablas) : [clave];
+    var filtro = varias ? empresa.value : empresaActual;
+    var elegidas = varias || !columnas.length ? null : marcadas(casillasColumnas);
+    if (!claves.length || (elegidas && !elegidas.length)) {
+      estado.textContent = !claves.length ? 'Elige al menos una tabla.' : 'Elige al menos una columna.'; return;
+    }
+    var filasVista = modo.value === 'marcadas' ? Array.from(seleccionExcel.values()) :
+      modo.value === 'pagina' ? datos.filas : null;
+    controles.disabled = true;
+    try {
+      estado.textContent = 'Preparando el libro…';
+      var excel = await prepararExcel();
+      var libro = new excel.Workbook();
+      for (var nombre of claves) {
+        comprobarSesion();
+        var hoja = libro.addWorksheet(TABLAS_CONSULTA[nombre].titulo);
+        var procesar = escritorHoja(hoja, elegidas);
+        if (filasVista) procesar(filasVista);
+        else await exportarTablaCompleta(nombre, filtro, procesar, function (leidas) {
+          comprobarSesion(); estado.textContent = hoja.name + ' · ' + leidas + ' filas leídas';
+        });
+      }
+      estado.textContent = 'Generando archivo…';
+      var buffer = await libro.xlsx.writeBuffer();
+      comprobarSesion();
+      var url = URL.createObjectURL(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+      var archivo = ['MCD', varias ? 'Tablas' : clave, filtro, new Date().toISOString().slice(0, 10)].filter(Boolean).join('_');
+      var enlace = h('a', { href: url, download: archivo.replace(/[<>:"/\\|?*]/g, '_') + '.xlsx' });
+      document.body.appendChild(enlace); enlace.click(); enlace.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+      estado.textContent = 'Archivo Excel preparado para descargar.';
+    } catch (error) {
+      estado.textContent = 'No se ha descargado el archivo. ' + mensajeError(error);
+    } finally { controles.disabled = false; }
+  });
+}
+
+async function exportarTablaCompleta(clave, empresa, escribir, progreso) {
+  var desde = 0, total, vistos = new Set();
+  do {
+    progreso(desde);
+    var r = await consulta(consultaRegistros(clave, empresa).range(desde, desde + 499));
+    if (total === undefined) total = r.count;
+    if (!Number.isInteger(total) || r.count !== total || (!r.data.length && desde < total)) {
+      throw new Error('La tabla ha cambiado durante la descarga. Vuelve a intentarlo.');
+    }
+    r.data.forEach(function (fila) {
+      var id = claveRegistro(clave, fila);
+      if (vistos.has(id)) throw new Error('La tabla ha cambiado durante la descarga. Vuelve a intentarlo.');
+      vistos.add(id);
+    });
+    escribir(r.data);
+    desde += r.data.length;
+  } while (desde < total);
+}
+
+function escritorHoja(hoja, columnas) {
+  var preparada = false;
+  return function (filas) {
+    if (!preparada) {
+      columnas = columnas || Object.keys(filas[0] || {});
+      hoja.columns = columnas.map(function (c) { return { header: c, width: Math.min(42, Math.max(17, c.length + 3)) }; });
+      if (columnas.length) {
+        hoja.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        hoja.getRow(1).eachCell(function (celda) {
+          celda.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2456C4' } };
+        });
+        hoja.views = [{ state: 'frozen', ySplit: 1 }];
+        hoja.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: columnas.length } };
+      }
+      preparada = true;
+    }
+    if (hoja.rowCount + filas.length > 1048576) throw new Error('Esta tabla supera el límite de filas de Excel. Filtra por empresa.');
+    filas.forEach(function (fila) {
+      hoja.addRow(columnas.map(function (c) {
+        var valor = fila[c];
+        if (valor == null) return null;
+        if (typeof valor === 'object') valor = JSON.stringify(valor);
+        if (typeof valor === 'string' && valor.length > 32767) throw new Error('La columna ' + c + ' contiene un texto demasiado largo para Excel.');
+        if (c.indexOf('fecha') === 0 && typeof valor === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(valor)) {
+          return new Date(valor + 'T00:00:00Z');
+        }
+        return valor;
+      }));
+    });
+  };
 }
 
 function pintarMenu() {
@@ -158,6 +346,7 @@ function pintarMenu() {
 }
 function irA(vista) {
   if (!S.rol || S.denegado || vista === S.vista) return;
+  seleccionExcel.clear();
   clearTimeout(temporizadorBusqueda);
   S.vista = vista; S.buscar = ''; S.filtro = ['facturas', 'albaranes'].indexOf(vista) >= 0 ? 'Activos' : ''; S.pagina = 1; pintarMenu(); cargar(true);
 }
@@ -181,6 +370,7 @@ function pintarCabecera(ini) {
 // Entrada (correo y contraseña)
 // ---------------------------------------------------------------------
 function pantallaAcceso(modo, aviso) {
+  seleccionExcel.clear();
   modo = modo || 'entrar';
   var vista = document.getElementById('vista'); vista.textContent = '';
   document.getElementById('menu').textContent = ''; document.getElementById('usuario').textContent = '';
@@ -778,6 +968,7 @@ document.getElementById('btnActualizar').addEventListener('click', function () {
 // Arranque: ¿hay sesión? → panel; si no → pantalla de entrada
 // ---------------------------------------------------------------------
 function arrancar() {
+  seleccionExcel.clear();
   ++secuenciaCarga;
   tablaElegida = 'facturas'; empresaTablas = '';
   S.denegado = false; S.vista = 'inicio'; S.rol = null;
