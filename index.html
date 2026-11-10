@@ -52,7 +52,8 @@
     color:var(--rail-texto); font:inherit; font-weight:600; text-align:left; cursor:pointer; }
   nav button:hover { background:#121b2e; color:#fff; }
   nav button.activo { background:var(--rail-activo); color:#fff; box-shadow:inset 3px 0 var(--cian); }
-  nav .nav-usuarios { margin-top:auto; }
+  nav .nav-usuarios { margin-top:14px; position:relative; }
+  nav .nav-usuarios::before { content:''; position:absolute; left:8px; right:8px; top:-8px; border-top:1px solid #22324d; }
   nav .num { margin-left:auto; background:#ff8a00; color:#111; border-radius:999px; padding:0 8px; font-size:12px; font-weight:700; }
   .nav-movil { display:none; }
 
@@ -64,7 +65,7 @@
     body:has(#menu button) { display:grid; grid-template-columns:232px minmax(0,1fr); grid-template-rows:auto 1fr auto;
       background:linear-gradient(90deg, var(--rail) 232px, var(--fondo) 232px); }
     body:has(#menu button) > header { grid-column:1/-1; }
-    body:has(#menu button) > #menu { grid-column:1; grid-row:2/4; position:sticky; top:0; height:100vh; max-height:calc(100vh - 0px); overflow:auto; }
+    body:has(#menu button) > #menu { grid-column:1; grid-row:2/4; position:sticky; top:0; align-self:start; max-height:100vh; overflow:auto; }
     body:has(#menu button) > main, body:has(#menu button) > footer { grid-column:2; }
   }
   .cab-vista { display:flex; align-items:flex-end; justify-content:space-between; gap:14px; flex-wrap:wrap; margin-bottom:22px; }
@@ -100,6 +101,13 @@
   .mensaje.error { background:var(--error-f); color:var(--error); } .mensaje.ok { background:var(--ok-f); color:var(--ok); }
   .mensaje-ficha { font-size:13px; overflow-wrap:anywhere; } .mensaje-ficha:empty { display:none; }
   .mensaje-ficha.exito { color:var(--ok); } .mensaje-ficha.fallo { color:var(--error); }
+  .formulario-usuario { display:grid; grid-template-columns:2fr 1.5fr 1fr; gap:12px; align-items:end; margin-top:14px; }
+  .formulario-usuario > label:not(.casilla) { display:grid; gap:5px; font-size:13px; font-weight:600; color:var(--suave); }
+  .formulario-usuario input:not([type=checkbox]), .formulario-usuario select { width:100%; }
+  .formulario-usuario .casilla, .formulario-usuario .en-linea { grid-column:1/-1; }
+  .casilla { display:flex; align-items:center; gap:10px; font-size:14px; cursor:pointer; }
+  .roles { margin:10px 0 0; padding-left:18px; color:var(--suave); font-size:13px; display:grid; gap:2px; } .roles b { color:var(--texto); }
+  @media (max-width:700px) { .formulario-usuario { grid-template-columns:1fr; } }
   .formulario { display:grid; gap:12px; } .formulario label { display:grid; gap:5px; font-size:13px; font-weight:600; color:var(--suave); }
   .formulario label input, .formulario label select { width:100%; }
 
@@ -257,6 +265,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=diseno-20261110"></script>
+<script src="app.js?v=diseno-20261110b"></script>
 </body>
 </html>

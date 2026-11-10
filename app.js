@@ -725,15 +725,19 @@ function vUsuarios(v, usuarios) {
   var email = h('input', { type: 'email', placeholder: 'correo@empresa.com' }), nombre = h('input', { type: 'text', placeholder: 'Nombre' });
   var rol = h('select', {}, ['Lector', 'Revisor', 'Administrador'].map(function (r) { return h('option', { value: r }, r); }));
   var activo = h('input', { type: 'checkbox' }); activo.checked = true; var msg = h('div', { class: 'mensaje' });
-  v.appendChild(h('h3', {}, 'Usuarios del panel'));
   var reenviar = h('button', { class: 'boton', type: 'button', onclick: function () {
     if (!email.value.trim()) { msg.className = 'mensaje error'; msg.textContent = 'Elige primero un usuario de la lista.'; return; }
     rpc('panel_reenviar_invitacion', { p_email: email.value.trim() })
       .then(function () { msg.className = 'mensaje ok'; msg.textContent = 'Invitación pendiente: se enviará en menos de un minuto.'; cargar(false); })
       .catch(function (e) { msg.className = 'mensaje error'; msg.textContent = mensajeError(e); });
   } }, 'Reenviar invitación');
-  v.appendChild(h('div', { class: 'tarjeta' }, [h('p', { class: 'sub' }, 'El acceso es solo por invitación. Al guardar un correo nuevo, le llegará en menos de un minuto un correo para elegir su contraseña (si el ordenador del servicio está encendido).'),
-    h('div', { class: 'formulario' }, [h('label', {}, ['Correo', email]), h('label', {}, ['Nombre', nombre]), h('label', {}, ['Rol', rol]), h('label', { class: 'en-linea' }, [activo, ' Activo']),
+  v.appendChild(h('div', { class: 'tarjeta' }, [h('h2', {}, 'Añadir o cambiar un usuario'),
+    h('p', { class: 'sub' }, 'Al guardar un correo nuevo le llega en menos de un minuto un correo para elegir su contraseña. Para cambiar a alguien, pulsa su correo en la lista.'),
+    h('ul', { class: 'roles' }, [h('li', {}, [h('b', {}, 'Lector: '), 've facturas, albaranes y archivos, y descarga Excel (por ejemplo, la gestoría).']),
+      h('li', {}, [h('b', {}, 'Revisor: '), 'además corrige fichas, sube documentos y marca revisado.']),
+      h('li', {}, [h('b', {}, 'Administrador: '), 'además gestiona usuarios y reglas.'])]),
+    h('div', { class: 'formulario-usuario' }, [h('label', {}, ['Correo', email]), h('label', {}, ['Nombre', nombre]), h('label', {}, ['Rol', rol]),
+      h('label', { class: 'casilla' }, [activo, 'Puede entrar (desmarca para quitarle el acceso)']),
       h('div', { class: 'en-linea' }, [h('button', { class: 'boton principal', onclick: function () {
         if (!email.value.trim()) { msg.className = 'mensaje error'; msg.textContent = 'Escribe el correo de la persona.'; return; }
         rpc('panel_guardar_usuario', { p_email: email.value.trim(), p_nombre: nombre.value.trim(), p_rol: rol.value, p_activo: activo.checked })
