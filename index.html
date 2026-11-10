@@ -134,6 +134,15 @@
     background:var(--marca-suave); color:var(--marca); cursor:pointer; }
   .zona-subida:hover, .zona-subida.encima { border-color:var(--marca); background:#dbe7ff; }
   .zona-subida .icono-panel { width:28px; height:28px; }
+  .lista-subidas { list-style:none; margin:0 0 12px; padding:0; display:grid; gap:6px; }
+  .subida { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:4px 10px; align-items:center; padding:10px 12px; border-radius:10px; background:var(--gris-f); font-size:13px; }
+  .subida-nombre { font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .subida-estado { grid-column:2 / 4; color:var(--suave); } .subida .boton.enlace { padding:0; }
+  .subida.exito { background:var(--ok-f); } .subida.exito .subida-estado { color:var(--ok); }
+  .subida.aviso { background:var(--aviso-f); } .subida.aviso .subida-estado { color:var(--aviso); }
+  .subida.fallo { background:var(--error-f); } .subida.fallo .subida-estado { color:var(--error); }
+  .punto.espera { background:#9aa6b8; animation:latir 1.2s ease-in-out infinite; } @keyframes latir { 50% { opacity:.3; } }
+  @media (prefers-reduced-motion: reduce) { .punto.espera { animation:none; } }
   .lista-empresas { display:grid; gap:2px; }
   .empresa-fila { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; padding:10px 0; border-top:1px solid var(--borde); }
   .empresa-fila:first-child { border-top:0; }
@@ -265,6 +274,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=diseno-20261110b"></script>
+<script src="app.js?v=diseno-20261110c"></script>
 </body>
 </html>

@@ -513,23 +513,84 @@ function vInicio(v, d) {
   ] : 'El servicio aún no ha enviado su estado.'));
 }
 
+// Documentos subidos en esta sesión y lo que ha pasado con cada uno (sobrevive al refresco automático de Inicio)
+var SUBIDAS = [];
+function huellaArchivo(f) {
+  return f.arrayBuffer().then(function (datos) { return crypto.subtle.digest('SHA-256', datos); }).then(function (h) {
+    return Array.from(new Uint8Array(h)).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+  });
+}
+// ¿Ya hay un documento registrado con esa huella? Devuelve dónde está (o null)
+async function buscarRegistro(huella) {
+  var d = await consulta(sb.from('documentos').select('id_doc,empresa').eq('hash_sha256', huella).limit(1));
+  if (d.data && d.data[0]) {
+    var x = d.data[0];
+    var f = await consulta(sb.from('facturas').select('id_doc,estado,tipo_factura').eq('empresa', x.empresa).eq('id_doc', x.id_doc).limit(1));
+    if (f.data && f.data[0]) return { hoja: 'facturas', titulo: 'Factura', empresa: x.empresa, id: x.id_doc, estado: f.data[0].estado };
+    var a = await consulta(sb.from('albaranes').select('id_doc,estado').eq('empresa', x.empresa).eq('id_doc', x.id_doc).limit(1));
+    if (a.data && a.data[0]) return { hoja: 'albaranes', titulo: 'Albarán', empresa: x.empresa, id: x.id_doc, estado: a.data[0].estado };
+    return { hoja: null, titulo: 'Documento', empresa: x.empresa, id: x.id_doc, estado: '' };
+  }
+  var r = await consulta(sb.from('revision').select('id_doc,motivo').eq('hash_sha256', huella).limit(1));
+  if (r.data && r.data[0]) return { hoja: 'revision', titulo: 'Revisión manual', empresa: '_revision', id: r.data[0].id_doc, estado: 'Revisión manual', motivo: r.data[0].motivo };
+  return null;
+}
+function pintarSubidas() {
+  var ul = document.getElementById('listaSubidas'); if (!ul) return;
+  ul.textContent = ''; ul.hidden = !SUBIDAS.length;
+  SUBIDAS.slice(-8).reverse().forEach(function (s) {
+    var abrir = s.registro && s.registro.hoja ? h('button', { type: 'button', class: 'boton enlace', onclick: function () {
+      abrirFichaPorId(s.registro.titulo, s.registro.empresa, s.registro.hoja, s.registro.id); } }, 'Abrir') : null;
+    ul.appendChild(h('li', { class: 'subida ' + (s.clase || '') }, [h('span', { class: 'punto ' + (s.clase === 'exito' ? 'ok' : s.clase === 'fallo' ? 'error' : 'espera') }),
+      h('span', { class: 'subida-nombre' }, s.nombre), abrir, h('span', { class: 'subida-estado' }, s.texto)]));
+  });
+}
+function textoRegistro(x) {
+  if (x.hoja === 'revision') return 'necesita revisión manual (' + (x.motivo || 'no se pudo leer') + ')';
+  return x.titulo + ' ' + x.id + (x.empresa && x.empresa !== '_revision' ? ' de ' + x.empresa : '') + (x.estado ? ' · ' + x.estado : '');
+}
+async function seguirSubida(s) {
+  var inicio = Date.now();
+  while (Date.now() - inicio < 5 * 60 * 1000) {
+    await new Promise(function (r) { setTimeout(r, 5000); });
+    try {
+      var x = await buscarRegistro(s.huella);
+      if (x) {
+        s.registro = x; s.clase = x.hoja === 'revision' ? 'aviso' : 'exito'; s.texto = 'Registrado: ' + textoRegistro(x); pintarSubidas();
+        if (S.vista === 'inicio') cargar(false);
+        return;
+      }
+      var segundos = Math.round((Date.now() - inicio) / 1000);
+      s.texto = segundos < 20 ? 'Subido. Esperando a que el servicio lo recoja…' : 'Leyendo el documento… (' + segundos + ' s)'; pintarSubidas();
+    } catch (e) { /* se reintenta en la siguiente vuelta */ }
+  }
+  s.clase = 'aviso'; s.texto = 'Sigue en cola. Aparecerá cuando el servicio lo lea (¿está encendido el ordenador del servicio?)'; pintarSubidas();
+}
+
 function tarjetaSubir() {
   var archivo = h('input', { type: 'file', multiple: 'multiple', class: 'oculto', id: 'archivoSubir', accept: '.pdf,.jpg,.jpeg,.png,.webp,.gif,.bmp,.tif,.tiff,.heic,.heif,.doc,.docx,.odt,.rtf,.xls,.xlsx,.ods,.csv,.txt,.xml,.xsig,.zip' });
   var estado = h('span', { class: 'mensaje-ficha', role: 'status' });
+  var lista = h('ul', { class: 'lista-subidas', id: 'listaSubidas', 'aria-live': 'polite', hidden: 'hidden' });
   var zona = h('label', { class: 'zona-subida', for: 'archivoSubir' }, [iconoPanel('subir'), h('b', {}, 'Elegir archivos o arrastrarlos aquí'),
     h('span', { class: 'sub' }, 'PDF, fotos, Word, Excel, XML o ZIP · máximo 15 MB cada uno')]);
-  async function subir(lista) {
-    var ok = 0, fallos = [];
-    for (var f of lista) {
+  async function subir(ficheros) {
+    for (var f of ficheros) {
       var nombre = f.name.replace(/[\\/:*?"<>|#%]/g, '_').replace(/^\.+/, '');
-      if (f.size > 15 * 1024 * 1024) { fallos.push(f.name + ' (más de 15 MB)'); continue; }
-      if (!/\.(pdf|jpe?g|png|webp|gif|bmp|tiff?|heic|heif|docx?|odt|rtf|xlsx?|ods|csv|txt|xml|xsig|zip)$/i.test(nombre)) { fallos.push(f.name + ' (tipo no admitido)'); continue; }
-      estado.className = 'mensaje-ficha'; estado.textContent = 'Subiendo ' + nombre + '…';
-      var r = await sb.storage.from('entrada').upload(Date.now() + '_' + nombre, f, { contentType: f.type || 'application/octet-stream', upsert: false });
-      if (r.error) fallos.push(f.name + ' (' + mensajeError(r.error) + ')'); else ok++;
+      var s = { nombre: f.name, texto: 'Comprobando…', clase: '' }; SUBIDAS.push(s); pintarSubidas();
+      if (f.size > 15 * 1024 * 1024) { s.clase = 'fallo'; s.texto = 'No se sube: pesa más de 15 MB'; pintarSubidas(); continue; }
+      if (!/\.(pdf|jpe?g|png|webp|gif|bmp|tiff?|heic|heif|docx?|odt|rtf|xlsx?|ods|csv|txt|xml|xsig|zip)$/i.test(nombre)) { s.clase = 'fallo'; s.texto = 'No se sube: tipo de archivo no admitido'; pintarSubidas(); continue; }
+      try {
+        s.huella = await huellaArchivo(f);
+        var ya = await buscarRegistro(s.huella);
+        if (ya) { s.registro = ya; s.clase = 'aviso'; s.texto = 'Ya estaba registrado: ' + textoRegistro(ya) + '. No se vuelve a subir.'; pintarSubidas(); continue; }
+        s.texto = 'Subiendo…'; pintarSubidas();
+        var r = await sb.storage.from('entrada').upload(Date.now() + '_' + nombre, f, { contentType: f.type || 'application/octet-stream', upsert: false });
+        if (r.error) throw r.error;
+        if (/\.zip$/i.test(nombre)) { s.clase = 'exito'; s.texto = 'ZIP enviado: sus documentos aparecerán en Últimos documentos en un par de minutos.'; pintarSubidas(); continue; }
+        s.texto = 'Subido. Esperando a que el servicio lo recoja…'; pintarSubidas();
+        seguirSubida(s);
+      } catch (e) { s.clase = 'fallo'; s.texto = 'No se ha subido: ' + mensajeError(e); pintarSubidas(); }
     }
-    estado.className = 'mensaje-ficha ' + (fallos.length ? 'fallo' : 'exito');
-    estado.textContent = (ok ? ok + (ok === 1 ? ' documento enviado' : ' documentos enviados') + '. El servicio los leerá en un minuto. ' : '') + (fallos.length ? 'No se han subido: ' + fallos.join(', ') : '');
     archivo.value = '';
   }
   archivo.addEventListener('change', function () { if (archivo.files.length) subir(Array.from(archivo.files)); });
@@ -537,11 +598,13 @@ function tarjetaSubir() {
   ['dragleave', 'drop'].forEach(function (ev) { zona.addEventListener(ev, function () { zona.classList.remove('encima'); }); });
   zona.addEventListener('drop', function (e) { e.preventDefault(); if (e.dataTransfer.files.length) subir(Array.from(e.dataTransfer.files)); });
   var procesar = h('button', { type: 'button', class: 'boton', onclick: function () {
-    rpc('panel_procesar_ahora').then(function (r) { estado.className = 'mensaje-ficha exito'; estado.textContent = r && r.repetida ? 'Ya había una orden pendiente; el servicio la atenderá.' : 'Orden enviada: el servicio revisará el correo y las carpetas ahora.'; })
+    rpc('panel_procesar_ahora').then(function (r) { estado.className = 'mensaje-ficha exito'; estado.textContent = r && r.repetida ? 'Ya había una orden pendiente; el servicio la atenderá.' : 'Orden enviada: el servicio revisará el correo ahora.'; })
       .catch(function (e) { estado.className = 'mensaje-ficha fallo'; estado.textContent = mensajeError(e); });
   } }, 'Revisar el correo ahora');
-  return h('section', { class: 'tarjeta' }, [h('div', { class: 'tarjeta-titulo' }, [h('span', { class: 'icono-redondo azul' }, iconoPanel('subir')), h('div', {}, [h('h2', {}, 'Subir documentos'),
-    h('p', { class: 'sub' }, 'También puedes reenviarlos al correo del sistema.')])]), archivo, zona, h('div', { class: 'en-linea' }, [procesar, estado])]);
+  var tarjeta = h('section', { class: 'tarjeta' }, [h('div', { class: 'tarjeta-titulo' }, [h('span', { class: 'icono-redondo azul' }, iconoPanel('subir')), h('div', {}, [h('h2', {}, 'Subir documentos'),
+    h('p', { class: 'sub' }, 'Tarda alrededor de un minuto en leerse. Aquí verás cómo va cada uno.')])]), archivo, zona, lista, h('div', { class: 'en-linea' }, [procesar, estado])]);
+  setTimeout(pintarSubidas, 0);
+  return tarjeta;
 }
 
 // ---------------------------------------------------------------------
@@ -846,7 +909,10 @@ function ficha(titulo, fila, contexto) {
   var estadoArchivo = h('div', { class: 'enlaces-documento' });
   var panelDocumento = h('section', { class: 'vista-documento', 'aria-label': 'Documento para comprobar' }, [h('div', { class: 'cab-documento' }, [h('h3', {}, 'Documento'), opcionesDocumento]), visor, estadoArchivo]);
   var resumen = h('div', { class: 'resumen-importes', role: 'status' });
-  function valorEntrada(c) { return c === 'fecha_vencimiento' && (base[c] === null || base[c] === undefined) ? '' : texto(base[c]); }
+  function valorEntrada(c) {
+    if (c === 'estado_cobro_pago' && !base[c]) return 'Pendiente';      // vacío = Pendiente (no es un cambio)
+    return c === 'fecha_vencimiento' && (base[c] === null || base[c] === undefined) ? '' : texto(base[c]);
+  }
   function cambiosActuales() { var cambios = {}; Object.keys(entradas).forEach(function (c) { if (entradas[c].value !== valorEntrada(c)) cambios[c] = entradas[c].value; }); return cambios; }
   function actualizarPendientes() {
     pendientes = Object.keys(cambiosActuales()).length;
