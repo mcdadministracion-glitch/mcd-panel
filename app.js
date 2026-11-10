@@ -966,8 +966,13 @@ function ficha(titulo, fila, contexto) {
       base = Object.assign({}, r.fila);
       Object.keys(entradas).forEach(function (c) { entradas[c].value = c === 'estado_cobro_pago' && !base[c] ? 'Pendiente' : valorEntrada(c); });
       estado.textContent = base.estado || 'Sin estado'; estado.className = 'pill ' + (base.estado === 'Procesado' ? 'ok' : 'aviso');
-      mensaje.className = 'mensaje-ficha exito'; mensaje.textContent = revisar ? 'Cambios guardados y documento revisado.' : 'Cambios guardados.';
-      ocupado(false); cargar(false);
+      ocupado(false);
+      if (revisar) {                                   // revisado: la ficha se cierra sola y se avisa abajo
+        fichaSucia = null; cerrarModal(); avisoBreve(titulo + ' ' + id + (/^(Factura|Revisi)/.test(titulo) ? ' revisada' : ' revisado') + (Object.keys(cambios).length ? ' y cambios guardados' : ''));
+        cargar(false); return;
+      }
+      mensaje.className = 'mensaje-ficha exito'; mensaje.textContent = 'Cambios guardados.';
+      cargar(false);
     }).catch(function (e) { mensaje.className = 'mensaje-ficha fallo'; mensaje.textContent = mensajeError(e); ocupado(false); });
   }
   if (editable) {
@@ -1029,6 +1034,13 @@ function existe(archivo) {
   return sb.storage.from('documentos').list(partes.join('/'), { limit: 1, search: nombre }).then(function (r) { return !r.error && (r.data || []).some(function (x) { return x.name === nombre; }); });
 }
 
+// Aviso breve abajo de la pantalla (por ejemplo, tras marcar un documento como revisado)
+function avisoBreve(texto) {
+  var viejo = document.getElementById('avisoBreve'); if (viejo) viejo.remove();
+  var aviso = h('div', { id: 'avisoBreve', class: 'aviso-flotante', role: 'status' }, [h('span', { class: 'punto ok' }), texto]);
+  document.body.appendChild(aviso);
+  setTimeout(function () { aviso.classList.add('saliendo'); setTimeout(function () { aviso.remove(); }, 400); }, 3500);
+}
 function abrirModal(titulo, contenido, extra) {
   ++secuenciaFicha;
   if (!document.getElementById('modal').classList.contains('abierto')) focoAntesModal = document.activeElement;

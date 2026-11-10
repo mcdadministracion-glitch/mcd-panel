@@ -221,6 +221,9 @@
   .modo-datos .zona-revision { grid-template-columns:1fr; } .modo-datos .vista-documento { display:none; }
   .modo-documento .zona-revision { grid-template-columns:1fr; } .modo-documento .editor-documento { display:none; }
   .aviso-total { max-width:520px; margin:80px auto; text-align:center; }
+  .aviso-flotante { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:30; display:flex; align-items:center; gap:4px;
+    background:#0b1220; color:#fff; padding:12px 18px; border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,.25); font-weight:600; transition:opacity .4s; }
+  .aviso-flotante.saliendo { opacity:0; }
 
   /* ---------- Entrada ---------- */
   .acceso { max-width:430px; margin:7vh auto; padding:30px; } .acceso h2 { margin:0 0 6px; text-align:center; font-size:22px; }
@@ -274,6 +277,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=diseno-20261110c"></script>
+<script src="app.js?v=diseno-20261110d"></script>
 </body>
 </html>
