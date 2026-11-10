@@ -66,8 +66,8 @@ function consulta(q) { return q.then(function (r) { if (r.error) throw new Error
 // Estado de la pantalla
 // ---------------------------------------------------------------------
 var EMPRESAS = [];
-var S = { vista: 'inicio', empresa: null, todasEmpresas: true, buscar: '', filtro: 'Activos', periodo: '', pagina: 1, carpeta: '', mes: mesActual(), datos: null, pendientes: 0, rol: null, usuario: null, denegado: false };
-var VISTAS = [['inicio', 'Inicio'], ['facturas', 'Facturas'], ['albaranes', 'Albaranes'], ['revision', 'Pendientes'], ['documentos', 'Archivos'], ['negocio', 'Vencimientos']];
+var S = { vista: 'inicio', empresa: null, todasEmpresas: true, buscar: '', filtro: 'Activos', periodo: '', periodoComb: 'mes', pagina: 1, carpeta: '', mes: mesActual(), datos: null, pendientes: 0, rol: null, usuario: null, denegado: false };
+var VISTAS = [['inicio', 'Inicio'], ['facturas', 'Facturas'], ['albaranes', 'Albaranes'], ['revision', 'Pendientes'], ['combustible', 'Combustible'], ['documentos', 'Archivos'], ['negocio', 'Vencimientos']];
 var temporizadorBusqueda = null, secuenciaCarga = 0;
 
 // ---------------------------------------------------------------------
@@ -298,6 +298,7 @@ function iconoPanel(vista) {
     albaranes:'M2 6h12v10H2z M14 10h4l4 4v2h-8 M8 18a2 2 0 1 1-4 0 2 2 0 1 1 4 0 M20 18a2 2 0 1 1-4 0 2 2 0 1 1 4 0',
     revision:'M12 3 2 20h20z M12 9v5 M12 17h.01',
     documentos:'M3 6h7l2 2h9v12H3z', negocio:'M4 3v17h17 M8 15v-4 M13 15V7 M18 15V5',
+    combustible:'M4 21V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16 M3 21h12 M7 8h4 M14 9h2a2 2 0 0 1 2 2v5a1.5 1.5 0 0 0 3 0V8l-3-3',
     excel:'M4 3h11l5 5v13H4z M14 3v6h6 M8 12l5 6 M13 12l-5 6', subir:'M12 16V4 M7 9l5-5 5 5 M4 15v5h16v-5', usuarios:'M8 11a4 4 0 1 0 0-8 4 4 0 1 0 0 8 M2 21v-3a6 6 0 0 1 12 0v3 M16 7a3 3 0 0 1 0 6 M17 16a5 5 0 0 1 5 5'
   };
   var ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg'), path = document.createElementNS(ns, 'path');
@@ -392,7 +393,7 @@ function salir() { sb.auth.signOut().then(function () { ++secuenciaCarga; S.rol 
 // ---------------------------------------------------------------------
 function cargar(mostrarCargando, conservarBarra) {
   if (S.denegado || !S.rol && S.vista !== 'inicio') return;
-  var solicitud = { numero: ++secuenciaCarga, vista: S.vista, empresa: S.empresa, todasEmpresas: !!S.todasEmpresas, carpeta: S.carpeta, mes: S.mes, pagina: S.pagina, buscar: S.buscar, filtro: S.filtro, periodo: S.periodo };
+  var solicitud = { numero: ++secuenciaCarga, vista: S.vista, empresa: S.empresa, todasEmpresas: !!S.todasEmpresas, carpeta: S.carpeta, mes: S.mes, pagina: S.pagina, buscar: S.buscar, filtro: S.filtro, periodo: S.periodo, periodoComb: S.periodoComb };
   var vista = document.getElementById('vista');
   if (mostrarCargando) {
     var destino = conservarBarra && document.getElementById('cuerpo') || vista;
@@ -402,6 +403,7 @@ function cargar(mostrarCargando, conservarBarra) {
   if (solicitud.vista === 'inicio') promesa = rpc('panel_inicio');
   else if (solicitud.vista === 'facturas' || solicitud.vista === 'albaranes') promesa = cargarTabla(solicitud);
   else if (solicitud.vista === 'revision') promesa = rpc('panel_revision');
+  else if (solicitud.vista === 'combustible') promesa = cargarCombustible(solicitud);
   else if (solicitud.vista === 'usuarios') promesa = consulta(sb.from('usuarios').select('*').order('email')).then(function (r) { return r.data; });
   else if (solicitud.vista === 'negocio') promesa = rpc('panel_negocio', { p_empresa: solicitud.empresa, p_mes: solicitud.mes });
   else promesa = cargarCarpeta(solicitud.carpeta);
@@ -455,13 +457,14 @@ function pintar() {
   var cursor = busqueda ? busqueda.selectionStart : null;
   var vista = document.getElementById('vista'); vista.textContent = '';
   var titulos = { inicio: 'Hola' + (S.usuario && S.usuario.nombre ? ', ' + S.usuario.nombre.split(' ')[0] : ''), facturas: 'Facturas', albaranes: 'Albaranes',
-    revision: 'Pendientes de revisar', documentos: 'Archivos', negocio: 'Vencimientos y costes', usuarios: 'Usuarios del panel' };
+    revision: 'Pendientes de revisar', combustible: 'Combustible', documentos: 'Archivos', negocio: 'Vencimientos y costes', usuarios: 'Usuarios del panel' };
   var ayudas = { inicio: 'Esto es lo que hay hoy en el sistema.', facturas: 'Pulsa una factura para verla y corregirla. El botón Excel descarga lo que ves filtrado.',
     albaranes: 'Pulsa un albarán para verlo. El botón Excel descarga lo que ves filtrado.', revision: 'Documentos que necesitan que alguien los mire.',
+    combustible: 'Cada repostaje de las facturas de gasolinera comparado con el precio de ese día en la tabla que llega por correo.',
     documentos: 'Los originales y las copias tachadas que se enviaron a la IA.', negocio: 'Pagos y cobros vencidos, coste por camión y movimientos del mes.',
     usuarios: 'Quién puede entrar al panel. El acceso es solo por invitación.' };
   vista.appendChild(h('div', { class: 'cab-vista' }, [h('div', {}, [h('h1', {}, titulos[S.vista]), h('p', { class: 'sub' }, ayudas[S.vista])])]));
-  ({ inicio: vInicio, facturas: vFacturas, albaranes: vAlbaranes, revision: vRevision, documentos: vDocumentos, usuarios: vUsuarios, negocio: vNegocio })[S.vista](vista, S.datos);
+  ({ inicio: vInicio, facturas: vFacturas, albaranes: vAlbaranes, revision: vRevision, combustible: vCombustible, documentos: vDocumentos, usuarios: vUsuarios, negocio: vNegocio })[S.vista](vista, S.datos);
   if (busqueda && document.getElementById('busquedaTabla')) { var n = document.getElementById('busquedaTabla'); n.focus(); n.setSelectionRange(cursor, cursor); }
 }
 
@@ -664,6 +667,114 @@ function vAlbaranes(v, d) {
         f.factura_vinculada ? h('span', { class: 'pill ok' }, f.factura_vinculada) : pillEstado(f.estado_factura === 'PENDIENTE DE FACTURA' ? 'Sin factura' + (f.dias_sin_factura ? ' · ' + f.dias_sin_factura + ' días' : '') : f.estado_factura)] };
   }), 'Albarán');
   paginacion(c, d);
+}
+
+// ---------------------------------------------------------------------
+// COMBUSTIBLE: precio del día frente a lo que cobra la gasolinera
+// ---------------------------------------------------------------------
+function cargarCombustible(s) {
+  var rango = rangoPeriodo(s.periodoComb);
+  var q = sb.from('repostajes').select('*').order('fecha', { ascending: false, nullsFirst: false }).order('id_doc').limit(3000);
+  if (!s.todasEmpresas) q = q.eq('empresa', s.empresa);
+  if (rango) q = q.gte('fecha', rango[0]).lt('fecha', rango[1]);
+  var desde = new Date(Date.now() - 62 * 864e5).toISOString().slice(0, 10);
+  var qp = sb.from('precios_combustible').select('fecha,combustible,precio_litro,iva_incluido,proveedor').gte('fecha', rango ? rango[0] : desde)
+    .order('fecha', { ascending: false }).limit(1000);
+  if (rango) qp = qp.lt('fecha', rango[1]);
+  return Promise.all([consulta(q), consulta(qp)]).then(function (r) { return { repostajes: r[0].data || [], precios: r[1].data || [] }; });
+}
+function eurosLitro(v) { return v === null || v === undefined || v === '' ? '—' : Number(v).toLocaleString('es-ES', { minimumFractionDigits: 3, maximumFractionDigits: 4 }) + ' €/l'; }
+function litros(v) { return v === null || v === undefined ? '—' : Number(v).toLocaleString('es-ES', { maximumFractionDigits: 2 }) + ' l'; }
+
+function vCombustible(v, d) {
+  var empresas = h('div', { class: 'segmentos', role: 'group', 'aria-label': 'Empresa' }, [null].concat(EMPRESAS).map(function (e) {
+    var activo = e === null ? S.todasEmpresas : !S.todasEmpresas && S.empresa === e;
+    return h('button', { type: 'button', class: activo ? 'activo' : '', 'aria-pressed': activo ? 'true' : 'false', onclick: function () {
+      if (activo) return; S.todasEmpresas = e === null; if (e !== null) S.empresa = e; cargar(true);
+    } }, e || 'Todas');
+  }));
+  var periodo = h('select', { 'aria-label': 'Fecha' }, PERIODOS.map(function (o) { return h('option', { value: o[0] }, o[1]); }));
+  periodo.value = S.periodoComb;
+  periodo.addEventListener('change', function () { S.periodoComb = periodo.value; cargar(true); });
+  var estadoX = h('span', { class: 'estado-excel', role: 'status' });
+  var excel = h('button', { type: 'button', class: 'boton descarga', onclick: async function () {
+    excel.disabled = true; estadoX.textContent = 'Preparando…';
+    try {
+      var X = await prepararExcel(), libro = new X.Workbook(); libro.creator = 'MCD';
+      var hr = libro.addWorksheet('Repostajes', { views: [{ state: 'frozen', ySplit: 1 }] });
+      var colsR = [['fecha', 'Fecha', FECHA], ['empresa', 'Empresa'], ['gasolinera', 'Gasolinera'], ['matricula', 'Matrícula'], ['combustible', 'Combustible'],
+        ['litros', 'Litros'], ['precio_litro', 'Precio facturado (€/l)', 'l4'], ['precio_tabla', 'Precio tabla (€/l)', 'l4'], ['diferencia_litro', 'Diferencia (€/l)', 'l4'],
+        ['sobrecoste', 'De más (€)', EUR], ['importe', 'Importe (€)', EUR], ['estado', 'Resultado'], ['nota', 'Nota'], ['id_doc', 'Factura (ID)']];
+      hr.columns = colsR.map(function (c) { return { header: c[1], key: c[0], width: c[0] === 'gasolinera' || c[0] === 'nota' ? 34 : 16,
+        style: c[2] === EUR ? { numFmt: '#,##0.00 "€"' } : c[2] === 'l4' ? { numFmt: '0.0000' } : c[2] === FECHA ? { numFmt: 'dd/mm/yyyy' } : {} }; });
+      d.repostajes.forEach(function (x) {
+        var fila = {}; colsR.forEach(function (c) { var val = x[c[0]];
+          if (c[2] === FECHA && val) val = new Date(String(val).slice(0, 10) + 'T00:00:00Z');
+          else if ((c[2] === EUR || c[2] === 'l4' || c[0] === 'litros') && val !== null && val !== undefined) val = Number(val);
+          if (typeof val === 'string' && /^[=+\-@]/.test(val)) val = "'" + val;
+          fila[c[0]] = val === undefined ? null : val; });
+        hr.addRow(fila);
+      });
+      hr.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      hr.getRow(1).eachCell(function (c) { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0A4FC4' } }; });
+      if (d.repostajes.length) hr.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: colsR.length } };
+      var hp = libro.addWorksheet('Precios por día', { views: [{ state: 'frozen', ySplit: 1 }] });
+      hp.columns = [{ header: 'Fecha', key: 'fecha', width: 13, style: { numFmt: 'dd/mm/yyyy' } }, { header: 'Combustible', key: 'combustible', width: 16 },
+        { header: 'Precio (€/l)', key: 'precio_litro', width: 14, style: { numFmt: '0.0000' } }, { header: 'IVA incluido', key: 'iva', width: 12 }, { header: 'Proveedor', key: 'proveedor', width: 24 }];
+      d.precios.forEach(function (p) { hp.addRow({ fecha: new Date(String(p.fecha).slice(0, 10) + 'T00:00:00Z'), combustible: p.combustible, precio_litro: Number(p.precio_litro),
+        iva: p.iva_incluido === true ? 'Sí' : p.iva_incluido === false ? 'No' : 'No consta', proveedor: p.proveedor || '' }); });
+      hp.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      hp.getRow(1).eachCell(function (c) { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0A4FC4' } }; });
+      await guardarLibro(libro, ['MCD', 'Combustible', S.todasEmpresas ? 'todas' : S.empresa, nombrePeriodo(S.periodoComb), new Date().toISOString().slice(0, 10)].join('_'));
+      estadoX.textContent = 'Descargado';
+    } catch (e) { estadoX.textContent = 'No se ha descargado: ' + mensajeError(e); }
+    finally { excel.disabled = false; }
+  } }, [iconoPanel('excel'), 'Descargar Excel']);
+  v.appendChild(h('div', { class: 'herramientas' }, [h('div', { class: 'fila-herramientas' }, [empresas,
+    h('label', { class: 'campo-corto' }, ['Fecha', periodo]), h('div', { class: 'descarga-directa' }, [excel, estadoX])])]));
+
+  var reps = d.repostajes, caros = reps.filter(function (x) { return x.estado === 'Más caro'; });
+  var sinPrecio = reps.filter(function (x) { return x.estado === 'Sin precio'; });
+  var demas = caros.reduce(function (t, x) { return t + (Number(x.sobrecoste) || 0); }, 0);
+  var totLitros = reps.reduce(function (t, x) { return t + (Number(x.litros) || 0); }, 0);
+  function metrica(icono, color, valor, nombre, ayuda) {
+    return h('div', { class: 'metrica ' + color, style: 'cursor:default' }, [h('span', { class: 'icono-redondo ' + color }, iconoPanel(icono)),
+      h('span', { class: 'metrica-texto' }, [h('strong', {}, valor), h('span', { class: 'metrica-nombre' }, nombre), h('span', { class: 'metrica-ayuda' }, ayuda)])]);
+  }
+  v.appendChild(h('div', { class: 'metricas' }, [
+    metrica('revision', caros.length ? 'naranja' : 'verde', euros(demas), 'Pagado de más', caros.length ? caros.length + ' repostaje(s) por encima de la tabla' : 'Todo coincide con la tabla'),
+    metrica('combustible', 'azul', reps.length ? Math.round(totLitros).toLocaleString('es-ES') + ' l' : '0 l', 'Repostajes', reps.length + ' repostaje(s) en el periodo'),
+    metrica('documentos', sinPrecio.length ? 'naranja' : 'cian', String(sinPrecio.length), 'Sin precio del día', sinPrecio.length ? 'Se comprobarán al llegar la tabla' : 'Todos tienen precio')]));
+
+  v.appendChild(h('h3', {}, 'Repostajes más caros que la tabla'));
+  if (!caros.length) v.appendChild(h('div', { class: 'tarjeta vacio' }, reps.length ? 'Ningún repostaje supera el precio del día.' : 'Todavía no hay repostajes en este periodo.'));
+  else tabla(v, ['Fecha', { t: 'Gasolinera', largo: 1 }, 'Empresa', 'Matrícula', 'Combustible', { t: 'Litros', num: 1 }, { t: 'Facturado', num: 1 }, { t: 'Tabla', num: 1 },
+    { t: 'Diferencia', num: 1 }, { t: 'De más', num: 1 }], caros.map(function (x) {
+      return { abrir: function () { abrirFichaPorId('Factura', x.empresa, 'facturas', x.id_doc); },
+        celdas: [fecha(x.fecha), x.gasolinera || '—', x.empresa, x.matricula || '—', x.combustible, { t: litros(x.litros), num: 1 }, { t: eurosLitro(x.precio_litro), num: 1 },
+          { t: eurosLitro(x.precio_tabla), num: 1 }, { t: '+' + eurosLitro(x.diferencia_litro), num: 1 }, { t: euros(x.sobrecoste), num: 1 }] };
+    }), 'Factura');
+
+  v.appendChild(h('h3', {}, 'Todos los repostajes'));
+  tabla(v, ['Fecha', { t: 'Gasolinera', largo: 1 }, 'Empresa', 'Combustible', { t: 'Litros', num: 1 }, { t: 'Facturado', num: 1 }, { t: 'Tabla', num: 1 }, 'Resultado'],
+    reps.slice(0, 300).map(function (x) {
+      return { abrir: function () { abrirFichaPorId('Factura', x.empresa, 'facturas', x.id_doc); },
+        celdas: [fecha(x.fecha), x.gasolinera || '—', x.empresa, x.combustible || '—', { t: litros(x.litros), num: 1 }, { t: eurosLitro(x.precio_litro), num: 1 },
+          { t: eurosLitro(x.precio_tabla), num: 1 }, h('span', { class: 'pill ' + ({ 'Correcto': 'ok', 'Más barato': 'ok', 'Más caro': 'error', 'Sin precio': 'aviso' }[x.estado] || '') }, x.estado)] };
+    }), 'Factura');
+
+  // Precios por día: una fila por día y una columna por combustible
+  v.appendChild(h('h3', {}, 'Precios por día (tabla del proveedor)'));
+  var tipos = Array.from(new Set(d.precios.map(function (p) { return p.combustible; }))).sort();
+  var dias = Array.from(new Set(d.precios.map(function (p) { return String(p.fecha).slice(0, 10); }))).sort().reverse().slice(0, 62);
+  var mapa = {}; d.precios.forEach(function (p) { mapa[String(p.fecha).slice(0, 10) + '|' + p.combustible] = p; });
+  if (!dias.length) v.appendChild(h('div', { class: 'tarjeta vacio' }, 'Aún no ha llegado ninguna tabla de precios para estas fechas. Cuando llegue por correo aparecerá aquí.'));
+  else tabla(v, ['Día'].concat(tipos.map(function (t) { return { t: t, num: 1 }; })), dias.map(function (dia) {
+    return { celdas: [fecha(dia)].concat(tipos.map(function (t) { var p = mapa[dia + '|' + t]; return { t: p ? eurosLitro(p.precio_litro) : '—', num: 1 }; })) };
+  }));
+  var conIva = d.precios.filter(function (p) { return p.iva_incluido === true; }).length, sinIva = d.precios.filter(function (p) { return p.iva_incluido === false; }).length;
+  v.appendChild(h('p', { class: 'sub' }, dias.length ? (conIva && !sinIva ? 'Los precios de la tabla incluyen IVA.' : sinIva && !conIva ? 'Los precios de la tabla son sin IVA.' :
+    'La tabla no dice si el precio lleva IVA; se compara en la misma base que la factura.') : ''));
 }
 
 // ---------------------------------------------------------------------
