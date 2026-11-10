@@ -68,7 +68,84 @@ function consulta(q) { return q.then(function (r) { if (r.error) throw new Error
 var EMPRESAS = [];
 var S = { vista: 'inicio', empresa: null, buscar: '', filtro: 'Activos', pagina: 1, carpeta: '', mes: mesActual(), datos: null, pendientes: 0, rol: null, usuario: null, denegado: false };
 var VISTAS = [['inicio', 'Inicio'], ['facturas', 'Facturas'], ['albaranes', 'Albaranes'], ['revision', 'Revisión'], ['documentos', 'Documentos'], ['negocio', 'Negocio']];
+VISTAS.push(['tablas', 'Tablas']);
 var temporizadorBusqueda = null, secuenciaCarga = 0;
+
+// Catálogo cerrado. Las consultas se hacen con la sesión del panel y las políticas de Supabase.
+var TABLAS_CONSULTA = {
+  facturas:       { titulo: 'Facturas', empresa: 'empresa', orden: ['empresa', 'id_doc'] },
+  lineas_factura: { titulo: 'Líneas de factura', empresa: 'empresa', orden: ['empresa', 'id_doc', 'linea', 'id'] },
+  albaranes:      { titulo: 'Albaranes', empresa: 'empresa', orden: ['empresa', 'id_doc'] },
+  documentos:     { titulo: 'Registro de documentos', empresa: 'empresa', orden: ['empresa', 'id_doc'] },
+  proveedores:    { titulo: 'Proveedores', empresa: 'empresa', orden: ['empresa', 'nif', 'id'] },
+  empresas:       { titulo: 'Empresas', empresa: 'clave', orden: ['clave'] },
+  revision:       { titulo: 'Revisión manual', orden: ['id_doc'] },
+  periodicas:     { titulo: 'Facturas periódicas', empresa: 'empresa', orden: ['empresa', 'id'] },
+  estado_servicio:{ titulo: 'Estado del servicio', orden: ['clave'] },
+  ordenes:        { titulo: 'Órdenes del servicio', orden: ['id'] },
+  usuarios:       { titulo: 'Usuarios', orden: ['email'], admin: true },
+  auditoria:      { titulo: 'Auditoría', empresa: 'empresa', orden: ['id'], admin: true }
+};
+var tablaElegida = 'facturas', empresaTablas = '';
+
+function tablasVisibles() {
+  return Object.keys(TABLAS_CONSULTA).filter(function (clave) {
+    return !TABLAS_CONSULTA[clave].admin || S.rol === 'Administrador';
+  });
+}
+
+function cargarRegistros(pagina) {
+  if (tablasVisibles().indexOf(tablaElegida) < 0) tablaElegida = 'facturas';
+  var config = TABLAS_CONSULTA[tablaElegida];
+  var consultaFilas = sb.from(tablaElegida).select('*', { count: 'exact' });
+  if (config.empresa && empresaTablas) consultaFilas = consultaFilas.eq(config.empresa, empresaTablas);
+  config.orden.forEach(function (campo) { consultaFilas = consultaFilas.order(campo); });
+  var tamano = 50, desde = (pagina - 1) * tamano;
+  return consultaFilas.range(desde, desde + tamano - 1).then(function (r) {
+    if (pagina > 1 && (r.status === 416 || (!r.error && !r.data.length))) return { volverAlInicio: true };
+    if (r.error) throw new Error(r.error.message);
+    return { filas: r.data || [], pagina: pagina, tamano: tamano, total: r.count || 0 };
+  });
+}
+
+function vTablas(v, d) {
+  var config = TABLAS_CONSULTA[tablaElegida];
+  var lista = h('select', { 'aria-label': 'Tabla' }, tablasVisibles().map(function (clave) {
+    return h('option', { value: clave }, TABLAS_CONSULTA[clave].titulo);
+  }));
+  lista.value = tablaElegida;
+  lista.addEventListener('change', function () {
+    tablaElegida = lista.value; S.pagina = 1; cargar(true);
+  });
+  var barra = h('div', { class: 'barra' }, [h('label', {}, ['Tabla ', lista])]);
+  if (config.empresa) {
+    var empresas = h('select', { 'aria-label': 'Empresa' }, [h('option', { value: '' }, 'Todas las empresas')].concat(
+      EMPRESAS.map(function (nombre) { return h('option', { value: nombre }, nombre); })));
+    empresas.value = empresaTablas;
+    empresas.addEventListener('change', function () {
+      empresaTablas = empresas.value; S.pagina = 1; cargar(true);
+    });
+    barra.appendChild(h('label', {}, ['Empresa ', empresas]));
+  }
+  v.appendChild(h('h2', {}, 'Tablas de datos'));
+  v.appendChild(barra);
+  if (d.error) {
+    v.appendChild(h('p', { role: 'alert' }, d.error));
+    v.appendChild(h('button', { class: 'boton', onclick: function () { cargar(true); } }, 'Reintentar'));
+    return;
+  }
+  barra.appendChild(h('span', { class: 'contador' }, contadorTabla(d, 'registros')));
+  var columnas = Object.keys(d.filas[0] || {});
+  tabla(v, columnas, d.filas.map(function (fila) {
+    return { celdas: columnas.map(function (c) {
+      var valor = fila[c];
+      if (valor === null || valor === undefined) return '—';
+      if (typeof valor === 'boolean') return valor ? 'Sí' : 'No';
+      return typeof valor === 'object' ? JSON.stringify(valor) : String(valor);
+    }) };
+  }));
+  paginacion(v, d);
+}
 
 function pintarMenu() {
   var nav = document.getElementById('menu'); nav.textContent = '';
@@ -143,7 +220,7 @@ function pantallaAcceso(modo, aviso) {
   vista.appendChild(h('div', { class: 'tarjeta acceso' }, [h('img', { class: 'logo-acceso', src: 'logo.svg', alt: 'MCD' }), h('h2', {}, 'Gestión documental'), h('p', { class: 'sub' }, ayuda[modo]), form, mensaje, enlaces]));
   (modo === 'nueva' ? clave : email).focus();
 }
-function salir() { sb.auth.signOut().then(function () { S.rol = null; S.datos = null; S.denegado = false; pantallaAcceso('entrar'); }); }
+function salir() { sb.auth.signOut().then(function () { ++secuenciaCarga; S.rol = null; S.datos = null; S.denegado = false; pantallaAcceso('entrar'); }); }
 
 // ---------------------------------------------------------------------
 // Carga de datos
@@ -158,6 +235,7 @@ function cargar(mostrarCargando, conservarBarra) {
   }
   var promesa;
   if (solicitud.vista === 'inicio') promesa = rpc('panel_inicio');
+  else if (solicitud.vista === 'tablas') promesa = cargarRegistros(solicitud.pagina);
   else if (solicitud.vista === 'facturas' || solicitud.vista === 'albaranes') promesa = cargarTabla(solicitud);
   else if (solicitud.vista === 'revision') promesa = rpc('panel_revision');
   else if (solicitud.vista === 'usuarios') promesa = consulta(sb.from('usuarios').select('*').order('email')).then(function (r) { return r.data; });
@@ -165,12 +243,22 @@ function cargar(mostrarCargando, conservarBarra) {
   else promesa = cargarCarpeta(solicitud.carpeta);
   promesa.then(function (d) {
     if (solicitud.numero !== secuenciaCarga) return;
+    if (solicitud.vista === 'tablas' && d.volverAlInicio) { S.pagina = 1; cargar(true); return; }
+    var tablaAnterior = solicitud.vista === 'tablas' && !mostrarCargando && vista.querySelector('.tabla');
+    var desplazamiento = tablaAnterior && [tablaAnterior.scrollLeft, tablaAnterior.scrollTop];
     S.datos = d;
     if (solicitud.vista === 'inicio') { pintarCabecera(d); S.pendientes = contarPendientes(d); pintarMenu(); }
     if (solicitud.vista === 'revision') { S.pendientes = contarDocumentosRevision(d); pintarMenu(); }
     pintar();
+    var tablaActual = desplazamiento && vista.querySelector('.tabla');
+    if (tablaActual) { tablaActual.scrollLeft = desplazamiento[0]; tablaActual.scrollTop = desplazamiento[1]; }
     document.getElementById('actualizado').textContent = solicitud.vista === 'inicio' && d.hora ? 'Datos de Inicio a las ' + hora(d.hora) : 'Consulta recibida a las ' + new Date().toLocaleTimeString('es-ES');
-  }).catch(function (e) { if (solicitud.numero === secuenciaCarga) mostrarError(e); });
+  }).catch(function (e) {
+    if (solicitud.numero !== secuenciaCarga) return;
+    if (solicitud.vista === 'tablas' && !/ACCESO_DENEGADO|JWT|token|session/i.test(mensajeError(e))) {
+      S.datos = { error: mensajeError(e) }; pintar();
+    } else mostrarError(e);
+  });
 }
 function limpiarBusqueda(q) { return q.replace(/[,()"'\\%*]/g, ' ').trim().slice(0, 100); }
 function cargarTabla(s) {
@@ -214,7 +302,7 @@ function pintar() {
   var busqueda = document.activeElement && document.activeElement.id === 'busquedaTabla' ? document.activeElement : null;
   var cursor = busqueda ? busqueda.selectionStart : null;
   var vista = document.getElementById('vista'); vista.textContent = '';
-  ({ inicio: vInicio, facturas: vFacturas, albaranes: vAlbaranes, revision: vRevision, documentos: vDocumentos, usuarios: vUsuarios, negocio: vNegocio })[S.vista](vista, S.datos);
+  ({ inicio: vInicio, facturas: vFacturas, albaranes: vAlbaranes, revision: vRevision, documentos: vDocumentos, usuarios: vUsuarios, negocio: vNegocio, tablas: vTablas })[S.vista](vista, S.datos);
   if (busqueda && document.getElementById('busquedaTabla')) { var n = document.getElementById('busquedaTabla'); n.focus(); n.setSelectionRange(cursor, cursor); }
 }
 
@@ -690,6 +778,8 @@ document.getElementById('btnActualizar').addEventListener('click', function () {
 // Arranque: ¿hay sesión? → panel; si no → pantalla de entrada
 // ---------------------------------------------------------------------
 function arrancar() {
+  ++secuenciaCarga;
+  tablaElegida = 'facturas'; empresaTablas = '';
   S.denegado = false; S.vista = 'inicio'; S.rol = null;
   sb.auth.getSession().then(function (r) {
     if (!r.data || !r.data.session) { pantallaAcceso('entrar'); return; }
