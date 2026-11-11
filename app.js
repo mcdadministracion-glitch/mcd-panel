@@ -742,9 +742,9 @@ function cargarCombustible(s) {
   var q = sb.from('repostajes').select('*').order('fecha', { ascending: false, nullsFirst: false }).order('id_doc').limit(3000);
   if (!s.todasEmpresas) q = q.eq('empresa', s.empresa);
   if (rango) q = q.gte('fecha', rango[0]).lt('fecha', rango[1]);
-  var desde = new Date(Date.now() - 62 * 864e5).toISOString().slice(0, 10);
-  var qp = sb.from('precios_combustible').select('fecha,combustible,precio_litro,iva_incluido,proveedor').gte('fecha', rango ? rango[0] : desde)
-    .order('fecha', { ascending: false }).limit(1000);
+  // Precios: los del periodo y, de las tablas "hasta nuevo aviso", también las anteriores que siguen vigentes
+  var qp = sb.from('precios_combustible').select('fecha,combustible,precio_litro,precio_con_iva,iva_incluido,proveedor,estacion,poblacion,provincia,empresa,hasta_nuevo_aviso')
+    .order('fecha', { ascending: false }).order('estacion').limit(5000);
   if (rango) qp = qp.lt('fecha', rango[1]);
   return Promise.all([consulta(q), consulta(qp)]).then(function (r) { return { repostajes: r[0].data || [], precios: r[1].data || [] }; });
 }
@@ -767,10 +767,11 @@ function vCombustible(v, d) {
     try {
       var X = await prepararExcel(), libro = new X.Workbook(); libro.creator = 'MCD';
       var hr = libro.addWorksheet('Repostajes', { views: [{ state: 'frozen', ySplit: 1 }] });
-      var colsR = [['fecha', 'Fecha', FECHA], ['empresa', 'Empresa'], ['gasolinera', 'Gasolinera'], ['matricula', 'Matrícula'], ['combustible', 'Combustible'],
+      var colsR = [['fecha', 'Fecha', FECHA], ['empresa', 'Empresa'], ['gasolinera', 'Gasolinera'], ['estacion', 'Estación (factura)'], ['estacion_tabla', 'Estación (tabla)'],
+        ['matricula', 'Matrícula'], ['combustible', 'Combustible'],
         ['litros', 'Litros'], ['precio_litro', 'Precio facturado (€/l)', 'l4'], ['precio_tabla', 'Precio tabla (€/l)', 'l4'], ['diferencia_litro', 'Diferencia (€/l)', 'l4'],
         ['sobrecoste', 'De más (€)', EUR], ['importe', 'Importe (€)', EUR], ['estado', 'Resultado'], ['nota', 'Nota'], ['id_doc', 'Factura (ID)']];
-      hr.columns = colsR.map(function (c) { return { header: c[1], key: c[0], width: c[0] === 'gasolinera' || c[0] === 'nota' ? 34 : 16,
+      hr.columns = colsR.map(function (c) { return { header: c[1], key: c[0], width: /gasolinera|nota|estacion/.test(c[0]) ? 34 : 16,
         style: c[2] === EUR ? { numFmt: '#,##0.00 "€"' } : c[2] === 'l4' ? { numFmt: '0.0000' } : c[2] === FECHA ? { numFmt: 'dd/mm/yyyy' } : {} }; });
       d.repostajes.forEach(function (x) {
         var fila = {}; colsR.forEach(function (c) { var val = x[c[0]];
@@ -783,11 +784,18 @@ function vCombustible(v, d) {
       hr.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
       hr.getRow(1).eachCell(function (c) { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0A4FC4' } }; });
       if (d.repostajes.length) hr.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: colsR.length } };
-      var hp = libro.addWorksheet('Precios por día', { views: [{ state: 'frozen', ySplit: 1 }] });
-      hp.columns = [{ header: 'Fecha', key: 'fecha', width: 13, style: { numFmt: 'dd/mm/yyyy' } }, { header: 'Combustible', key: 'combustible', width: 16 },
-        { header: 'Precio (€/l)', key: 'precio_litro', width: 14, style: { numFmt: '0.0000' } }, { header: 'IVA incluido', key: 'iva', width: 12 }, { header: 'Proveedor', key: 'proveedor', width: 24 }];
-      d.precios.forEach(function (p) { hp.addRow({ fecha: new Date(String(p.fecha).slice(0, 10) + 'T00:00:00Z'), combustible: p.combustible, precio_litro: numeroExcel(p.precio_litro),
-        iva: p.iva_incluido === true ? 'Sí' : p.iva_incluido === false ? 'No' : 'No consta', proveedor: p.proveedor || '' }); });
+      var hp = libro.addWorksheet('Precios', { views: [{ state: 'frozen', ySplit: 1 }] });
+      hp.columns = [{ header: 'Fecha (desde)', key: 'fecha', width: 13, style: { numFmt: 'dd/mm/yyyy' } }, { header: 'Vigencia', key: 'vig', width: 18 },
+        { header: 'Estación', key: 'estacion', width: 34 }, { header: 'Población', key: 'poblacion', width: 22 }, { header: 'Provincia', key: 'provincia', width: 14 },
+        { header: 'Combustible', key: 'combustible', width: 14 }, { header: 'Precio (€/l)', key: 'precio_litro', width: 13, style: { numFmt: '0.0000' } },
+        { header: 'Precio con IVA (€/l)', key: 'precio_con_iva', width: 16, style: { numFmt: '0.0000' } }, { header: 'IVA incluido', key: 'iva', width: 12 },
+        { header: 'Para', key: 'empresa', width: 12 }, { header: 'Proveedor', key: 'proveedor', width: 20 }];
+      d.precios.forEach(function (p) { var fila = { fecha: new Date(String(p.fecha).slice(0, 10) + 'T00:00:00Z'), vig: p.hasta_nuevo_aviso ? 'Hasta nuevo aviso' : 'Solo ese día',
+        estacion: p.estacion || 'General', poblacion: p.poblacion || '', provincia: p.provincia || '', combustible: p.combustible, precio_litro: numeroExcel(p.precio_litro),
+        precio_con_iva: p.precio_con_iva === null || p.precio_con_iva === undefined ? null : numeroExcel(p.precio_con_iva),
+        iva: p.precio_con_iva ? 'No (sin IVA)' : p.iva_incluido === true ? 'Sí' : p.iva_incluido === false ? 'No' : 'No consta', empresa: p.empresa || 'Todas', proveedor: p.proveedor || '' };
+        Object.keys(fila).forEach(function (k) { if (typeof fila[k] === 'string' && /^[=+\-@]/.test(fila[k])) fila[k] = "'" + fila[k]; });
+        hp.addRow(fila); });
       hp.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
       hp.getRow(1).eachCell(function (c) { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0A4FC4' } }; });
       await guardarLibro(libro, ['MCD', 'Combustible', S.todasEmpresas ? 'todas' : S.empresa, nombrePeriodo(S.periodoComb), new Date().toISOString().slice(0, 10)].join('_'));
@@ -809,37 +817,59 @@ function vCombustible(v, d) {
   v.appendChild(h('div', { class: 'metricas' }, [
     metrica('revision', caros.length ? 'naranja' : 'verde', euros(demas), 'Pagado de más', caros.length ? caros.length + ' repostaje(s) por encima de la tabla' : 'Todo coincide con la tabla'),
     metrica('combustible', 'azul', reps.length ? Math.round(totLitros).toLocaleString('es-ES') + ' l' : '0 l', 'Repostajes', reps.length + ' repostaje(s) en el periodo'),
-    metrica('documentos', sinPrecio.length ? 'naranja' : 'cian', String(sinPrecio.length), 'Sin precio del día', sinPrecio.length ? 'Se comprobarán al llegar la tabla' : 'Todos tienen precio')]));
+    metrica('documentos', sinPrecio.length ? 'naranja' : 'cian', String(sinPrecio.length), 'Sin comparar', sinPrecio.length ? 'Sin precio de ese día o estación (ver la nota)' : 'Todos tienen precio')]));
 
   v.appendChild(h('h3', {}, 'Repostajes más caros que la tabla'));
   if (!caros.length) v.appendChild(h('div', { class: 'tarjeta vacio' }, reps.length ? 'Ningún repostaje supera el precio del día.' : 'Todavía no hay repostajes en este periodo.'));
-  else tabla(v, ['Fecha', { t: 'Gasolinera', largo: 1 }, 'Empresa', 'Matrícula', 'Combustible', { t: 'Litros', num: 1 }, { t: 'Facturado', num: 1 }, { t: 'Tabla', num: 1 },
+  else tabla(v, ['Fecha', { t: 'Estación', largo: 1 }, 'Empresa', 'Matrícula', 'Combustible', { t: 'Litros', num: 1 }, { t: 'Facturado', num: 1 }, { t: 'Tabla', num: 1 },
     { t: 'Diferencia', num: 1 }, { t: 'De más', num: 1 }], caros.map(function (x) {
       return { abrir: function () { abrirFichaPorId('Factura', x.empresa, 'facturas', x.id_doc); },
-        celdas: [fecha(x.fecha), x.gasolinera || '—', x.empresa, x.matricula || '—', x.combustible, { t: litros(x.litros), num: 1 }, { t: eurosLitro(x.precio_litro), num: 1 },
+        celdas: [fecha(x.fecha), x.estacion_tabla || x.estacion || x.gasolinera || '—', x.empresa, x.matricula || '—', x.combustible, { t: litros(x.litros), num: 1 }, { t: eurosLitro(x.precio_litro), num: 1 },
           { t: eurosLitro(x.precio_tabla), num: 1 }, { t: '+' + eurosLitro(x.diferencia_litro), num: 1 }, { t: euros(x.sobrecoste), num: 1 }] };
     }), 'Factura');
 
   v.appendChild(h('h3', {}, 'Todos los repostajes'));
-  tabla(v, ['Fecha', { t: 'Gasolinera', largo: 1 }, 'Empresa', 'Combustible', { t: 'Litros', num: 1 }, { t: 'Facturado', num: 1 }, { t: 'Tabla', num: 1 }, 'Resultado'],
+  tabla(v, ['Fecha', { t: 'Estación', largo: 1 }, 'Empresa', 'Combustible', { t: 'Litros', num: 1 }, { t: 'Facturado', num: 1 }, { t: 'Tabla', num: 1 }, 'Resultado'],
     reps.slice(0, 300).map(function (x) {
       return { abrir: function () { abrirFichaPorId('Factura', x.empresa, 'facturas', x.id_doc); },
-        celdas: [fecha(x.fecha), x.gasolinera || '—', x.empresa, x.combustible || '—', { t: litros(x.litros), num: 1 }, { t: eurosLitro(x.precio_litro), num: 1 },
-          { t: eurosLitro(x.precio_tabla), num: 1 }, h('span', { class: 'pill ' + ({ 'Correcto': 'ok', 'Más barato': 'ok', 'Más caro': 'error', 'Sin precio': 'aviso' }[x.estado] || '') }, x.estado)] };
+        celdas: [fecha(x.fecha), x.estacion_tabla || x.estacion || x.gasolinera || '—', x.empresa, x.combustible || '—', { t: litros(x.litros), num: 1 }, { t: eurosLitro(x.precio_litro), num: 1 },
+          { t: eurosLitro(x.precio_tabla), num: 1 }, h('span', { class: 'pill ' + ({ 'Correcto': 'ok', 'Más barato': 'ok', 'Más caro': 'error', 'Sin precio': 'aviso' }[x.estado] || ''), title: x.nota || '' },
+            x.estado === 'Sin precio' ? 'Sin comparar' : x.estado)] };
     }), 'Factura');
 
-  // Precios por día: una fila por día y una columna por combustible
-  v.appendChild(h('h3', {}, 'Precios por día (tabla del proveedor)'));
-  var tipos = Array.from(new Set(d.precios.map(function (p) { return p.combustible; }))).sort();
-  var dias = Array.from(new Set(d.precios.map(function (p) { return String(p.fecha).slice(0, 10); }))).sort().reverse().slice(0, 62);
-  var mapa = {}; d.precios.forEach(function (p) { mapa[String(p.fecha).slice(0, 10) + '|' + p.combustible] = p; });
-  if (!dias.length) v.appendChild(h('div', { class: 'tarjeta vacio' }, 'Aún no ha llegado ninguna tabla de precios para estas fechas. Cuando llegue por correo aparecerá aquí.'));
-  else tabla(v, ['Día'].concat(tipos.map(function (t) { return { t: t, num: 1 }; })), dias.map(function (dia) {
-    return { celdas: [fecha(dia)].concat(tipos.map(function (t) { var p = mapa[dia + '|' + t]; return { t: p ? eurosLitro(p.precio_litro) : '—', num: 1 }; })) };
-  }));
-  var conIva = d.precios.filter(function (p) { return p.iva_incluido === true; }).length, sinIva = d.precios.filter(function (p) { return p.iva_incluido === false; }).length;
-  v.appendChild(h('p', { class: 'sub' }, dias.length ? (conIva && !sinIva ? 'Los precios de la tabla incluyen IVA.' : sinIva && !conIva ? 'Los precios de la tabla son sin IVA.' :
-    'La tabla no dice si el precio lleva IVA; se compara en la misma base que la factura.') : ''));
+  // Precios por ESTACIÓN: la última tabla vigente de cada empresa ("desde X hasta nuevo aviso")
+  var porEstacion = d.precios.filter(function (p) { return p.estacion; });
+  var vigentes = {};    // empresa -> fecha de su última tabla
+  porEstacion.forEach(function (p) { var k = p.empresa || ''; var f = String(p.fecha).slice(0, 10); if (!vigentes[k] || f > vigentes[k]) vigentes[k] = f; });
+  Object.keys(vigentes).sort().forEach(function (k) {
+    var filas = porEstacion.filter(function (p) { return (p.empresa || '') === k && String(p.fecha).slice(0, 10) === vigentes[k]; });
+    var pv = filas[0] && filas[0].proveedor ? filas[0].proveedor + ' · ' : '';
+    v.appendChild(h('h3', {}, 'Precios por estación' + (k ? ' para ' + k : '') + ' — vigentes desde el ' + fecha(vigentes[k]) + (filas[0] && filas[0].hasta_nuevo_aviso ? ' (hasta nuevo aviso)' : '')));
+    v.appendChild(h('p', { class: 'sub' }, pv + filas.length + ' precio(s). Cada repostaje se compara con el de su estación.'));
+    tabla(v, [{ t: 'Estación', largo: 1 }, 'Población', 'Provincia', 'Combustible', { t: 'Sin IVA', num: 1 }, { t: 'Con IVA', num: 1 }], filas.map(function (p) {
+      return { celdas: [p.estacion, p.poblacion || '—', p.provincia || '—', p.combustible, { t: eurosLitro(p.precio_litro), num: 1 },
+        { t: p.precio_con_iva ? eurosLitro(p.precio_con_iva) : '—', num: 1 }] };
+    }));
+  });
+
+  // Precios por DÍA (tablas sin estaciones): una fila por día y una columna por combustible
+  var generales = d.precios.filter(function (p) { return !p.estacion; });
+  var tipos = Array.from(new Set(generales.map(function (p) { return p.combustible; }))).sort();
+  var dias = Array.from(new Set(generales.map(function (p) { return String(p.fecha).slice(0, 10); }))).sort().reverse().slice(0, 62);
+  var mapa = {}; generales.forEach(function (p) { mapa[String(p.fecha).slice(0, 10) + '|' + p.combustible] = p; });
+  if (!dias.length && !porEstacion.length) {
+    v.appendChild(h('h3', {}, 'Precios del proveedor'));
+    v.appendChild(h('div', { class: 'tarjeta vacio' }, 'Aún no ha llegado ninguna tabla de precios para estas fechas. Cuando llegue por correo aparecerá aquí.'));
+  }
+  if (dias.length) {
+    v.appendChild(h('h3', {}, 'Precios por día (tabla del proveedor)'));
+    tabla(v, ['Día'].concat(tipos.map(function (t) { return { t: t, num: 1 }; })), dias.map(function (dia) {
+      return { celdas: [fecha(dia)].concat(tipos.map(function (t) { var p = mapa[dia + '|' + t]; return { t: p ? eurosLitro(p.precio_litro) : '—', num: 1 }; })) };
+    }));
+    var conIva = generales.filter(function (p) { return p.iva_incluido === true; }).length, sinIva = generales.filter(function (p) { return p.iva_incluido === false; }).length;
+    v.appendChild(h('p', { class: 'sub' }, conIva && !sinIva ? 'Los precios de la tabla incluyen IVA.' : sinIva && !conIva ? 'Los precios de la tabla son sin IVA.' :
+      'La tabla no dice si el precio lleva IVA; se compara en la misma base que la factura.'));
+  }
 }
 
 // ---------------------------------------------------------------------

@@ -1,15 +1,15 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MCD Â· GestiÃ³n documental</title>
+<title>MCD · Gestión documental</title>
 <meta name="robots" content="noindex">
 <link rel="icon" type="image/svg+xml" href="icono.svg">
 <meta name="theme-color" content="#000000">
 <style>
   /* =============================================================
-     MCD Â· Panel. Colores del logo: negro, azul y cian.
+     MCD · Panel. Colores del logo: negro, azul y cian.
      ============================================================= */
   :root {
     --fondo:#f4f6fa; --panel:#ffffff; --texto:#111827; --suave:#5b6475; --borde:#e2e6ee; --gris-f:#f1f3f7;
@@ -44,7 +44,7 @@
   .usuario .boton:hover { background:#16213a; }
   .logo-acceso { display:block; margin:0 auto 16px; height:104px; width:auto; padding:14px 24px; background:#000; border-radius:16px; }
 
-  /* ---------- MenÃº lateral ---------- */
+  /* ---------- Menú lateral ---------- */
   .icono-panel { width:20px; height:20px; display:inline-block; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; flex-shrink:0; }
   nav:empty { display:none; }
   nav { background:var(--rail); padding:16px 12px; display:flex; flex-direction:column; gap:4px; }
@@ -177,7 +177,7 @@
   .linea-servicio { margin:20px 0 0; color:var(--suave); font-size:13px; display:flex; flex-wrap:wrap; align-items:center; gap:4px; }
   .punto { width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:6px; } .punto.ok { background:#22a35a; } .punto.error { background:#e5484d; }
 
-  /* ---------- Listas (facturas, albaranesâ€¦) ---------- */
+  /* ---------- Listas (facturas, albaranes…) ---------- */
   .herramientas { background:var(--panel); border:1px solid var(--borde); border-radius:var(--radio); padding:14px; margin-bottom:14px; display:grid; gap:12px; box-shadow:var(--sombra); }
   .fila-herramientas { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
   .fila-herramientas:first-child { justify-content:space-between; align-items:center; }
@@ -250,7 +250,7 @@
   .acceso .enlaces { display:flex; gap:12px; justify-content:center; flex-wrap:wrap; margin-top:14px; font-size:13px; }
   .acceso .enlaces button { background:none; border:0; color:var(--marca); cursor:pointer; text-decoration:underline; font:inherit; padding:0; }
 
-  /* ---------- Pantallas medianas y mÃ³vil ---------- */
+  /* ---------- Pantallas medianas y móvil ---------- */
   @media (max-width:1100px) { .inicio-columnas { grid-template-columns:1fr; } }
   @media (max-width:960px) {
     nav:not(:empty) { display:block; padding:10px 14px; } nav button { display:none; }
@@ -269,7 +269,7 @@
     .descarga-directa, .descarga-directa .boton { width:100%; } .descarga-directa .estado-excel { text-align:left; }
     .ultimos li { grid-template-columns:auto minmax(0,1fr) auto; } .ultimo-empresa, .ultimo-fecha { display:none; }
     .campos-ficha, .otros-datos { grid-template-columns:1fr; } .modal { padding:4px; }
-    /* En el mÃ³vil cada fila de tabla se ve como una tarjeta */
+    /* En el móvil cada fila de tabla se ve como una tarjeta */
     .tabla { max-height:none; overflow:visible; background:none; border:0; box-shadow:none; }
     .tabla table, .tabla tbody { display:block; } .tabla thead { display:none; }
     .tabla tr { display:block; background:var(--panel); border:1px solid var(--borde); border-radius:12px; padding:10px 14px; margin-bottom:10px; box-shadow:var(--sombra); }
@@ -284,18 +284,18 @@
 <body>
 <a class="saltar" href="#vista">Saltar al contenido</a>
 <header>
-  <div class="logo"><img src="logo.svg" alt="MCD"><span>GestiÃ³n documental</span></div>
-  <span id="estadoServicio" class="pill" hidden>Servicioâ€¦</span>
+  <div class="logo"><img src="logo.svg" alt="MCD"><span>Gestión documental</span></div>
+  <span id="estadoServicio" class="pill" hidden>Servicio…</span>
   <div class="usuario" id="usuario"></div>
 </header>
 <nav id="menu" aria-label="Secciones del panel"></nav>
-<main id="vista" tabindex="-1"><div class="cargando">Cargandoâ€¦</div></main>
-<footer id="pie" hidden><span id="actualizado"></span> Â· se actualiza solo cada 30 segundos Â· <button class="boton" id="btnActualizar">Actualizar ahora</button></footer>
+<main id="vista" tabindex="-1"><div class="cargando">Cargando…</div></main>
+<footer id="pie" hidden><span id="actualizado"></span> · se actualiza solo cada 30 segundos · <button class="boton" id="btnActualizar">Actualizar ahora</button></footer>
 <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="tituloModal"><div class="caja" id="caja"></div></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=repetidos-20261111"></script>
+<script src="app.js?v=estaciones-20261111"></script>
 </body>
 </html>
