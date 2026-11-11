@@ -324,6 +324,8 @@ function pintarMenu() {
     return h('option', { value: v[0] }, v[1]);
   }));
   movil.value = S.vista; movil.addEventListener('change', function () { irA(movil.value); });
+  if (puedeSubir()) nav.appendChild(h('button', { type: 'button', class: 'nav-subir', title: 'Facturas, albaranes, tickets o tablas de precios',
+    onclick: function () { var e = document.getElementById('subidaGlobal'); if (e) e.click(); } }, [iconoPanel('subir'), 'Subir documentos']));
   nav.appendChild(movil);
   secciones.forEach(function (v) {
     nav.appendChild(h('button', { class: 'nav-' + v[0] + (S.vista === v[0] ? ' activo' : ''), 'aria-current': S.vista === v[0] ? 'page' : null, onclick: function () { irA(v[0]); } },
@@ -545,6 +547,8 @@ async function buscarRegistro(huella) {
     if (a.data && a.data[0]) return { hoja: 'albaranes', titulo: 'Albarán', empresa: x.empresa, id: x.id_doc, estado: a.data[0].estado };
     return { hoja: null, titulo: 'Documento', empresa: x.empresa, id: x.id_doc, estado: '' };
   }
+  var t = await consulta(sb.from('tickets').select('*').eq('hash_sha256', huella).limit(1));
+  if (t.data && t.data[0]) return { hoja: 'tickets', titulo: 'Ticket', empresa: '', id: t.data[0].id_doc, estado: t.data[0].estado, ticket: t.data[0] };
   var r = await consulta(sb.from('revision').select('id_doc,motivo').eq('hash_sha256', huella).limit(1));
   if (r.data && r.data[0]) return { hoja: 'revision', titulo: 'Revisión manual', empresa: '_revision', id: r.data[0].id_doc, estado: 'Revisión manual', motivo: r.data[0].motivo };
   return null;
@@ -554,13 +558,15 @@ function pintarSubidas() {
   ul.textContent = ''; ul.hidden = !SUBIDAS.length;
   SUBIDAS.slice(-8).reverse().forEach(function (s) {
     var abrir = s.registro && s.registro.hoja ? h('button', { type: 'button', class: 'boton enlace', onclick: function () {
-      abrirFichaPorId(s.registro.titulo, s.registro.empresa, s.registro.hoja, s.registro.id); } }, 'Abrir') : null;
+      if (s.registro.hoja === 'tickets') fichaTicket(s.registro.ticket);
+      else abrirFichaPorId(s.registro.titulo, s.registro.empresa, s.registro.hoja, s.registro.id); } }, 'Abrir') : null;
     ul.appendChild(h('li', { class: 'subida ' + (s.clase || '') }, [h('span', { class: 'punto ' + (s.clase === 'exito' ? 'ok' : s.clase === 'fallo' ? 'error' : 'espera') }),
       h('span', { class: 'subida-nombre' }, s.nombre), abrir, h('span', { class: 'subida-estado' }, s.texto)]));
   });
 }
 function textoRegistro(x) {
   if (x.hoja === 'revision') return 'necesita revisión manual (' + (x.motivo || 'no se pudo leer') + ')';
+  if (x.hoja === 'tickets') return 'Ticket ' + x.id + ' · ' + x.ticket.categoria + (x.ticket.total !== null && x.ticket.total !== undefined ? ' · ' + euros(x.ticket.total) : '') + (x.estado === 'Revisar' ? ' · revisar' : '');
   return x.titulo + ' ' + x.id + (x.empresa && x.empresa !== '_revision' ? ' de ' + x.empresa : '') + (x.estado ? ' · ' + x.estado : '');
 }
 async function seguirSubida(s) {
@@ -570,8 +576,8 @@ async function seguirSubida(s) {
     try {
       var x = await buscarRegistro(s.huella);
       if (x) {
-        s.registro = x; s.clase = x.hoja === 'revision' ? 'aviso' : 'exito'; s.texto = 'Registrado: ' + textoRegistro(x); pintarSubidas();
-        if (S.vista === 'inicio') cargar(false);
+        s.registro = x; s.clase = x.hoja === 'revision' || x.estado === 'Revisar' ? 'aviso' : 'exito'; s.texto = 'Registrado: ' + textoRegistro(x); pintarSubidas();
+        if (S.vista === 'inicio' || (S.vista === 'tickets' && x.hoja === 'tickets')) cargar(false);
         return;
       }
       var segundos = Math.round((Date.now() - inicio) / 1000);
@@ -581,15 +587,12 @@ async function seguirSubida(s) {
   s.clase = 'aviso'; s.texto = 'Sigue en cola. Aparecerá cuando el servicio lo lea (¿está encendido el ordenador del servicio?)'; pintarSubidas();
 }
 
-function tarjetaSubir() {
-  var archivo = h('input', { type: 'file', multiple: 'multiple', class: 'oculto', id: 'archivoSubir', accept: '.pdf,.jpg,.jpeg,.png,.webp,.gif,.bmp,.tif,.tiff,.heic,.heif,.doc,.docx,.odt,.rtf,.xls,.xlsx,.ods,.csv,.txt,.xml,.xsig,.zip' });
-  var estado = h('span', { class: 'mensaje-ficha', role: 'status' });
-  var lista = h('ul', { class: 'lista-subidas', id: 'listaSubidas', 'aria-live': 'polite', hidden: 'hidden' });
-  var zona = h('label', { class: 'zona-subida', for: 'archivoSubir' }, [iconoPanel('subir'), h('b', {}, 'Elegir archivos o arrastrarlos aquí'),
-    h('span', { class: 'sub' }, 'PDF, fotos, Word, Excel, XML o ZIP · máximo 15 MB cada uno')]);
-  async function subir(ficheros) {
+// UNA SOLA SUBIDA para todo: facturas, albaranes, tickets y tablas de precios. El servicio decide qué es cada cosa.
+var TIPOS_SUBIDA = '.pdf,.jpg,.jpeg,.png,.webp,.gif,.bmp,.tif,.tiff,.heic,.heif,.doc,.docx,.odt,.rtf,.xls,.xlsx,.ods,.csv,.txt,.xml,.xsig,.zip';
+function puedeSubir() { return S.rol === 'Revisor' || S.rol === 'Administrador'; }
+async function subirArchivos(ficheros) {
     for (var f of ficheros) {
-      var nombre = f.name.replace(/[\\/:*?"<>|#%]/g, '_').replace(/^\.+/, '');
+      var nombre = f.name.replace(/[\\/:*?"<>|#%]/g, '_').replace(/^\.+/, '') || 'foto.jpg';
       var s = { nombre: f.name, texto: 'Comprobando…', clase: '' }; SUBIDAS.push(s); pintarSubidas();
       if (f.size > 15 * 1024 * 1024) { s.clase = 'fallo'; s.texto = 'No se sube: pesa más de 15 MB'; pintarSubidas(); continue; }
       if (!/\.(pdf|jpe?g|png|webp|gif|bmp|tiff?|heic|heif|docx?|odt|rtf|xlsx?|ods|csv|txt|xml|xsig|zip)$/i.test(nombre)) { s.clase = 'fallo'; s.texto = 'No se sube: tipo de archivo no admitido'; pintarSubidas(); continue; }
@@ -605,18 +608,49 @@ function tarjetaSubir() {
         seguirSubida(s);
       } catch (e) { s.clase = 'fallo'; s.texto = 'No se ha subido: ' + mensajeError(e); pintarSubidas(); }
     }
-    archivo.value = '';
-  }
-  archivo.addEventListener('change', function () { if (archivo.files.length) subir(Array.from(archivo.files)); });
-  ['dragover', 'dragenter'].forEach(function (ev) { zona.addEventListener(ev, function (e) { e.preventDefault(); zona.classList.add('encima'); }); });
-  ['dragleave', 'drop'].forEach(function (ev) { zona.addEventListener(ev, function () { zona.classList.remove('encima'); }); });
-  zona.addEventListener('drop', function (e) { e.preventDefault(); if (e.dataTransfer.files.length) subir(Array.from(e.dataTransfer.files)); });
+}
+// Subir desde cualquier sección: botón "Subir" del menú y arrastrar archivos encima de la página
+function prepararSubidaGlobal() {
+  var entrada = h('input', { type: 'file', multiple: 'multiple', class: 'oculto', id: 'subidaGlobal', accept: TIPOS_SUBIDA });
+  document.body.appendChild(entrada);
+  entrada.addEventListener('change', function () { if (entrada.files.length) { var fs = Array.from(entrada.files); entrada.value = ''; verSubidas(fs); } });
+  var capa = h('div', { class: 'capa-soltar', hidden: 'hidden' }, [h('div', {}, [iconoPanel('subir'), h('b', {}, 'Suelta aquí los documentos'),
+    h('span', {}, 'Facturas, albaranes, tickets o tablas de precios: se separan solos')])]);
+  document.body.appendChild(capa);
+  var contador = 0;
+  function conArchivos(e) { return puedeSubir() && e.dataTransfer && Array.from(e.dataTransfer.types || []).indexOf('Files') >= 0; }
+  document.addEventListener('dragenter', function (e) { if (!conArchivos(e)) return; e.preventDefault(); contador++; capa.hidden = false; });
+  document.addEventListener('dragover', function (e) { if (!conArchivos(e)) return; e.preventDefault(); });
+  document.addEventListener('dragleave', function (e) { if (!conArchivos(e)) return; contador = Math.max(0, contador - 1); if (!contador) capa.hidden = true; });
+  document.addEventListener('drop', function (e) {
+    if (!conArchivos(e)) return; e.preventDefault(); contador = 0; capa.hidden = true;
+    if (e.dataTransfer.files.length) verSubidas(Array.from(e.dataTransfer.files));
+  });
+}
+// Sube y lleva a una pantalla donde se ve cómo va cada documento (Inicio o Tickets)
+function verSubidas(ficheros) {
+  subirArchivos(ficheros);
+  if (S.vista !== 'inicio' && S.vista !== 'tickets') irA('inicio');
+  else setTimeout(pintarSubidas, 0);
+}
+
+function tarjetaSubir() {
+  var archivo = h('input', { type: 'file', multiple: 'multiple', class: 'oculto', id: 'archivoSubir', accept: TIPOS_SUBIDA });
+  var camara = h('input', { type: 'file', accept: 'image/*', capture: 'environment', class: 'oculto', id: 'camaraSubir' });
+  var estado = h('span', { class: 'mensaje-ficha', role: 'status' });
+  var lista = h('ul', { class: 'lista-subidas', id: 'listaSubidas', 'aria-live': 'polite', hidden: 'hidden' });
+  var botones = h('div', { class: 'tickets-subir' }, [
+    h('label', { class: 'boton-grande principal', for: 'camaraSubir' }, [iconoPanel('camara'), h('span', {}, [h('b', {}, 'Hacer foto'), h('small', {}, 'Ticket, factura o albarán en papel')])]),
+    h('label', { class: 'boton-grande', for: 'archivoSubir' }, [iconoPanel('subir'), h('span', {}, [h('b', {}, 'Elegir archivos'), h('small', {}, 'O arrástralos a cualquier parte de la página')])])]);
+  [archivo, camara].forEach(function (inp) { inp.addEventListener('change', function () { if (inp.files.length) { var fs = Array.from(inp.files); inp.value = ''; subirArchivos(fs); } }); });
   var procesar = h('button', { type: 'button', class: 'boton', onclick: function () {
     rpc('panel_procesar_ahora').then(function (r) { estado.className = 'mensaje-ficha exito'; estado.textContent = r && r.repetida ? 'Ya había una orden pendiente; el servicio la atenderá.' : 'Orden enviada: el servicio revisará el correo ahora.'; })
       .catch(function (e) { estado.className = 'mensaje-ficha fallo'; estado.textContent = mensajeError(e); });
   } }, 'Revisar el correo ahora');
-  var tarjeta = h('section', { class: 'tarjeta' }, [h('div', { class: 'tarjeta-titulo' }, [h('span', { class: 'icono-redondo azul' }, iconoPanel('subir')), h('div', {}, [h('h2', {}, 'Subir documentos'),
-    h('p', { class: 'sub' }, 'Tarda alrededor de un minuto en leerse. Aquí verás cómo va cada uno.')])]), archivo, zona, lista, h('div', { class: 'en-linea' }, [procesar, estado])]);
+  var tarjeta = h('section', { class: 'tarjeta' }, [h('div', { class: 'tarjeta-titulo' }, [h('span', { class: 'icono-redondo azul' }, iconoPanel('subir')), h('div', {}, [h('h2', {}, 'Subir documentos y tickets'),
+    h('p', { class: 'sub' }, 'Todo aquí: facturas, albaranes, tickets o tablas de precios. El sistema los separa solo y cada uno va a su sección.')])]),
+    archivo, camara, botones, h('p', { class: 'sub' }, 'PDF, fotos, Word, Excel, XML o ZIP · máximo 15 MB cada uno. En las fotos: de frente, con buena luz y el papel entero.'),
+    lista, h('div', { class: 'en-linea' }, [procesar, estado])]);
   setTimeout(pintarSubidas, 0);
   return tarjeta;
 }
@@ -792,7 +826,6 @@ function vCombustible(v, d) {
 // TICKETS: gastos generales (gasolina, comidas, aparcamientos...) subidos en foto
 // ---------------------------------------------------------------------
 var CATEGORIAS_TICKET = ['Combustible', 'Comida', 'Aparcamiento', 'Peaje', 'Alojamiento', 'Transporte', 'Otros'];
-var SUBIDAS_TCK = [];
 function cargarTickets(s) {
   var rango = rangoPeriodo(s.periodoTck);
   var q = sb.from('tickets').select('*').order('fecha', { ascending: false, nullsFirst: true }).order('id_doc', { ascending: false }).limit(3000);
@@ -801,73 +834,8 @@ function cargarTickets(s) {
   if (s.estadoTck === 'Revisar') q = q.eq('estado', 'Revisar');
   return consulta(q).then(function (r) { return { tickets: r.data || [] }; });
 }
-async function buscarTicket(huella) {
-  var r = await consulta(sb.from('tickets').select('*').eq('hash_sha256', huella).limit(1));
-  if (r.data && r.data[0]) return r.data[0];
-  var rv = await consulta(sb.from('revision').select('id_doc,motivo').eq('hash_sha256', huella).limit(1));
-  return rv.data && rv.data[0] ? { revision: true, id_doc: rv.data[0].id_doc, motivo: rv.data[0].motivo } : null;
-}
-function textoTicket(t) {
-  if (t.revision) return 'No se pudo leer: está en Pendientes (' + (t.motivo || 'revisión manual') + ')';
-  return 'Ticket ' + t.id_doc + ' · ' + t.categoria + ' · ' + (t.total !== null && t.total !== undefined ? euros(t.total) : 'sin total') + (t.estado === 'Revisar' ? ' · revisar' : '');
-}
-function pintarSubidasTck() {
-  var ul = document.getElementById('listaSubidasTck'); if (!ul) return;
-  ul.textContent = ''; ul.hidden = !SUBIDAS_TCK.length;
-  SUBIDAS_TCK.slice(-8).reverse().forEach(function (s) {
-    var abrir = s.ticket && !s.ticket.revision ? h('button', { type: 'button', class: 'boton enlace', onclick: function () { fichaTicket(s.ticket); } }, 'Abrir') : null;
-    ul.appendChild(h('li', { class: 'subida ' + (s.clase || '') }, [h('span', { class: 'punto ' + (s.clase === 'exito' ? 'ok' : s.clase === 'fallo' ? 'error' : 'espera') }),
-      h('span', { class: 'subida-nombre' }, s.nombre), abrir, h('span', { class: 'subida-estado' }, s.texto)]));
-  });
-}
-async function seguirTicket(s) {
-  var inicio = Date.now();
-  while (Date.now() - inicio < 5 * 60 * 1000) {
-    await new Promise(function (r) { setTimeout(r, 5000); });
-    try {
-      var t = await buscarTicket(s.huella);
-      if (t) { s.ticket = t; s.clase = t.revision || t.estado === 'Revisar' ? 'aviso' : 'exito'; s.texto = 'Leído: ' + textoTicket(t); pintarSubidasTck(); if (S.vista === 'tickets') cargar(false); return; }
-      var seg = Math.round((Date.now() - inicio) / 1000);
-      s.texto = seg < 20 ? 'Subido. Esperando a que el servicio lo recoja…' : 'Leyendo el ticket… (' + seg + ' s)'; pintarSubidasTck();
-    } catch (e) { /* se reintenta */ }
-  }
-  s.clase = 'aviso'; s.texto = 'Sigue en cola. Aparecerá cuando el servicio lo lea (¿está encendido el ordenador del servicio?)'; pintarSubidasTck();
-}
-async function subirTickets(ficheros) {
-  for (var f of ficheros) {
-    var nombre = f.name.replace(/[\\/:*?"<>|#%]/g, '_').replace(/^\.+/, '') || 'foto.jpg';
-    var s = { nombre: f.name || 'Foto', texto: 'Comprobando…', clase: '' }; SUBIDAS_TCK.push(s); pintarSubidasTck();
-    if (f.size > 15 * 1024 * 1024) { s.clase = 'fallo'; s.texto = 'No se sube: pesa más de 15 MB'; pintarSubidasTck(); continue; }
-    if (!/\.(pdf|jpe?g|png|webp|heic|heif|tiff?|bmp|gif)$/i.test(nombre)) { s.clase = 'fallo'; s.texto = 'No se sube: debe ser una foto o un PDF'; pintarSubidasTck(); continue; }
-    try {
-      s.huella = await huellaArchivo(f);
-      var ya = await buscarTicket(s.huella);
-      if (ya) { s.ticket = ya; s.clase = 'aviso'; s.texto = 'Ya estaba subido: ' + textoTicket(ya); pintarSubidasTck(); continue; }
-      s.texto = 'Subiendo…'; pintarSubidasTck();
-      var r = await sb.storage.from('entrada').upload(Date.now() + '_ticket_' + nombre, f, { contentType: f.type || 'application/octet-stream', upsert: false });
-      if (r.error) throw r.error;
-      s.texto = 'Subido. Esperando a que el servicio lo recoja…'; pintarSubidasTck();
-      seguirTicket(s);
-    } catch (e) { s.clase = 'fallo'; s.texto = 'No se ha subido: ' + mensajeError(e); pintarSubidasTck(); }
-  }
-}
-
 function vTickets(v, d) {
-  if (S.rol === 'Revisor' || S.rol === 'Administrador') {
-    var camara = h('input', { type: 'file', accept: 'image/*', capture: 'environment', class: 'oculto', id: 'camaraTicket' });
-    var galeria = h('input', { type: 'file', accept: 'image/*,.pdf,.heic,.heif', multiple: 'multiple', class: 'oculto', id: 'galeriaTicket' });
-    [camara, galeria].forEach(function (inp) { inp.addEventListener('change', function () { if (inp.files.length) { subirTickets(Array.from(inp.files)); inp.value = ''; } }); });
-    var zona = h('div', { class: 'tickets-subir' }, [
-      h('label', { class: 'boton-grande principal', for: 'camaraTicket' }, [iconoPanel('camara'), h('span', {}, [h('b', {}, 'Hacer foto del ticket'), h('small', {}, 'Abre la cámara del móvil')])]),
-      h('label', { class: 'boton-grande', for: 'galeriaTicket' }, [iconoPanel('subir'), h('span', {}, [h('b', {}, 'Elegir fotos'), h('small', {}, 'De la galería o del ordenador (varias a la vez)')])])]);
-    ['dragover', 'dragenter'].forEach(function (ev) { zona.addEventListener(ev, function (e) { e.preventDefault(); zona.classList.add('encima'); }); });
-    ['dragleave', 'drop'].forEach(function (ev) { zona.addEventListener(ev, function () { zona.classList.remove('encima'); }); });
-    zona.addEventListener('drop', function (e) { e.preventDefault(); if (e.dataTransfer.files.length) subirTickets(Array.from(e.dataTransfer.files)); });
-    v.appendChild(h('section', { class: 'tarjeta' }, [camara, galeria, zona,
-      h('p', { class: 'sub' }, 'Consejo: foto de frente, con buena luz y el ticket entero. Se lee en un minuto y se tachan los datos personales antes de mandarlo a la IA.'),
-      h('ul', { class: 'lista-subidas', id: 'listaSubidasTck', 'aria-live': 'polite', hidden: 'hidden' })]));
-    setTimeout(pintarSubidasTck, 0);
-  }
+  if (puedeSubir()) v.appendChild(tarjetaSubir());   // la misma subida que en Inicio: el sistema separa tickets y facturas
 
   // Filtros
   var periodo = h('select', { 'aria-label': 'Fecha' }, PERIODOS.map(function (o) { return h('option', { value: o[0] }, o[1]); }));
@@ -1393,6 +1361,7 @@ document.addEventListener('keydown', function (e) {
   }
 });
 document.getElementById('btnActualizar').addEventListener('click', function () { cargar(true, true); });
+prepararSubidaGlobal();
 
 // ---------------------------------------------------------------------
 // Arranque: ¿hay sesión? → panel; si no → pantalla de entrada
