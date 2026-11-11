@@ -538,9 +538,21 @@ function huellaArchivo(f) {
 }
 // ¿Ya hay un documento registrado con esa huella? Devuelve dónde está (o null)
 async function buscarRegistro(huella) {
-  var d = await consulta(sb.from('documentos').select('id_doc,empresa').eq('hash_sha256', huella).limit(1));
+  var d = await consulta(sb.from('documentos').select('id_doc,empresa,estado,observaciones').eq('hash_sha256', huella).limit(1));
   if (d.data && d.data[0]) {
     var x = d.data[0];
+    if (x.estado === 'Duplicado') {
+      // Otro archivo del mismo documento: no se añadió. Se enlaza al que ya estaba (si se sabe cuál es).
+      var m = /como ([A-Z]+-\d+)/.exec(x.observaciones || ''), original = m ? m[1] : '';
+      var rep = { repetido: true, hoja: null, titulo: 'Documento', empresa: x.empresa, id: original || x.id_doc, estado: 'Duplicado', original: original };
+      if (original) {
+        var fo = await consulta(sb.from('facturas').select('id_doc').eq('empresa', x.empresa).eq('id_doc', original).limit(1));
+        if (fo.data && fo.data[0]) { rep.hoja = 'facturas'; rep.titulo = 'Factura'; }
+        else { var ao = await consulta(sb.from('albaranes').select('id_doc').eq('empresa', x.empresa).eq('id_doc', original).limit(1));
+          if (ao.data && ao.data[0]) { rep.hoja = 'albaranes'; rep.titulo = 'Albarán'; } }
+      }
+      return rep;
+    }
     var f = await consulta(sb.from('facturas').select('id_doc,estado,tipo_factura').eq('empresa', x.empresa).eq('id_doc', x.id_doc).limit(1));
     if (f.data && f.data[0]) return { hoja: 'facturas', titulo: 'Factura', empresa: x.empresa, id: x.id_doc, estado: f.data[0].estado };
     var a = await consulta(sb.from('albaranes').select('id_doc,estado').eq('empresa', x.empresa).eq('id_doc', x.id_doc).limit(1));
@@ -566,7 +578,12 @@ function pintarSubidas() {
 }
 function textoRegistro(x) {
   if (x.hoja === 'revision') return 'necesita revisión manual (' + (x.motivo || 'no se pudo leer') + ')';
-  if (x.hoja === 'tickets') return 'Ticket ' + x.id + ' · ' + x.ticket.categoria + (x.ticket.total !== null && x.ticket.total !== undefined ? ' · ' + euros(x.ticket.total) : '') + (x.estado === 'Revisar' ? ' · revisar' : '');
+  if (x.repetido) return 'REPETIDO: este documento ya estaba registrado' + (x.original ? ' como ' + x.original + ' de ' + x.empresa : ' en ' + x.empresa) + '. No se ha añadido otra vez.';
+  if (x.hoja === 'tickets') {
+    var rep = /Posible repetido de (TCK-\d+)/.exec(x.ticket.observaciones || '');
+    return 'Ticket ' + x.id + ' · ' + x.ticket.categoria + (x.ticket.total !== null && x.ticket.total !== undefined ? ' · ' + euros(x.ticket.total) : '') +
+      (rep ? ' · ¿REPETIDO? Se parece a ' + rep[1] + ': revísalo' : x.estado === 'Revisar' ? ' · revisar' : '');
+  }
   return x.titulo + ' ' + x.id + (x.empresa && x.empresa !== '_revision' ? ' de ' + x.empresa : '') + (x.estado ? ' · ' + x.estado : '');
 }
 async function seguirSubida(s) {
@@ -576,7 +593,9 @@ async function seguirSubida(s) {
     try {
       var x = await buscarRegistro(s.huella);
       if (x) {
-        s.registro = x; s.clase = x.hoja === 'revision' || x.estado === 'Revisar' ? 'aviso' : 'exito'; s.texto = 'Registrado: ' + textoRegistro(x); pintarSubidas();
+        s.registro = x; s.clase = x.hoja === 'revision' || x.estado === 'Revisar' || x.repetido ? 'aviso' : 'exito';
+        s.texto = x.repetido ? textoRegistro(x) : 'Registrado: ' + textoRegistro(x); pintarSubidas();
+        if (x.repetido || /Posible repetido/.test((x.ticket && x.ticket.observaciones) || '')) avisoBreve('Ojo: ' + s.nombre + ' parece repetido');
         if (S.vista === 'inicio' || (S.vista === 'tickets' && x.hoja === 'tickets')) cargar(false);
         return;
       }
@@ -599,7 +618,8 @@ async function subirArchivos(ficheros) {
       try {
         s.huella = await huellaArchivo(f);
         var ya = await buscarRegistro(s.huella);
-        if (ya) { s.registro = ya; s.clase = 'aviso'; s.texto = 'Ya estaba registrado: ' + textoRegistro(ya) + '. No se vuelve a subir.'; pintarSubidas(); continue; }
+        if (ya) { s.registro = ya; s.clase = 'aviso'; s.texto = ya.repetido ? 'REPETIDO: ya se subió antes y ya estaba registrado' + (ya.original ? ' como ' + ya.original + ' de ' + ya.empresa : '') + '. No se vuelve a subir.'
+          : 'REPETIDO: ya estaba registrado: ' + textoRegistro(ya) + '. No se vuelve a subir.'; pintarSubidas(); avisoBreve('Ojo: ' + s.nombre + ' ya estaba subido'); continue; }
         s.texto = 'Subiendo…'; pintarSubidas();
         var r = await sb.storage.from('entrada').upload(Date.now() + '_' + nombre, f, { contentType: f.type || 'application/octet-stream', upsert: false });
         if (r.error) throw r.error;
