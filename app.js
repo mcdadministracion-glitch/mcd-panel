@@ -1298,7 +1298,7 @@ var ACCIONES = {
   'Reenviar invitacion': 'Reenvió una invitación', 'Regla periodica': 'Cambió una regla periódica', 'Procesar ahora': 'Pidió procesar ahora',
   'Ver documento': 'Abrió un documento', 'Descargar documento': 'Descargó documentos',
   'Entrada': 'Entró en el panel', 'Entrada fallida': 'Contraseña equivocada', 'Entrada sin permiso': 'Intentó entrar sin permiso',
-  'Revisar albarán sin factura': 'Revisó un albarán sin factura', 'Alta automática': 'Añadido', 'Cambio automático': 'Cambiado', 'Borrado automático': 'Borrado', 'Limpieza del historial': 'Limpieza (más de 2 años)'
+  'Revisar albarán sin factura': 'Revisó un albarán sin factura', 'Tachado manual': 'Tachó a mano y envió a la IA', 'Alta automática': 'Añadido', 'Cambio automático': 'Cambiado', 'Borrado automático': 'Borrado', 'Limpieza del historial': 'Limpieza (más de 2 años)'
 };
 var ACCESOS_HISTORIAL = ['Entrada', 'Entrada fallida', 'Entrada sin permiso'];
 var PROGRAMA_HISTORIAL = ['Alta automática', 'Cambio automático', 'Borrado automático', 'Limpieza del historial'];
@@ -1675,10 +1675,176 @@ function ficha(titulo, fila, contexto) {
       }).catch(function () { visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, 'La vista previa no está disponible. Puedes continuar revisando los datos.')); });
     }
     [['Original', 'original', d.original], ['Copia tachada', 'tachado', d.tachado]].forEach(function (x) { if (x[2]) opcionesDocumento.appendChild(h('button', { class: 'boton', type: 'button', onclick: function () { mostrar(x[1], x[2]); } }, x[0])); });
+    // Revisión manual: tacharlo a mano y enviarlo a la IA (PDF o foto)
+    if (hoja === 'revision' && editable && d.original) {
+      var tachable = /\.(pdf|jpe?g|png|webp|gif|bmp)$/i.test(d.original.nombre);
+      panelDocumento.appendChild(h('div', { class: 'aviso-tachado' }, [      // fuera de estadoArchivo: la vista previa lo vacía al cargar
+        h('button', { type: 'button', class: 'boton principal', disabled: tachable ? null : 'disabled', onclick: function () {
+          if (fichaSucia && fichaSucia() && !confirm('Hay cambios sin guardar en la ficha. ¿Seguir sin guardarlos?')) return;
+          fichaSucia = null; abrirTachado(id, d.original);
+        } }, 'Tachar y enviar a la IA'),
+        h('span', { class: 'sub' }, tachable ? 'Si no se leyó bien: tapa a mano los datos personales y envíalo.' : 'Este tipo de archivo no se puede tachar aquí (solo PDF o fotos).')]));
+    }
     if (d.original) mostrar('original', d.original); else if (d.tachado) mostrar('tachado', d.tachado);
     else { visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, 'No hay archivo guardado para este documento (los documentos anteriores al almacén nuevo siguen en la carpeta de Drive).')); }
   }).catch(function () { if (numero === secuenciaFicha) { visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, 'La vista previa no está disponible. Puedes continuar revisando los datos.')); } });
 }
+// ---------------------------------------------------------------------
+// TACHAR A MANO Y ENVIAR A LA IA (documentos de revisión que el programa no lee bien)
+//  - Se dibujan recuadros negros encima de cada página.
+//  - Al enviar, el navegador crea una copia NUEVA: cada página es una imagen con el
+//    negro ya pintado encima (no se puede quitar) y sin texto escondido.
+//  - Antes de subirla se apunta su huella (panel_registrar_tachado_manual): solo así
+//    el servicio la acepta. El servicio vuelve a tachar y comprobar por su cuenta.
+//  - El original sin tachar no sale de la revisión.
+// ---------------------------------------------------------------------
+var PDFJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
+var PDFJS_SRI = 'sha384-/1qUCSGwTur9vjf/z9lmu/eCUYbpOTgSjmpbMQZ1/CtX2v/WcAIKqRv+U1DUCG6e';
+var PDFJS_WORKER_SRI = 'sha384-SnzOobpRMLXZ52iJvZm/C0fYw0OQemTXzTjIsdsfMcrCtCEe9qgzxTd3RSklO5x2';
+var bibliotecaPdf;
+function prepararPdf() {
+  if (window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions.workerSrc) return Promise.resolve(window.pdfjsLib);
+  if (!bibliotecaPdf) bibliotecaPdf = new Promise(function (resolve, reject) {
+    var script = document.createElement('script');
+    script.src = PDFJS_URL + 'pdf.min.js'; script.integrity = PDFJS_SRI; script.crossOrigin = 'anonymous';
+    script.onload = function () {
+      // El "trabajador" de pdf.js se descarga comprobando su huella y se usa desde una copia local
+      fetch(PDFJS_URL + 'pdf.worker.min.js', { integrity: PDFJS_WORKER_SRI }).then(function (r) { if (!r.ok) throw new Error(); return r.blob(); })
+        .then(function (b) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(b); resolve(window.pdfjsLib); })
+        .catch(function () { bibliotecaPdf = null; reject(new Error('No se pudo cargar el lector de PDF. Comprueba la conexión.')); });
+    };
+    script.onerror = function () { bibliotecaPdf = null; script.remove(); reject(new Error('No se pudo cargar el lector de PDF. Comprueba la conexión.')); };
+    document.head.appendChild(script);
+  });
+  return bibliotecaPdf;
+}
+var ANCHO_TACHADO = 1600, MAX_PAGINAS_TACHADO = 15;
+function lienzo(ancho, alto) { var c = document.createElement('canvas'); c.width = Math.max(1, Math.round(ancho)); c.height = Math.max(1, Math.round(alto)); return c; }
+// Páginas del original como imágenes (lienzos) a ~1600 px de ancho
+async function paginasComoImagen(url, nombre) {
+  var datos = await fetch(url).then(function (r) { if (!r.ok) throw new Error('No se pudo descargar el documento'); return r.arrayBuffer(); });
+  if (/\.pdf$/i.test(nombre)) {
+    var pdfjs = await prepararPdf();
+    var doc = await pdfjs.getDocument({ data: new Uint8Array(datos), isEvalSupported: false }).promise;
+    if (doc.numPages > MAX_PAGINAS_TACHADO) throw new Error('El documento tiene ' + doc.numPages + ' páginas (máximo ' + MAX_PAGINAS_TACHADO + ').');
+    var paginas = [];
+    for (var i = 1; i <= doc.numPages; i++) {
+      var pg = await doc.getPage(i), v1 = pg.getViewport({ scale: 1 }), vp = pg.getViewport({ scale: Math.min(3, ANCHO_TACHADO / v1.width) });
+      var c = lienzo(vp.width, vp.height), cx = c.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0, 0, c.width, c.height);
+      await pg.render({ canvasContext: cx, viewport: vp }).promise;
+      paginas.push(c);
+    }
+    return paginas;
+  }
+  var img = await createImageBitmap(new Blob([datos]));
+  var esc = Math.min(1, 2000 / img.width), c2 = lienzo(img.width * esc, img.height * esc), cx2 = c2.getContext('2d');
+  cx2.fillStyle = '#fff'; cx2.fillRect(0, 0, c2.width, c2.height); cx2.drawImage(img, 0, 0, c2.width, c2.height);
+  return [c2];
+}
+// PDF sencillo con una imagen JPEG por página (sin texto)
+function pdfDeJpegs(paginas) {
+  var enc = new TextEncoder(), partes = [], total = 0, offsets = [];
+  function add(x) { var b = typeof x === 'string' ? enc.encode(x) : x; partes.push(b); total += b.length; }
+  function obj(n, cuerpo, flujo) { offsets[n] = total; add(n + ' 0 obj\n' + cuerpo); if (flujo) { add('\nstream\n'); add(flujo); add('\nendstream'); } add('\nendobj\n'); }
+  add('%PDF-1.4\n'); add(new Uint8Array([0x25, 0xE2, 0xE3, 0xCF, 0xD3, 0x0A]));
+  var n = paginas.length, kids = [];
+  for (var i = 0; i < n; i++) kids.push((3 + i * 3) + ' 0 R');
+  obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
+  obj(2, '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + n + ' >>');
+  paginas.forEach(function (p, i) {
+    var pw = 595, ph = Math.round(595 * p.alto / p.ancho * 100) / 100, base = 3 + i * 3;
+    var contenido = enc.encode('q ' + pw + ' 0 0 ' + ph + ' 0 0 cm /Im0 Do Q');
+    obj(base, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + pw + ' ' + ph + '] /Resources << /XObject << /Im0 ' + (base + 2) + ' 0 R >> >> /Contents ' + (base + 1) + ' 0 R >>');
+    obj(base + 1, '<< /Length ' + contenido.length + ' >>', contenido);
+    obj(base + 2, '<< /Type /XObject /Subtype /Image /Width ' + p.ancho + ' /Height ' + p.alto + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + p.jpeg.length + ' >>', p.jpeg);
+  });
+  var xref = total, filas = ['xref\n0 ' + (3 + n * 3) + '\n0000000000 65535 f \n'];
+  for (var k = 1; k < 3 + n * 3; k++) filas.push(String(offsets[k]).padStart(10, '0') + ' 00000 n \n');
+  add(filas.join('') + 'trailer\n<< /Size ' + (3 + n * 3) + ' /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF\n');
+  return new Blob(partes, { type: 'application/pdf' });
+}
+function abrirTachado(revId, archivo) {
+  var estado = h('p', { class: 'vacio', role: 'status' }, 'Preparando el documento…');
+  var zona = h('div', { class: 'tachado-paginas' }, estado);
+  var contador = h('span', { class: 'tachado-contador' }, '0 recuadros');
+  var historia = [], paginas = [];
+  var deshacer = h('button', { type: 'button', class: 'boton', disabled: 'disabled', onclick: function () {
+    var i = historia.pop(); if (i === undefined) return; paginas[i].recuadros.pop(); pintarPagina(paginas[i]); actualizar(); } }, 'Deshacer el último');
+  var confirma = h('input', { type: 'checkbox', id: 'tachadoConfirma' });
+  var enviar = h('button', { type: 'button', class: 'boton principal', disabled: 'disabled', onclick: function () { enviarTachado(); } }, 'Enviar a la IA');
+  var mensaje = h('div', { class: 'mensaje-ficha', role: 'status' });
+  confirma.addEventListener('change', actualizar);
+  function total() { return paginas.reduce(function (s, p) { return s + p.recuadros.length; }, 0); }
+  function actualizar() {
+    var n = total(); contador.textContent = n + (n === 1 ? ' recuadro' : ' recuadros');
+    deshacer.disabled = !historia.length; enviar.disabled = !confirma.checked || !paginas.length;
+  }
+  function pintarPagina(p, previa) {
+    var cx = p.vista.getContext('2d'); cx.drawImage(p.base, 0, 0); cx.fillStyle = '#000';
+    p.recuadros.forEach(function (r) { cx.fillRect(r[0], r[1], r[2], r[3]); });
+    if (previa) { cx.fillStyle = 'rgba(0,0,0,.65)'; cx.fillRect(previa[0], previa[1], previa[2], previa[3]);
+      cx.strokeStyle = '#e11d48'; cx.lineWidth = Math.max(2, p.vista.width / 400); cx.strokeRect(previa[0], previa[1], previa[2], previa[3]); }
+  }
+  function prepararDibujo(p, i) {
+    var inicio = null;
+    function punto(e) { var r = p.vista.getBoundingClientRect(); return [(e.clientX - r.left) * p.vista.width / r.width, (e.clientY - r.top) * p.vista.height / r.height]; }
+    function caja(a, b) { return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1])]; }
+    p.vista.addEventListener('pointerdown', function (e) { e.preventDefault(); inicio = punto(e); p.vista.setPointerCapture(e.pointerId); });
+    p.vista.addEventListener('pointermove', function (e) { if (inicio) pintarPagina(p, caja(inicio, punto(e))); });
+    p.vista.addEventListener('pointerup', function (e) {
+      if (!inicio) return; var c = caja(inicio, punto(e)); inicio = null;
+      var m = Math.max(2, p.vista.width / 600);                       // un poco de margen alrededor
+      if (c[2] > 6 && c[3] > 6) { p.recuadros.push([c[0] - m, c[1] - m, c[2] + 2 * m, c[3] + 2 * m]); historia.push(i); }
+      pintarPagina(p); actualizar();
+    });
+    p.vista.addEventListener('pointercancel', function () { inicio = null; pintarPagina(p); });
+  }
+  async function enviarTachado() {
+    var n = total();
+    if (!n && !confirm('No has tapado nada. ¿Seguro que este documento no tiene ningún dato personal?')) return;
+    enviar.disabled = true; deshacer.disabled = true; mensaje.className = 'mensaje-ficha'; mensaje.textContent = 'Preparando la copia tachada…';
+    try {
+      var salida = [];
+      for (var p of paginas) {
+        var c = lienzo(p.base.width, p.base.height), cx = c.getContext('2d');
+        cx.drawImage(p.base, 0, 0); cx.fillStyle = '#000'; p.recuadros.forEach(function (r) { cx.fillRect(r[0], r[1], r[2], r[3]); });   // el negro queda pintado en la imagen
+        var blob = await new Promise(function (ok) { c.toBlob(ok, 'image/jpeg', 0.88); });
+        salida.push({ ancho: c.width, alto: c.height, jpeg: new Uint8Array(await blob.arrayBuffer()) });
+      }
+      var pdf = pdfDeJpegs(salida);
+      if (pdf.size > 15 * 1024 * 1024) throw new Error('La copia tachada pesa más de 15 MB.');
+      var fichero = new File([pdf], 'tachado_' + revId + '.pdf', { type: 'application/pdf' });
+      var huella = await huellaArchivo(fichero);
+      mensaje.textContent = 'Registrando la copia…';
+      await rpc('panel_registrar_tachado_manual', { p_rev: revId, p_huella: huella, p_paginas: salida.length, p_recuadros: n });
+      fichaSucia = null; cerrarModal(); avisoBreve('Copia tachada de ' + revId + ' enviada: el servicio la leerá en un minuto');
+      verSubidas([fichero]);
+    } catch (e) { mensaje.className = 'mensaje-ficha fallo'; mensaje.textContent = 'No se ha enviado: ' + mensajeError(e); enviar.disabled = !confirma.checked; deshacer.disabled = !historia.length; }
+  }
+  var cuerpo = h('div', { class: 'contenido-tachado' }, [
+    h('p', { class: 'ayuda-campo' }, 'Arrastra con el ratón o el dedo para tapar en negro los datos personales: DNI o NIE, nombres de conductores, ' +
+      'números de cuenta (IBAN), correos y teléfonos de personas. Lo que tapes no lo verá la IA. Los datos de las empresas (nombre, CIF, importes) déjalos a la vista.'),
+    h('div', { class: 'tachado-herramientas' }, [deshacer, contador]), zona,
+    h('div', { class: 'pie-revision' }, [h('label', { class: 'casilla tachado-confirma', for: 'tachadoConfirma' }, [confirma,
+      ' He revisado todas las páginas y he tapado todos los datos personales']), mensaje, h('div', { class: 'acciones-revision' }, [enviar])])]);
+  abrirModal('Tachar y enviar a la IA · ' + revId, cuerpo);
+  document.getElementById('caja').classList.add('revision-amplia');
+  fichaSucia = function () { return total() > 0; };
+  var numero = secuenciaFicha;
+  urlFirmada(archivo.ruta).then(function (url) { return paginasComoImagen(url, archivo.nombre); }).then(function (lienzos) {
+    if (numero !== secuenciaFicha) return;
+    zona.textContent = '';
+    lienzos.forEach(function (base, i) {
+      var vista = lienzo(base.width, base.height); vista.className = 'tachado-lienzo';
+      vista.setAttribute('aria-label', 'Página ' + (i + 1) + ': arrastra para tapar');
+      var p = { base: base, vista: vista, recuadros: [] }; paginas.push(p);
+      pintarPagina(p); prepararDibujo(p, i);
+      zona.appendChild(h('figure', { class: 'tachado-pagina' }, [vista, h('figcaption', {}, 'Página ' + (i + 1) + ' de ' + lienzos.length)]));
+    });
+    actualizar();
+  }).catch(function (e) { if (numero === secuenciaFicha) { estado.textContent = 'No se puede abrir para tachar: ' + mensajeError(e); } });
+}
+
 // Dónde guarda el servicio los archivos: originales/AAAA-MM/<id>_<nombre> · tachados/<huella>_tachado.pdf
 function localizarArchivos(empresa, hoja, id) {
   var q = hoja === 'revision' ? sb.from('revision').select('archivo_original,hash_sha256,fecha_alta').eq('id_doc', id)

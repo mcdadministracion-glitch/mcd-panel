@@ -285,6 +285,14 @@
   .lista-historial .cuando { color:var(--suave); font-variant-numeric:tabular-nums; }
   .vacio-historial { color:var(--suave); font-style:italic; }
   .cambio-historial { overflow-wrap:anywhere; }
+  /* Tachar a mano */
+  .contenido-tachado { padding:0 4px; }
+  .tachado-herramientas { display:flex; gap:12px; align-items:center; margin:8px 0; position:sticky; top:0; background:var(--fondo-tarjeta, #fff); z-index:2; padding:6px 0; }
+  .tachado-paginas { display:flex; flex-direction:column; gap:16px; max-height:62vh; overflow:auto; background:#e9edf3; padding:12px; border-radius:10px; }
+  .tachado-pagina { margin:0; } .tachado-pagina figcaption { text-align:center; font-size:13px; color:var(--suave); margin-top:4px; }
+  .tachado-lienzo { width:100%; height:auto; display:block; background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.2); cursor:crosshair; touch-action:none; }
+  .tachado-confirma { font-weight:600; }
+  .aviso-tachado { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px; }
   /* Tickets: pestañas por tipo y meses */
   .pestanas-tickets { display:flex; gap:8px; flex-wrap:wrap; }
   .pestana-ticket { flex:1 1 140px; display:flex; flex-direction:column; align-items:flex-start; gap:2px; padding:10px 14px; border-radius:12px;
@@ -322,6 +330,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=tickets-meses-20261112"></script>
+<script src="app.js?v=tachado-20261112"></script>
 </body>
 </html>
