@@ -383,7 +383,10 @@ function pantallaAcceso(modo, aviso) {
       if (modo === 'olvido') { pantallaAcceso('entrar', { tipo: 'ok', texto: 'Si el correo existe, recibirás un enlace para cambiar la contraseña.' }); return; }
       if (modo === 'nueva') { history.replaceState(null, '', location.pathname); arrancar(); return; }
       arrancar();
-    }).catch(function (err) { boton.disabled = false; mensaje.className = 'mensaje error'; mensaje.textContent = mensajeError(err); });
+    }).catch(function (err) {
+      boton.disabled = false; mensaje.className = 'mensaje error'; mensaje.textContent = mensajeError(err);
+      if (modo === 'entrar' && /Invalid login credentials/i.test(String(err && err.message || ''))) sb.rpc('panel_registrar_fallo', { p_email: correo }).then(null, function () {});
+    });
   } }, [
     h('label', {}, ['Correo electrónico', email]),
     modo === 'olvido' ? null : h('label', {}, [modo === 'nueva' ? 'Contraseña nueva' : 'Contraseña', clave]),
@@ -1154,13 +1157,18 @@ function vUsuarios(v, usuarios) {
         rpc('panel_guardar_usuario', { p_email: email.value.trim(), p_nombre: nombre.value.trim(), p_rol: rol.value, p_activo: activo.checked })
           .then(function () { cargar(true); }).catch(function (e) { msg.className = 'mensaje error'; msg.textContent = mensajeError(e); });
       } }, 'Guardar e invitar'), reenviar])]), msg]));
+  v.appendChild(h('p', { class: 'sub' }, ['Para ver cuándo ha entrado cada persona y los intentos con contraseña equivocada, abre ',
+    h('button', { type: 'button', class: 'boton enlace', onclick: function () {
+      clearTimeout(temporizadorBusqueda); S.vista = 'historial'; S.buscar = ''; S.tipoHis = 'accesos'; S.periodoHis = 'mes'; S.usuarioHis = ''; S.empresaHis = ''; S.pagina = 1;
+      pintarMenu(); cargar(true); window.scrollTo(0, 0);
+    } }, 'Historial → Entradas al panel'), '.']));
   function estadoInvitacion(u) {
     if (!u.activo) return 'Desactivado';
     if (u.invitacion_error) return 'Error al invitar';
     return u.invitado_en ? 'Enviada ' + fecha(String(u.invitado_en).slice(0, 10)) : 'Pendiente de enviar';
   }
-  tabla(v, ['Correo', 'Nombre', 'Rol', 'Activo', 'Invitación'], usuarios.map(function (u) {
-    return { celdas: [u.email, u.nombre, u.rol, u.activo ? 'Sí' : 'No', estadoInvitacion(u)], abrir: function () { email.value = u.email; nombre.value = u.nombre || ''; rol.value = u.rol; activo.checked = !!u.activo; email.focus(); } };
+  tabla(v, ['Correo', 'Nombre', 'Rol', 'Activo', 'Invitación', 'Último acceso'], usuarios.map(function (u) {
+    return { celdas: [u.email, u.nombre, u.rol, u.activo ? 'Sí' : 'No', estadoInvitacion(u), u.ultimo_acceso ? fechaHora(u.ultimo_acceso) : 'Nunca'], abrir: function () { email.value = u.email; nombre.value = u.nombre || ''; rol.value = u.rol; activo.checked = !!u.activo; email.focus(); } };
   }));
 }
 // ---------------------------------------------------------------------
@@ -1173,10 +1181,12 @@ var ACCIONES = {
   'Guardar ficha': 'Cambió un dato', 'Descartar documento': 'Descartó un documento', 'Guardar ticket': 'Cambió un ticket',
   'Ticket revisado': 'Revisó un ticket', 'Descartar ticket': 'Descartó un ticket', 'Gestionar usuario': 'Cambió un usuario',
   'Reenviar invitacion': 'Reenvió una invitación', 'Regla periodica': 'Cambió una regla periódica', 'Procesar ahora': 'Pidió procesar ahora',
-  'Ver documento': 'Abrió un documento', 'Descargar documento': 'Descargó documentos'
+  'Ver documento': 'Abrió un documento', 'Descargar documento': 'Descargó documentos',
+  'Entrada': 'Entró en el panel', 'Entrada fallida': 'Contraseña equivocada', 'Entrada sin permiso': 'Intentó entrar sin permiso'
 };
+var ACCESOS_HISTORIAL = ['Entrada', 'Entrada fallida', 'Entrada sin permiso'];
 var CONSULTAS_HISTORIAL = ['Ver documento', 'Descargar documento'];
-var TIPOS_HISTORIAL = [['cambios', 'Solo cambios'], ['consultas', 'Solo aperturas y descargas'], ['', 'Todo']];
+var TIPOS_HISTORIAL = [['cambios', 'Solo cambios'], ['accesos', 'Entradas al panel'], ['consultas', 'Aperturas y descargas'], ['', 'Todo']];
 var TAMANO_HISTORIAL = 100;
 function nombreAccion(a) { return ACCIONES[a] || a || '—'; }
 function inicioDiaLocal(iso) { return new Date(iso + 'T00:00:00').toISOString(); }   // medianoche de España, no de Londres
@@ -1184,8 +1194,9 @@ function consultaHistorial(f) {
   var q = sb.from('auditoria').select('*', { count: 'exact' });
   var rango = rangoPeriodo(f.periodo);
   if (rango) q = q.gte('fecha', inicioDiaLocal(rango[0])).lt('fecha', inicioDiaLocal(rango[1]));
-  if (f.tipo === 'cambios') q = q.not('accion', 'in', '("' + CONSULTAS_HISTORIAL.join('","') + '")');
+  if (f.tipo === 'cambios') q = q.not('accion', 'in', '("' + CONSULTAS_HISTORIAL.concat(ACCESOS_HISTORIAL).join('","') + '")');
   else if (f.tipo === 'consultas') q = q.in('accion', CONSULTAS_HISTORIAL);
+  else if (f.tipo === 'accesos') q = q.in('accion', ACCESOS_HISTORIAL);
   if (f.usuario) q = q.eq('usuario', f.usuario);
   if (f.empresa) q = q.eq('empresa', f.empresa);
   var b = limpiarBusqueda(f.buscar || '');
@@ -1208,6 +1219,7 @@ function valorHistorial(v) {
 function etiquetaCampo(x) {
   if (x.accion === 'Gestionar usuario' || x.accion === 'Reenviar invitacion') return 'Usuario ' + texto(x.campo);
   if (x.accion === 'Regla periodica') return 'NIF ' + texto(x.campo);
+  if (ACCESOS_HISTORIAL.indexOf(x.accion) >= 0) return texto(x.campo) || '—';
   if (CONSULTAS_HISTORIAL.indexOf(x.accion) >= 0) return x.campo === 'tachado' ? 'Copia tachada' : x.campo === 'zip' ? 'ZIP de originales' : x.campo === 'original' ? 'Original' : texto(x.campo);
   return ETIQUETAS[x.campo] || texto(x.campo) || '—';
 }
@@ -1294,8 +1306,11 @@ function vHistorial(v, d) {
     var correo = texto(x.usuario), nombre = nombres[correo.toLowerCase()];
     return {
       abrir: sePuedeAbrir(x) ? function () { abrirDesdeHistorial(x); } : null,
-      celdas: [fechaHora(x.fecha), h('span', { title: correo }, nombre || correo || '—'), h('span', { class: 'pill ' + (CONSULTAS_HISTORIAL.indexOf(x.accion) >= 0 ? '' : /Descart/.test(x.accion || '') ? 'error' : 'marca') }, nombreAccion(x.accion)),
-        textoDocumento(x), etiquetaCampo(x), CONSULTAS_HISTORIAL.indexOf(x.accion) >= 0 ? h('span', { class: 'vacio-historial' }, 'Solo consulta') :
+      celdas: [fechaHora(x.fecha), h('span', { title: correo }, nombre || correo || '—'),
+        h('span', { class: 'pill ' + (/Descart|fallida|sin permiso/.test(x.accion || '') ? 'error' : x.accion === 'Entrada' ? 'ok' : CONSULTAS_HISTORIAL.indexOf(x.accion) >= 0 ? '' : 'marca') }, nombreAccion(x.accion)),
+        textoDocumento(x), etiquetaCampo(x),
+        ACCESOS_HISTORIAL.indexOf(x.accion) >= 0 ? h('span', { class: 'vacio-historial' }, texto(x.despues) || 'Aparato desconocido') :
+        CONSULTAS_HISTORIAL.indexOf(x.accion) >= 0 ? h('span', { class: 'vacio-historial' }, 'Solo consulta') :
           h('span', { class: 'cambio-historial' }, [valorHistorial(x.antes), ' → ', valorHistorial(x.despues)])]
     };
   }), 'documento');
@@ -1595,6 +1610,7 @@ function arrancar() {
   sb.auth.getSession().then(function (r) {
     if (!r.data || !r.data.session) { pantallaAcceso('entrar'); return; }
     document.getElementById('vista').textContent = ''; document.getElementById('vista').appendChild(h('div', { class: 'cargando' }, 'Cargando…'));
+    rpc('panel_registrar_entrada').catch(function () {});   // queda en el Historial (una vez por sesión y día); si falla, el panel sigue
     cargar(true);
   });
 }
