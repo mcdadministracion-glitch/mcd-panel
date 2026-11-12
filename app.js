@@ -42,6 +42,13 @@ function hora(iso) { var d = new Date(iso); return isNaN(d) ? '' : d.toLocaleTim
 function tamano(b) { b = Number(b) || 0; return b > 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1e3)) + ' KB'; }
 function mesActual() { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
 function texto(v) { return v === undefined || v === null ? '' : String(v); }
+var DIAS_AVISO_ALBARAN = 45;   // lo confirma el servidor (panel_inicio.diasAvisoAlbaran)
+function diasDesde(f) { var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(f || '')); if (!m) return null; return Math.floor((new Date() - new Date(+m[1], +m[2] - 1, +m[3])) / 864e5); }
+function pillEsperaFactura(a) {
+  var dias = diasDesde(a.fecha); if (dias === null) dias = a.dias_sin_factura;
+  if (dias !== null && dias !== undefined && dias > DIAS_AVISO_ALBARAN) return h('span', { class: 'pill error', title: 'Lo normal es menos de ' + DIAS_AVISO_ALBARAN + ' días' }, 'Sin factura · ' + dias + ' días');
+  return h('span', { class: 'pill', title: 'Es normal: la factura suele llegar después del albarán' }, 'Esperando factura' + (dias !== null && dias !== undefined ? ' · ' + dias + ' días' : ''));
+}
 function pillEstado(t) {
   t = texto(t);
   var c = /PENDIENTE|Sin factura|Faltan|≠|ERROR/.test(t) ? 'error' : /Revisar|revisar|Duplicado|revisión|Revisión/.test(t) ? 'aviso' : /Procesado|Facturado|recibidos/.test(t) ? 'ok' : '';
@@ -432,7 +439,7 @@ function cargar(mostrarCargando, conservarBarra) {
     var tablaAnterior = !mostrarCargando && vista.querySelector('.tabla');
     var desplazamiento = tablaAnterior && [tablaAnterior.scrollLeft, tablaAnterior.scrollTop];
     S.datos = d;
-    if (solicitud.vista === 'inicio') { pintarCabecera(d); S.pendientes = contarPendientes(d); pintarMenu(); }
+    if (solicitud.vista === 'inicio') { if (d.diasAvisoAlbaran) DIAS_AVISO_ALBARAN = d.diasAvisoAlbaran; pintarCabecera(d); S.pendientes = contarPendientes(d); pintarMenu(); }
     if (solicitud.vista === 'revision') { S.pendientes = contarDocumentosRevision(d); pintarMenu(); }
     pintar();
     var tablaActual = desplazamiento && vista.querySelector('.tabla');
@@ -483,7 +490,7 @@ function pintar() {
     tickets: 'Gastos generales (gasolina, comidas, aparcamientos…). No son de ninguna empresa. Sube la foto y se lee sola.',
     documentos: 'Los originales y las copias tachadas que se enviaron a la IA.', negocio: 'Pagos y cobros vencidos, coste por camión y movimientos del mes.',
     usuarios: 'Quién puede entrar al panel. El acceso es solo por invitación.',
-    historial: 'Quién ha cambiado qué y cuándo: lo que hacen las personas en el panel y lo que hace el programa solo. Nadie puede borrarlo ni modificarlo.' };
+    historial: 'Quién ha cambiado qué y cuándo: lo que hacen las personas en el panel y lo que hace el programa solo. Nadie puede borrarlo ni modificarlo; se guarda 2 años (protección de datos).' };
   vista.appendChild(h('div', { class: 'cab-vista' }, [h('div', {}, [h('h1', {}, titulos[S.vista]), h('p', { class: 'sub' }, ayudas[S.vista])])]));
   ({ inicio: vInicio, facturas: vFacturas, albaranes: vAlbaranes, revision: vRevision, combustible: vCombustible, tickets: vTickets, documentos: vDocumentos, usuarios: vUsuarios, negocio: vNegocio, historial: vHistorial })[S.vista](vista, S.datos);
   if (busqueda && document.getElementById('busquedaTabla')) { var n = document.getElementById('busquedaTabla'); n.focus(); n.setSelectionRange(cursor, cursor); }
@@ -504,7 +511,7 @@ function vInicio(v, d) {
   v.appendChild(h('div', { class: 'metricas' }, [
     tarjeta('revision', 'Pendientes de revisar', pendientes, pendientes ? 'Pulsa para verlos' : 'Todo al día', pendientes ? 'naranja' : 'verde'),
     tarjeta('facturas', 'Facturas', sumar('facturas'), sumar('emitidas') + ' emitidas · ' + sumar('recibidas') + ' recibidas', 'azul'),
-    tarjeta('albaranes', 'Albaranes', sumar('albaranes'), sumar('pendientes') + ' sin factura', 'cian')]));
+    tarjeta('albaranes', 'Albaranes', sumar('albaranes'), sumar('pendientes') + ' esperando factura' + (sumar('tardanFactura') ? ' · ' + sumar('tardanFactura') + ' con retraso' : ''), 'cian')]));
 
   var columnas = h('div', { class: 'inicio-columnas' });
   var izquierda = h('div', { class: 'columna' }), derecha = h('div', { class: 'columna' });
@@ -755,13 +762,13 @@ function vFacturas(v, d) {
   paginacion(c, d);
 }
 function vAlbaranes(v, d) {
-  barraFiltros(v, d, [['Activos', 'Todos los válidos'], ['PENDIENTE DE FACTURA', 'Sin factura'], ['Facturado', 'Facturados'], ['Descartado', 'Descartados'], ['Duplicado', 'Duplicados'], ['', 'Todo el historial']]);
+  barraFiltros(v, d, [['Activos', 'Todos los válidos'], ['PENDIENTE DE FACTURA', 'Esperando factura'], ['Facturado', 'Facturados'], ['Descartado', 'Descartados'], ['Duplicado', 'Duplicados'], ['', 'Todo el historial']]);
   document.getElementById('contador').textContent = contadorTabla(d, 'albaranes');
   var c = document.getElementById('cuerpo');
   tabla(c, ['Nº albarán', 'Fecha', { t: 'Cliente / proveedor', largo: 1 }, 'Empresa', 'Ruta', { t: 'Importe', num: 1 }, 'Factura'], d.filas.map(function (f) {
     return { abrir: function () { ficha('Albarán', f, { empresa: f.empresa, hoja: 'albaranes' }); },
       celdas: [f.num_albaran || f.id_doc, fecha(f.fecha), f.nombre, f.empresa, [f.origen, f.destino].filter(Boolean).join(' → '), { t: euros(f.importe), num: 1 },
-        f.factura_vinculada ? h('span', { class: 'pill ok' }, f.factura_vinculada) : pillEstado(f.estado_factura === 'PENDIENTE DE FACTURA' ? 'Sin factura' + (f.dias_sin_factura ? ' · ' + f.dias_sin_factura + ' días' : '') : f.estado_factura)] };
+        f.factura_vinculada ? h('span', { class: 'pill ok' }, f.factura_vinculada) : f.estado_factura === 'PENDIENTE DE FACTURA' ? pillEsperaFactura(f) : pillEstado(f.estado_factura)] };
   }), 'Albarán');
   paginacion(c, d);
 }
@@ -1046,11 +1053,14 @@ function fichaTicket(t) {
 // ---------------------------------------------------------------------
 function vRevision(v, lista) {
   var tipos = ['', 'Factura a revisar', 'Albarán a revisar', 'Albarán sin factura', 'Revisión manual'];
+  if (S.filtro && !lista.some(function (x) { return x.tipo === S.filtro; })) S.filtro = '';   // se vació ese grupo: volver a "Todo"
   v.appendChild(h('div', { class: 'barra' }, h('div', { class: 'chips' }, tipos.map(function (t) {
     var n = lista.filter(function (x) { return !t || x.tipo === t; }).length;
     return t && !n ? null : h('button', { class: S.filtro === t ? 'activo' : '', onclick: function () { S.filtro = t; pintar(); } }, (t || 'Todo') + ' (' + n + ')');
   }))));
   var filas = lista.filter(function (x) { return !S.filtro || x.tipo === S.filtro; });
+  v.appendChild(h('p', { class: 'sub' }, 'Un albarán solo aparece aquí si lleva más de ' + DIAS_AVISO_ALBARAN + ' días sin su factura: es normal que el albarán llegue antes. ' +
+    'Para quitar un documento de esta lista pulsa "Guardar y marcar revisado" o "Descartar".'));
   if (!filas.length) { v.appendChild(h('div', { class: 'tarjeta vacio' }, 'No hay nada pendiente de revisar.')); return; }
   tabla(v, ['Documento', 'Qué pasa', 'Empresa', 'Fecha', 'Cliente / proveedor', { t: 'Importe', num: 1 }, { t: 'Motivo', largo: 1 }], filas.map(function (x) {
     return { abrir: function () { abrirFichaPorId(x.hoja === 'facturas' ? 'Factura' : x.hoja === 'albaranes' ? 'Albarán' : 'Revisión manual', x.empresa, x.hoja, x.id); },
@@ -1207,10 +1217,10 @@ var ACCIONES = {
   'Reenviar invitacion': 'Reenvió una invitación', 'Regla periodica': 'Cambió una regla periódica', 'Procesar ahora': 'Pidió procesar ahora',
   'Ver documento': 'Abrió un documento', 'Descargar documento': 'Descargó documentos',
   'Entrada': 'Entró en el panel', 'Entrada fallida': 'Contraseña equivocada', 'Entrada sin permiso': 'Intentó entrar sin permiso',
-  'Alta automática': 'Añadido', 'Cambio automático': 'Cambiado', 'Borrado automático': 'Borrado'
+  'Revisar albarán sin factura': 'Revisó un albarán sin factura', 'Alta automática': 'Añadido', 'Cambio automático': 'Cambiado', 'Borrado automático': 'Borrado', 'Limpieza del historial': 'Limpieza (más de 2 años)'
 };
 var ACCESOS_HISTORIAL = ['Entrada', 'Entrada fallida', 'Entrada sin permiso'];
-var PROGRAMA_HISTORIAL = ['Alta automática', 'Cambio automático', 'Borrado automático'];
+var PROGRAMA_HISTORIAL = ['Alta automática', 'Cambio automático', 'Borrado automático', 'Limpieza del historial'];
 // Quién lo hizo cuando no fue una persona desde el panel
 var AUTORES_ESPECIALES = { 'Sistema': 'El programa', 'Supabase (a mano)': 'Supabase (a mano)' };
 var CONSULTAS_HISTORIAL = ['Ver documento', 'Descargar documento'];
@@ -1532,6 +1542,11 @@ function ficha(titulo, fila, contexto) {
     mensaje.className = 'mensaje-ficha'; mensaje.textContent = 'Guardando cambios…'; ocupado(true);
     rpc('panel_guardar_ficha', { p_empresa: empresa, p_hoja: hoja, p_id: id, p_cambios: cambios, p_esperados: esperados, p_revisar: revisar }).then(function (r) {
       if (!r || r.ok !== true || !r.fila || String(r.fila.id_doc) !== String(id)) throw new Error('No se ha podido confirmar el guardado. Tus cambios siguen en pantalla; vuelve a intentarlo.');
+      // Un albarán que espera su factura: al revisarlo deja de avisar otros DIAS_AVISO_ALBARAN días
+      if (revisar && hoja === 'albaranes' && r.fila.estado_factura === 'PENDIENTE DE FACTURA')
+        return rpc('panel_posponer_aviso_albaran', { p_empresa: empresa, p_id: id }).then(function () { return r; });
+      return r;
+    }).then(function (r) {
       base = Object.assign({}, r.fila);
       Object.keys(entradas).forEach(function (c) { entradas[c].value = c === 'estado_cobro_pago' && !base[c] ? 'Pendiente' : valorEntrada(c); });
       estado.textContent = base.estado || 'Sin estado'; estado.className = 'pill ' + (base.estado === 'Procesado' ? 'ok' : 'aviso');
@@ -1550,7 +1565,7 @@ function ficha(titulo, fila, contexto) {
     descartar = h('button', { type: 'button', class: 'boton peligro', onclick: function () {
       if (guardandoFicha || !confirm('¿Quieres descartar este documento? Los cambios sin guardar no se aplicarán.')) return;
       ocupado(true); mensaje.textContent = 'Descartando documento…';
-      rpc('panel_descartar', { p_empresa: empresa, p_hoja: hoja, p_id: id }).then(function () { pendientes = 0; fichaSucia = null; guardandoFicha = false; cerrarModal(); cargar(true); })
+      rpc('panel_descartar', { p_empresa: empresa, p_hoja: hoja, p_id: id }).then(function () { pendientes = 0; fichaSucia = null; guardandoFicha = false; cerrarModal(); avisoBreve(titulo + ' ' + id + ' descartado'); cargar(true); })
         .catch(function (e) { mensaje.textContent = mensajeError(e); mensaje.className = 'mensaje-ficha fallo'; ocupado(false); });
     } }, 'Descartar');
     pie.appendChild(h('div', { class: 'acciones-revision' }, [descartar, guardar, marcar]));
