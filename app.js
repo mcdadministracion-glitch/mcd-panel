@@ -483,7 +483,7 @@ function pintar() {
     tickets: 'Gastos generales (gasolina, comidas, aparcamientos…). No son de ninguna empresa. Sube la foto y se lee sola.',
     documentos: 'Los originales y las copias tachadas que se enviaron a la IA.', negocio: 'Pagos y cobros vencidos, coste por camión y movimientos del mes.',
     usuarios: 'Quién puede entrar al panel. El acceso es solo por invitación.',
-    historial: 'Quién ha cambiado qué y cuándo. Cada cambio hecho en el panel queda apuntado aquí y no se puede borrar desde la web.' };
+    historial: 'Quién ha cambiado qué y cuándo: lo que hacen las personas en el panel y lo que hace el programa solo. Nadie puede borrarlo ni modificarlo.' };
   vista.appendChild(h('div', { class: 'cab-vista' }, [h('div', {}, [h('h1', {}, titulos[S.vista]), h('p', { class: 'sub' }, ayudas[S.vista])])]));
   ({ inicio: vInicio, facturas: vFacturas, albaranes: vAlbaranes, revision: vRevision, combustible: vCombustible, tickets: vTickets, documentos: vDocumentos, usuarios: vUsuarios, negocio: vNegocio, historial: vHistorial })[S.vista](vista, S.datos);
   if (busqueda && document.getElementById('busquedaTabla')) { var n = document.getElementById('busquedaTabla'); n.focus(); n.setSelectionRange(cursor, cursor); }
@@ -1182,11 +1182,15 @@ var ACCIONES = {
   'Ticket revisado': 'Revisó un ticket', 'Descartar ticket': 'Descartó un ticket', 'Gestionar usuario': 'Cambió un usuario',
   'Reenviar invitacion': 'Reenvió una invitación', 'Regla periodica': 'Cambió una regla periódica', 'Procesar ahora': 'Pidió procesar ahora',
   'Ver documento': 'Abrió un documento', 'Descargar documento': 'Descargó documentos',
-  'Entrada': 'Entró en el panel', 'Entrada fallida': 'Contraseña equivocada', 'Entrada sin permiso': 'Intentó entrar sin permiso'
+  'Entrada': 'Entró en el panel', 'Entrada fallida': 'Contraseña equivocada', 'Entrada sin permiso': 'Intentó entrar sin permiso',
+  'Alta automática': 'Añadido', 'Cambio automático': 'Cambiado', 'Borrado automático': 'Borrado'
 };
 var ACCESOS_HISTORIAL = ['Entrada', 'Entrada fallida', 'Entrada sin permiso'];
+var PROGRAMA_HISTORIAL = ['Alta automática', 'Cambio automático', 'Borrado automático'];
+// Quién lo hizo cuando no fue una persona desde el panel
+var AUTORES_ESPECIALES = { 'Sistema': 'El programa', 'Supabase (a mano)': 'Supabase (a mano)' };
 var CONSULTAS_HISTORIAL = ['Ver documento', 'Descargar documento'];
-var TIPOS_HISTORIAL = [['cambios', 'Solo cambios'], ['accesos', 'Entradas al panel'], ['consultas', 'Aperturas y descargas'], ['', 'Todo']];
+var TIPOS_HISTORIAL = [['cambios', 'Cambios de personas'], ['programa', 'Lo que hace el programa'], ['accesos', 'Entradas al panel'], ['consultas', 'Aperturas y descargas'], ['', 'Todo']];
 var TAMANO_HISTORIAL = 100;
 function nombreAccion(a) { return ACCIONES[a] || a || '—'; }
 function inicioDiaLocal(iso) { return new Date(iso + 'T00:00:00').toISOString(); }   // medianoche de España, no de Londres
@@ -1194,7 +1198,8 @@ function consultaHistorial(f) {
   var q = sb.from('auditoria').select('*', { count: 'exact' });
   var rango = rangoPeriodo(f.periodo);
   if (rango) q = q.gte('fecha', inicioDiaLocal(rango[0])).lt('fecha', inicioDiaLocal(rango[1]));
-  if (f.tipo === 'cambios') q = q.not('accion', 'in', '("' + CONSULTAS_HISTORIAL.concat(ACCESOS_HISTORIAL).join('","') + '")');
+  if (f.tipo === 'cambios') q = q.not('accion', 'in', '("' + CONSULTAS_HISTORIAL.concat(ACCESOS_HISTORIAL, PROGRAMA_HISTORIAL).join('","') + '")');
+  else if (f.tipo === 'programa') q = q.in('accion', PROGRAMA_HISTORIAL);
   else if (f.tipo === 'consultas') q = q.in('accion', CONSULTAS_HISTORIAL);
   else if (f.tipo === 'accesos') q = q.in('accion', ACCESOS_HISTORIAL);
   if (f.usuario) q = q.eq('usuario', f.usuario);
@@ -1209,7 +1214,18 @@ function cargarHistorial(s) {
   return Promise.all([consulta(consultaHistorial(f).range(desde, desde + TAMANO_HISTORIAL - 1)), consulta(sb.from('usuarios').select('email,nombre').order('email'))])
     .then(function (r) { return { filtros: f, pagina: s.pagina, tamano: TAMANO_HISTORIAL, total: r[0].count || 0, filas: r[0].data || [], usuarios: r[1].data || [] }; });
 }
-function nombresUsuarios(lista) { var m = {}; (lista || []).forEach(function (u) { m[String(u.email || '').toLowerCase()] = u.nombre || ''; }); return m; }
+function nombresUsuarios(lista) {
+  var m = {}; Object.keys(AUTORES_ESPECIALES).forEach(function (k) { m[k.toLowerCase()] = AUTORES_ESPECIALES[k]; });
+  (lista || []).forEach(function (u) { m[String(u.email || '').toLowerCase()] = u.nombre || ''; }); return m;
+}
+// Columna "Cambio": antes → después; en altas solo lo nuevo y en borrados solo lo que había
+function celdaCambio(x) {
+  if (ACCESOS_HISTORIAL.indexOf(x.accion) >= 0) return h('span', { class: 'vacio-historial' }, texto(x.despues) || 'Aparato desconocido');
+  if (CONSULTAS_HISTORIAL.indexOf(x.accion) >= 0) return h('span', { class: 'vacio-historial' }, 'Solo consulta');
+  if (x.accion === 'Alta automática') return h('span', { class: 'cambio-historial' }, valorHistorial(x.despues));
+  if (x.accion === 'Borrado automático') return h('span', { class: 'cambio-historial' }, ['Tenía: ', valorHistorial(x.antes)]);
+  return h('span', { class: 'cambio-historial' }, [valorHistorial(x.antes), ' → ', valorHistorial(x.despues)]);
+}
 function fechaHora(iso) { var d = new Date(iso); return isNaN(d) ? texto(iso) : d.toLocaleDateString('es-ES') + ' ' + d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }); }
 function valorHistorial(v) {
   var t = texto(v).replace(/\| true$/, '| puede entrar').replace(/\| false$/, '| sin acceso');   // usuarios: activo sí/no
@@ -1249,8 +1265,9 @@ function vHistorial(v, d) {
     s.value = valor; s.addEventListener('change', function () { clearTimeout(temporizadorBusqueda); cambiar(s.value); S.pagina = 1; cargar(true, true); });
     return h('label', { class: 'campo-corto' }, [etiqueta, s]);
   }
-  var personas = [['', 'Todas']].concat(d.usuarios.map(function (u) { return [u.email, (u.nombre ? u.nombre + ' · ' : '') + u.email]; }));
-  if (S.usuarioHis && !d.usuarios.some(function (u) { return u.email === S.usuarioHis; })) personas.push([S.usuarioHis, S.usuarioHis]);
+  var personas = [['', 'Todas'], ['Sistema', 'El programa (servicio del ordenador)'], ['Supabase (a mano)', 'Supabase (a mano)']]
+    .concat(d.usuarios.map(function (u) { return [u.email, (u.nombre ? u.nombre + ' · ' : '') + u.email]; }));
+  if (S.usuarioHis && !personas.some(function (o) { return o[0] === S.usuarioHis; })) personas.push([S.usuarioHis, S.usuarioHis]);
   var buscar = h('input', { id: 'busquedaTabla', type: 'search', maxlength: '100', 'aria-label': 'Buscar en el historial', placeholder: 'Buscar ID de documento, dato o valor…' });
   buscar.value = S.buscar;
   buscar.addEventListener('input', function () { S.buscar = buscar.value; S.pagina = 1; ++secuenciaCarga; clearTimeout(temporizadorBusqueda); temporizadorBusqueda = setTimeout(function () { cargar(true, true); }, 350); });
@@ -1307,11 +1324,8 @@ function vHistorial(v, d) {
     return {
       abrir: sePuedeAbrir(x) ? function () { abrirDesdeHistorial(x); } : null,
       celdas: [fechaHora(x.fecha), h('span', { title: correo }, nombre || correo || '—'),
-        h('span', { class: 'pill ' + (/Descart|fallida|sin permiso/.test(x.accion || '') ? 'error' : x.accion === 'Entrada' ? 'ok' : CONSULTAS_HISTORIAL.indexOf(x.accion) >= 0 ? '' : 'marca') }, nombreAccion(x.accion)),
-        textoDocumento(x), etiquetaCampo(x),
-        ACCESOS_HISTORIAL.indexOf(x.accion) >= 0 ? h('span', { class: 'vacio-historial' }, texto(x.despues) || 'Aparato desconocido') :
-        CONSULTAS_HISTORIAL.indexOf(x.accion) >= 0 ? h('span', { class: 'vacio-historial' }, 'Solo consulta') :
-          h('span', { class: 'cambio-historial' }, [valorHistorial(x.antes), ' → ', valorHistorial(x.despues)])]
+        h('span', { class: 'pill ' + (/Descart|fallida|sin permiso|Borrado/.test(x.accion || '') ? 'error' : x.accion === 'Entrada' ? 'ok' : CONSULTAS_HISTORIAL.indexOf(x.accion) >= 0 || PROGRAMA_HISTORIAL.indexOf(x.accion) >= 0 ? '' : 'marca') }, nombreAccion(x.accion)),
+        textoDocumento(x), etiquetaCampo(x), celdaCambio(x)]
     };
   }), 'documento');
   paginacion(cuerpo, d);
@@ -1333,7 +1347,7 @@ function historialDocumento(empresa, id) {
       lista.appendChild(h('ul', { class: 'lista-historial' }, filas.map(function (x) {
         var quien = nombres[texto(x.usuario).toLowerCase()] || texto(x.usuario) || '—', consultaDoc = CONSULTAS_HISTORIAL.indexOf(x.accion) >= 0;
         return h('li', {}, [h('span', { class: 'cuando' }, fechaHora(x.fecha)), ' · ', h('b', {}, quien), ' · ', nombreAccion(x.accion)].concat(
-          consultaDoc ? [' (' + etiquetaCampo(x) + ')'] : [': ', h('i', {}, etiquetaCampo(x)), ' ', valorHistorial(x.antes), ' → ', valorHistorial(x.despues)]));
+          consultaDoc ? [' (' + etiquetaCampo(x) + ')'] : [': ', h('i', {}, etiquetaCampo(x)), ' ', celdaCambio(x)]));
       })));
       lista.appendChild(h('button', { type: 'button', class: 'boton enlace', onclick: function () {
         cerrarModal(); if (document.getElementById('modal').classList.contains('abierto')) return;
