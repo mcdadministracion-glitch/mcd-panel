@@ -285,6 +285,19 @@
   .lista-historial .cuando { color:var(--suave); font-variant-numeric:tabular-nums; }
   .vacio-historial { color:var(--suave); font-style:italic; }
   .cambio-historial { overflow-wrap:anywhere; }
+  /* Tickets: pestañas por tipo y meses */
+  .pestanas-tickets { display:flex; gap:8px; flex-wrap:wrap; }
+  .pestana-ticket { flex:1 1 140px; display:flex; flex-direction:column; align-items:flex-start; gap:2px; padding:10px 14px; border-radius:12px;
+    border:1px solid var(--borde, #d8dee9); background:var(--fondo-tarjeta, #fff); cursor:pointer; text-align:left; font:inherit; color:inherit; }
+  .pestana-ticket .pestana-nombre { font-weight:700; }
+  .pestana-ticket .pestana-dato { font-size:13px; color:var(--suave); }
+  .pestana-ticket.activo { border-color:var(--marca); box-shadow:0 0 0 2px var(--marca) inset; }
+  .anio-tickets { margin-top:18px; }
+  .cab-anio { margin:0 0 8px; }
+  .mes-tickets { background:var(--fondo-tarjeta, #fff); border:1px solid var(--borde, #e3e8f0); border-radius:12px; margin:0 0 10px; padding:4px 14px 8px; }
+  .mes-tickets > summary { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:10px 0; }
+  .mes-tickets > summary .mes-dato { color:var(--suave); font-weight:400; }
+  .mes-tickets .tabla { margin-top:4px; }
   /* Estado de las copias de seguridad (Inicio, administradores) */
   .linea-copias.aviso, .linea-copias.error { border-radius:10px; padding:10px 14px; font-weight:600; }
   .linea-copias.aviso { background:#fff4e0; color:#8a4b00; }
@@ -309,6 +322,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=gasolina-20261112"></script>
+<script src="app.js?v=tickets-meses-20261112"></script>
 </body>
 </html>

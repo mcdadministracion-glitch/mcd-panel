@@ -73,7 +73,7 @@ function consulta(q) { return q.then(function (r) { if (r.error) throw new Error
 // Estado de la pantalla
 // ---------------------------------------------------------------------
 var EMPRESAS = [];
-var S = { vista: 'inicio', empresa: null, todasEmpresas: true, buscar: '', filtro: 'Activos', periodo: '', periodoComb: 'mes', periodoTck: 'mes', estadoTck: '', catTck: '', pagina: 1, carpeta: '', mes: mesActual(), datos: null, pendientes: 0, rol: null, usuario: null, denegado: false,
+var S = { vista: 'inicio', empresa: null, todasEmpresas: true, buscar: '', filtro: 'Activos', periodo: '', periodoComb: 'mes', periodoTck: '', estadoTck: '', catTck: 'comidas', pagina: 1, carpeta: '', mes: mesActual(), datos: null, pendientes: 0, rol: null, usuario: null, denegado: false,
   periodoHis: 'mes', tipoHis: 'cambios', usuarioHis: '', empresaHis: '' };
 var VISTAS = [['inicio', 'Inicio'], ['facturas', 'Facturas'], ['albaranes', 'Albaranes'], ['revision', 'Pendientes'], ['combustible', 'Combustible'], ['tickets', 'Tickets'], ['documentos', 'Archivos'], ['negocio', 'Vencimientos']];
 var temporizadorBusqueda = null, secuenciaCarga = 0;
@@ -458,7 +458,7 @@ function cargarTabla(s) {
     return { filtros: f, paginada: true, pagina: s.pagina, tamano: 50, total: r.count || 0, filas: r.data || [] };
   });
 }
-function contarPendientes(ini) { return ini.empresas.reduce(function (t, e) { return t + Number(e.documentosConAvisos || 0); }, 0) + Number(ini.enRevisionManual || 0); }
+function contarPendientes(ini) { return ini.empresas.reduce(function (t, e) { return t + Number(e.documentosConAvisos || 0); }, 0) + Number(ini.enRevisionManual || 0) + Number(ini.ticketsRevisar || 0); }
 function contarDocumentosRevision(lista) { var v = new Set(); lista.forEach(function (x) { v.add(x.empresa + '|' + x.hoja + '|' + x.id); }); return v.size; }
 function mostrarError(e) {
   var msg = mensajeError(e);
@@ -941,15 +941,33 @@ function vCombustible(v, d) {
 var CATEGORIAS_TICKET = ['Combustible', 'Comida', 'Aparcamiento', 'Peaje', 'Alojamiento', 'Transporte', 'Otros'];
 function cargarTickets(s) {
   var rango = rangoPeriodo(s.periodoTck);
-  var q = sb.from('tickets').select('*').neq('categoria', 'Combustible')     // los de gasolina están en Combustible
-    .order('fecha', { ascending: false, nullsFirst: true }).order('id_doc', { ascending: false }).limit(3000);
+  var q = sb.from('tickets').select('*').order('fecha', { ascending: false, nullsFirst: true }).order('id_doc', { ascending: false }).limit(5000);
   if (rango) q = q.gte('fecha', rango[0]).lt('fecha', rango[1]);
   if (s.estadoTck === 'Descartado') q = q.eq('estado', 'Descartado'); else q = q.neq('estado', 'Descartado');
   if (s.estadoTck === 'Revisar') q = q.eq('estado', 'Revisar');
   return consulta(q).then(function (r) { return { tickets: r.data || [] }; });
 }
+// Pestañas de Tickets: comidas, peajes, gasolina y el resto juntos
+var GRUPOS_TICKET = [['comidas', 'Comidas', ['Comida']], ['peajes', 'Peajes', ['Peaje']], ['gasolina', 'Gasolina', ['Combustible']],
+  ['otros', 'Otros gastos', ['Aparcamiento', 'Alojamiento', 'Transporte', 'Otros']]];
+var MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+function grupoTicket(t) { var g = GRUPOS_TICKET.filter(function (x) { return x[2].indexOf(t.categoria) >= 0; })[0]; return g ? g[0] : 'otros'; }
+function sumaTotal(lista) { return lista.reduce(function (s, t) { return s + (Number(t.total) || 0); }, 0); }
 function vTickets(v, d) {
   if (puedeSubir()) v.appendChild(tarjetaSubir());   // la misma subida que en Inicio: el sistema separa tickets y facturas
+
+  // Pestañas (con número y total de cada una); si la elegida está vacía, la primera que tenga tickets
+  var porGrupo = {}; GRUPOS_TICKET.forEach(function (g) { porGrupo[g[0]] = []; });
+  d.tickets.forEach(function (t) { porGrupo[grupoTicket(t)].push(t); });
+  if (!porGrupo[S.catTck]) S.catTck = (GRUPOS_TICKET.filter(function (g) { return porGrupo[g[0]].length; })[0] || GRUPOS_TICKET[0])[0];
+  var grupo = GRUPOS_TICKET.filter(function (g) { return g[0] === S.catTck; })[0];
+  var lista = porGrupo[S.catTck];
+  var pestanas = h('div', { class: 'pestanas-tickets', role: 'tablist', 'aria-label': 'Tipo de ticket' }, GRUPOS_TICKET.map(function (g) {
+    var activo = g[0] === S.catTck;
+    return h('button', { type: 'button', role: 'tab', 'aria-selected': activo ? 'true' : 'false', class: 'pestana-ticket' + (activo ? ' activo' : ''),
+      onclick: function () { S.catTck = g[0]; pintar(); } },
+      [h('span', { class: 'pestana-nombre' }, g[1]), h('span', { class: 'pestana-dato' }, porGrupo[g[0]].length + ' · ' + euros(sumaTotal(porGrupo[g[0]])))]);
+  }));
 
   // Filtros
   var periodo = h('select', { 'aria-label': 'Fecha' }, PERIODOS.map(function (o) { return h('option', { value: o[0] }, o[1]); }));
@@ -958,25 +976,30 @@ function vTickets(v, d) {
   var estado = h('select', { 'aria-label': 'Estado' }, [['', 'Todos los válidos'], ['Revisar', 'A revisar'], ['Descartado', 'Descartados']].map(function (o) { return h('option', { value: o[0] }, o[1]); }));
   estado.value = S.estadoTck;
   estado.addEventListener('change', function () { S.estadoTck = estado.value; cargar(true); });
-  var lista = d.tickets.filter(function (t) { return !S.catTck || t.categoria === S.catTck; });
-  var porCat = {}; d.tickets.forEach(function (t) { porCat[t.categoria] = (porCat[t.categoria] || 0) + (Number(t.total) || 0); });
-  var cats = h('div', { class: 'chips' }, [h('button', { type: 'button', class: !S.catTck ? 'activo' : '', onclick: function () { S.catTck = ''; pintar(); } }, 'Todas')]
-    .concat(CATEGORIAS_TICKET.filter(function (c) { return porCat[c] !== undefined; }).map(function (c) {
-      return h('button', { type: 'button', class: S.catTck === c ? 'activo' : '', onclick: function () { S.catTck = c; pintar(); } }, c + ' · ' + euros(porCat[c]));
-    })));
+
+  // Año y mes de cada ticket ("Sin fecha" si no se leyó)
+  function claveMes(t) { var m = /^(\d{4})-(\d{2})/.exec(String(t.fecha || '')); return m ? m[1] + '-' + m[2] : ''; }
+  function nombreMes(k) { return k ? MESES[Number(k.slice(5, 7)) - 1] + ' ' + k.slice(0, 4) : 'Sin fecha'; }
+
+  // Excel: la pestaña elegida (con año y mes) y un resumen por mes de todas las pestañas
   var estadoX = h('span', { class: 'estado-excel', role: 'status' });
   var excel = h('button', { type: 'button', class: 'boton descarga', onclick: async function () {
     excel.disabled = true; estadoX.textContent = 'Preparando…';
     try {
       var X = await prepararExcel(), libro = new X.Workbook(); libro.creator = 'MCD';
-      var cols = [['fecha', 'Fecha', FECHA], ['comercio', 'Comercio'], ['nif', 'NIF'], ['categoria', 'Categoría'], ['concepto', 'Concepto'],
+      var cols = [['anio', 'Año'], ['mes', 'Mes'], ['fecha', 'Fecha', FECHA], ['comercio', 'Comercio'], ['nif', 'NIF'], ['categoria', 'Categoría'], ['concepto', 'Concepto'],
         ['base_imponible', 'Base (€)', EUR], ['iva_porcentaje', 'IVA (%)', PCT], ['cuota_iva', 'IVA (€)', EUR], ['total', 'Total (€)', EUR],
-        ['forma_pago', 'Forma de pago'], ['matricula', 'Matrícula'], ['litros', 'Litros'], ['estado', 'Estado'], ['observaciones', 'Observaciones'], ['id_doc', 'Número']];
-      var hj = libro.addWorksheet('Tickets', { views: [{ state: 'frozen', ySplit: 1 }] });
-      hj.columns = cols.map(function (c) { return { header: c[1], key: c[0], width: /comercio|concepto|observ/.test(c[0]) ? 32 : 14,
+        ['forma_pago', 'Forma de pago'], ['matricula', 'Matrícula'], ['litros', 'Litros'], ['estacion', 'Estación'], ['empresa', 'Empresa'],
+        ['estado', 'Estado'], ['observaciones', 'Observaciones'], ['id_doc', 'Número']];
+      var hj = libro.addWorksheet(grupo[1], { views: [{ state: 'frozen', ySplit: 1 }] });
+      hj.columns = cols.map(function (c) { return { header: c[1], key: c[0], width: /comercio|concepto|observ|estacion/.test(c[0]) ? 32 : c[0] === 'anio' ? 8 : 14,
         style: c[2] === EUR ? { numFmt: '#,##0.00 "€"' } : c[2] === FECHA ? { numFmt: 'dd/mm/yyyy' } : {} }; });
-      lista.forEach(function (t) { var fila = {}; cols.forEach(function (c) { var val = t[c[0]];
-        if (c[2] === FECHA && val) val = new Date(String(val).slice(0, 10) + 'T00:00:00Z');
+      var colTotal = String.fromCharCode(65 + cols.map(function (c) { return c[0]; }).indexOf('total'));
+      lista.forEach(function (t) { var k = claveMes(t), fila = {}; cols.forEach(function (c) { var val = t[c[0]];
+        if (c[0] === 'anio') val = k ? Number(k.slice(0, 4)) : null;
+        else if (c[0] === 'mes') val = k ? MESES[Number(k.slice(5, 7)) - 1] : 'Sin fecha';
+        else if (c[0] === 'empresa' && grupo[0] === 'gasolina') val = t.empresa || 'Fondo común';
+        else if (c[2] === FECHA && val) val = new Date(String(val).slice(0, 10) + 'T00:00:00Z');
         else if ((c[2] === EUR || c[2] === PCT || c[0] === 'litros') && val !== null && val !== undefined) val = numeroExcel(val);
         if (typeof val === 'string' && /^[=+\-@]/.test(val)) val = "'" + val;
         fila[c[0]] = val === undefined ? null : val; }); hj.addRow(fila); });
@@ -984,33 +1007,62 @@ function vTickets(v, d) {
       hj.getRow(1).eachCell(function (c) { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0A4FC4' } }; });
       if (lista.length) {
         hj.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: cols.length } };
-        var tot = hj.addRow({ fecha: null, comercio: 'TOTAL (' + lista.length + ')', total: { formula: 'SUBTOTAL(9,I2:I' + (lista.length + 1) + ')' },
-          cuota_iva: { formula: 'SUBTOTAL(9,H2:H' + (lista.length + 1) + ')' }, base_imponible: { formula: 'SUBTOTAL(9,F2:F' + (lista.length + 1) + ')' } });
-        tot.font = { bold: true };
+        var filaTotal = { comercio: 'TOTAL (' + lista.length + ')' };
+        filaTotal.total = { formula: 'SUBTOTAL(9,' + colTotal + '2:' + colTotal + (lista.length + 1) + ')' };
+        hj.addRow(filaTotal).font = { bold: true };
       }
-      var rs = libro.addWorksheet('Por categoría');
-      rs.columns = [{ header: 'Categoría', key: 'c', width: 18 }, { header: 'Tickets', key: 'n', width: 10 }, { header: 'Total (€)', key: 't', width: 14, style: { numFmt: '#,##0.00 "€"' } }];
-      CATEGORIAS_TICKET.forEach(function (c) { var de = lista.filter(function (t) { return t.categoria === c; });
-        if (de.length) rs.addRow({ c: c, n: de.length, t: Math.round(de.reduce(function (s, t) { return s + (Number(t.total) || 0); }, 0) * 100) / 100 }); });
+      var rs = libro.addWorksheet('Resumen por mes', { views: [{ state: 'frozen', ySplit: 1 }] });
+      rs.columns = [{ header: 'Año', key: 'a', width: 8 }, { header: 'Mes', key: 'm', width: 12 }].concat(GRUPOS_TICKET.map(function (g) {
+        return { header: g[1] + ' (€)', key: g[0], width: 15, style: { numFmt: '#,##0.00 "€"' } }; }), [{ header: 'Total (€)', key: 't', width: 15, style: { numFmt: '#,##0.00 "€"' } }]);
+      var meses = Array.from(new Set(d.tickets.map(claveMes))).sort().reverse();
+      meses.forEach(function (k) {
+        var del = d.tickets.filter(function (t) { return claveMes(t) === k; }), fila = { a: k ? Number(k.slice(0, 4)) : null, m: k ? MESES[Number(k.slice(5, 7)) - 1] : 'Sin fecha' };
+        GRUPOS_TICKET.forEach(function (g) { fila[g[0]] = Math.round(sumaTotal(del.filter(function (t) { return grupoTicket(t) === g[0]; })) * 100) / 100; });
+        fila.t = Math.round(sumaTotal(del) * 100) / 100; rs.addRow(fila);
+      });
       rs.getRow(1).font = { bold: true };
-      await guardarLibro(libro, ['MCD', 'Tickets', S.catTck || 'todos', nombrePeriodo(S.periodoTck), new Date().toISOString().slice(0, 10)].join('_'));
+      await guardarLibro(libro, ['MCD', 'Tickets', grupo[1], nombrePeriodo(S.periodoTck), new Date().toISOString().slice(0, 10)].join('_'));
       estadoX.textContent = lista.length + ' tickets descargados';
     } catch (e) { estadoX.textContent = 'No se ha descargado: ' + mensajeError(e); }
     finally { excel.disabled = false; }
   } }, [iconoPanel('excel'), 'Descargar Excel']);
-  var total = lista.reduce(function (s, t) { return s + (Number(t.total) || 0); }, 0);
-  v.appendChild(h('div', { class: 'herramientas' }, [
-    h('div', { class: 'fila-herramientas' }, [h('div', {}, [h('div', { class: 'sub' }, 'Total ' + (S.catTck ? 'de ' + S.catTck.toLowerCase() : 'del periodo')),
-      h('div', { class: 'total-grande' }, euros(total) + ' · ' + lista.length + ' ticket' + (lista.length === 1 ? '' : 's'))]), h('div', { class: 'descarga-directa' }, [excel, estadoX])]),
-    h('div', { class: 'fila-herramientas' }, [h('label', { class: 'campo-corto' }, ['Fecha', periodo]), h('label', { class: 'campo-corto' }, ['Estado', estado])]),
-    cats, h('p', { class: 'sub' }, ['Los tickets de gasolina están en ', h('button', { type: 'button', class: 'boton enlace', onclick: function () { irA('combustible'); } }, 'Combustible'),
-      ': allí esperan, sin empresa, a que llegue la factura de la gasolinera.'])]));
-  if (!lista.length) { v.appendChild(h('div', { class: 'tarjeta vacio' }, d.tickets.length ? 'No hay tickets de esta categoría.' : 'Todavía no hay tickets en este periodo. Haz una foto para subir el primero.')); return; }
-  tabla(v, ['Fecha', { t: 'Comercio', largo: 1 }, 'Categoría', { t: 'Total', num: 1 }, { t: 'IVA', num: 1 }, 'Pago', 'Estado'], lista.map(function (t) {
-    return { abrir: function () { fichaTicket(t); },
-      celdas: [t.fecha ? fecha(t.fecha) : '—', t.comercio || '—', t.categoria, { t: t.total === null ? '—' : euros(t.total), num: 1 },
-        { t: t.cuota_iva === null || t.cuota_iva === undefined ? '—' : euros(t.cuota_iva), num: 1 }, t.forma_pago || '—', pillEstado(t.estado)] };
-  }), 'Ticket');
+
+  v.appendChild(h('div', { class: 'herramientas' }, [pestanas,
+    h('div', { class: 'fila-herramientas' }, [h('div', {}, [h('div', { class: 'sub' }, 'Total de ' + grupo[1].toLowerCase()),
+      h('div', { class: 'total-grande' }, euros(sumaTotal(lista)) + ' · ' + lista.length + ' ticket' + (lista.length === 1 ? '' : 's'))]), h('div', { class: 'descarga-directa' }, [excel, estadoX])]),
+    h('div', { class: 'fila-herramientas' }, [h('label', { class: 'campo-corto' }, ['Fecha', periodo]), h('label', { class: 'campo-corto' }, ['Estado', estado])])]));
+  if (grupo[0] === 'gasolina') v.appendChild(h('p', { class: 'sub' }, ['Sin empresa = fondo común: cada ticket pasa solo a su empresa cuando llega la factura de la gasolinera. También se ven en ',
+    h('button', { type: 'button', class: 'boton enlace', onclick: function () { irA('combustible'); } }, 'Combustible'), ', comparados con la tabla de precios.']));
+  if (!lista.length) { v.appendChild(h('div', { class: 'tarjeta vacio' }, d.tickets.length ? 'No hay tickets de ' + grupo[1].toLowerCase() + ' en este periodo.' : 'Todavía no hay tickets en este periodo. Haz una foto para subir el primero.')); return; }
+
+  // Por AÑO y, dentro, por MES (lo más reciente primero; el último mes, abierto)
+  var columnas = grupo[0] === 'gasolina'
+    ? ['Fecha', { t: 'Estación', largo: 1 }, 'Matrícula', { t: 'Litros', num: 1 }, { t: 'Total', num: 1 }, 'Empresa', 'Estado']
+    : ['Fecha', { t: 'Comercio', largo: 1 }].concat(grupo[0] === 'otros' ? ['Tipo'] : [], [{ t: 'Total', num: 1 }, { t: 'IVA', num: 1 }, 'Pago', 'Estado']);
+  function fila(t) {
+    var comunes = [t.fecha ? fecha(t.fecha) : '—'];
+    if (grupo[0] === 'gasolina') return { abrir: function () { fichaTicket(t); }, celdas: comunes.concat([t.estacion || t.comercio || '—', t.matricula || '—', { t: litros(t.litros), num: 1 },
+      { t: t.total === null || t.total === undefined ? '—' : euros(t.total), num: 1 },
+      t.empresa ? h('span', { class: 'pill ok' }, t.empresa) : h('span', { class: 'pill', title: 'Esperando la factura de la gasolinera' }, 'Fondo común'), pillEstado(t.estado)]) };
+    return { abrir: function () { fichaTicket(t); }, celdas: comunes.concat([t.comercio || '—'], grupo[0] === 'otros' ? [t.categoria] : [],
+      [{ t: t.total === null || t.total === undefined ? '—' : euros(t.total), num: 1 }, { t: t.cuota_iva === null || t.cuota_iva === undefined ? '—' : euros(t.cuota_iva), num: 1 },
+       t.forma_pago || '—', pillEstado(t.estado)]) };
+  }
+  var meses = Array.from(new Set(lista.map(claveMes))).sort().reverse();       // '' (sin fecha) queda al final
+  var anios = Array.from(new Set(meses.map(function (k) { return k ? k.slice(0, 4) : ''; })));
+  anios.forEach(function (a, ia) {
+    var delAnio = lista.filter(function (t) { return (claveMes(t).slice(0, 4)) === a; });
+    var bloque = h('section', { class: 'anio-tickets' }, [h('h3', { class: 'cab-anio' }, [a || 'Sin fecha', h('span', { class: 'sub' }, ' · ' + delAnio.length + ' ticket' + (delAnio.length === 1 ? '' : 's') + ' · ' + euros(sumaTotal(delAnio)))])]);
+    meses.filter(function (k) { return (k ? k.slice(0, 4) : '') === a; }).forEach(function (k, im) {
+      var delMes = lista.filter(function (t) { return claveMes(t) === k; });
+      var caja = h('details', { class: 'mes-tickets' }, [h('summary', {}, [h('span', { class: 'mes-nombre' }, nombreMes(k)),
+        h('span', { class: 'mes-dato' }, delMes.length + ' ticket' + (delMes.length === 1 ? '' : 's') + ' · ' + euros(sumaTotal(delMes)))])]);
+      if (ia === 0 && im === 0) caja.open = true;
+      tabla(caja, columnas, delMes.map(fila), 'Ticket');
+      bloque.appendChild(caja);
+    });
+    v.appendChild(bloque);
+  });
 }
 
 function fichaTicket(t) {
@@ -1080,7 +1132,7 @@ function fichaTicket(t) {
 // REVISIÓN
 // ---------------------------------------------------------------------
 function vRevision(v, lista) {
-  var tipos = ['', 'Factura a revisar', 'Albarán a revisar', 'Albarán sin factura', 'Revisión manual'];
+  var tipos = ['', 'Factura a revisar', 'Albarán a revisar', 'Albarán sin factura', 'Ticket a revisar', 'Revisión manual'];
   if (S.filtro && !lista.some(function (x) { return x.tipo === S.filtro; })) S.filtro = '';   // se vació ese grupo: volver a "Todo"
   v.appendChild(h('div', { class: 'barra' }, h('div', { class: 'chips' }, tipos.map(function (t) {
     var n = lista.filter(function (x) { return !t || x.tipo === t; }).length;
@@ -1091,8 +1143,9 @@ function vRevision(v, lista) {
     'Para quitar un documento de esta lista pulsa "Guardar y marcar revisado" o "Descartar".'));
   if (!filas.length) { v.appendChild(h('div', { class: 'tarjeta vacio' }, 'No hay nada pendiente de revisar.')); return; }
   tabla(v, ['Documento', 'Qué pasa', 'Empresa', 'Fecha', 'Cliente / proveedor', { t: 'Importe', num: 1 }, { t: 'Motivo', largo: 1 }], filas.map(function (x) {
-    return { abrir: function () { abrirFichaPorId(x.hoja === 'facturas' ? 'Factura' : x.hoja === 'albaranes' ? 'Albarán' : 'Revisión manual', x.empresa, x.hoja, x.id); },
-      celdas: [x.numero || x.id, pillEstado(x.tipo === 'Albarán sin factura' ? 'Sin factura' : x.tipo), x.empresa === '_revision' ? '—' : x.empresa, fecha(x.fecha), x.nombre, { t: x.total === null || x.total === undefined ? '' : euros(x.total), num: 1 }, x.motivo] };
+    return { abrir: function () { if (x.hoja === 'tickets') { abrirDesdeHistorial({ hoja: 'tickets', id_doc: x.id }); return; }
+        abrirFichaPorId(x.hoja === 'facturas' ? 'Factura' : x.hoja === 'albaranes' ? 'Albarán' : 'Revisión manual', x.empresa, x.hoja, x.id); },
+      celdas: [x.numero || x.id, pillEstado(x.tipo === 'Albarán sin factura' ? 'Sin factura' : x.tipo), x.empresa === '_revision' || !x.empresa ? '—' : x.empresa, fecha(x.fecha), x.nombre, { t: x.total === null || x.total === undefined ? '' : euros(x.total), num: 1 }, x.motivo] };
   }), 'Revisión');
 }
 function abrirFichaPorId(titulo, empresa, hoja, id) {
