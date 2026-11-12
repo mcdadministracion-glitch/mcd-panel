@@ -66,7 +66,8 @@ function consulta(q) { return q.then(function (r) { if (r.error) throw new Error
 // Estado de la pantalla
 // ---------------------------------------------------------------------
 var EMPRESAS = [];
-var S = { vista: 'inicio', empresa: null, todasEmpresas: true, buscar: '', filtro: 'Activos', periodo: '', periodoComb: 'mes', periodoTck: 'mes', estadoTck: '', catTck: '', pagina: 1, carpeta: '', mes: mesActual(), datos: null, pendientes: 0, rol: null, usuario: null, denegado: false };
+var S = { vista: 'inicio', empresa: null, todasEmpresas: true, buscar: '', filtro: 'Activos', periodo: '', periodoComb: 'mes', periodoTck: 'mes', estadoTck: '', catTck: '', pagina: 1, carpeta: '', mes: mesActual(), datos: null, pendientes: 0, rol: null, usuario: null, denegado: false,
+  periodoHis: 'mes', tipoHis: 'cambios', usuarioHis: '', empresaHis: '' };
 var VISTAS = [['inicio', 'Inicio'], ['facturas', 'Facturas'], ['albaranes', 'Albaranes'], ['revision', 'Pendientes'], ['combustible', 'Combustible'], ['tickets', 'Tickets'], ['documentos', 'Archivos'], ['negocio', 'Vencimientos']];
 var temporizadorBusqueda = null, secuenciaCarga = 0;
 
@@ -307,6 +308,7 @@ function iconoPanel(vista) {
     documentos:'M3 6h7l2 2h9v12H3z', negocio:'M4 3v17h17 M8 15v-4 M13 15V7 M18 15V5',
     combustible:'M4 21V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16 M3 21h12 M7 8h4 M14 9h2a2 2 0 0 1 2 2v5a1.5 1.5 0 0 0 3 0V8l-3-3',
     tickets:'M6 2h12v20l-2-1.5-2 1.5-2-1.5-2 1.5-2-1.5L6 22z M9 7h6 M9 11h6 M9 15h4',
+    historial:'M12 21a9 9 0 1 0 0-18 9 9 0 1 0 0 18 M12 7v5l3 2',
     camara:'M3 8h4l2-3h6l2 3h4v11H3z M12 17a4 4 0 1 0 0-8 4 4 0 1 0 0 8',
     excel:'M4 3h11l5 5v13H4z M14 3v6h6 M8 12l5 6 M13 12l-5 6', subir:'M12 16V4 M7 9l5-5 5 5 M4 15v5h16v-5', usuarios:'M8 11a4 4 0 1 0 0-8 4 4 0 1 0 0 8 M2 21v-3a6 6 0 0 1 12 0v3 M16 7a3 3 0 0 1 0 6 M17 16a5 5 0 0 1 5 5'
   };
@@ -319,7 +321,7 @@ function pintarMenu() {
   var nav = document.getElementById('menu'); nav.textContent = '';
   if (!S.rol) return;
   var secciones = VISTAS.slice();
-  if (S.rol === 'Administrador') secciones.push(['usuarios', 'Usuarios']);
+  if (S.rol === 'Administrador') secciones.push(['usuarios', 'Usuarios'], ['historial', 'Historial']);
   var movil = h('select', { 'aria-label': 'Ir a sección', class: 'nav-movil' }, secciones.map(function (v) {
     return h('option', { value: v[0] }, v[1]);
   }));
@@ -404,7 +406,8 @@ function salir() { sb.auth.signOut().then(function () { ++secuenciaCarga; S.rol 
 // ---------------------------------------------------------------------
 function cargar(mostrarCargando, conservarBarra) {
   if (S.denegado || !S.rol && S.vista !== 'inicio') return;
-  var solicitud = { numero: ++secuenciaCarga, vista: S.vista, empresa: S.empresa, todasEmpresas: !!S.todasEmpresas, carpeta: S.carpeta, mes: S.mes, pagina: S.pagina, buscar: S.buscar, filtro: S.filtro, periodo: S.periodo, periodoComb: S.periodoComb, periodoTck: S.periodoTck, estadoTck: S.estadoTck };
+  var solicitud = { numero: ++secuenciaCarga, vista: S.vista, empresa: S.empresa, todasEmpresas: !!S.todasEmpresas, carpeta: S.carpeta, mes: S.mes, pagina: S.pagina, buscar: S.buscar, filtro: S.filtro, periodo: S.periodo, periodoComb: S.periodoComb, periodoTck: S.periodoTck, estadoTck: S.estadoTck,
+    periodoHis: S.periodoHis, tipoHis: S.tipoHis, usuarioHis: S.usuarioHis, empresaHis: S.empresaHis };
   var vista = document.getElementById('vista');
   if (mostrarCargando) {
     var destino = conservarBarra && document.getElementById('cuerpo') || vista;
@@ -417,6 +420,7 @@ function cargar(mostrarCargando, conservarBarra) {
   else if (solicitud.vista === 'combustible') promesa = cargarCombustible(solicitud);
   else if (solicitud.vista === 'tickets') promesa = cargarTickets(solicitud);
   else if (solicitud.vista === 'usuarios') promesa = consulta(sb.from('usuarios').select('*').order('email')).then(function (r) { return r.data; });
+  else if (solicitud.vista === 'historial') promesa = cargarHistorial(solicitud);
   else if (solicitud.vista === 'negocio') promesa = rpc('panel_negocio', { p_empresa: solicitud.empresa, p_mes: solicitud.mes });
   else promesa = cargarCarpeta(solicitud.carpeta);
   promesa.then(function (d) {
@@ -469,15 +473,16 @@ function pintar() {
   var cursor = busqueda ? busqueda.selectionStart : null;
   var vista = document.getElementById('vista'); vista.textContent = '';
   var titulos = { inicio: 'Hola' + (S.usuario && S.usuario.nombre ? ', ' + S.usuario.nombre.split(' ')[0] : ''), facturas: 'Facturas', albaranes: 'Albaranes',
-    revision: 'Pendientes de revisar', combustible: 'Combustible', tickets: 'Tickets', documentos: 'Archivos', negocio: 'Vencimientos y costes', usuarios: 'Usuarios del panel' };
+    revision: 'Pendientes de revisar', combustible: 'Combustible', tickets: 'Tickets', documentos: 'Archivos', negocio: 'Vencimientos y costes', usuarios: 'Usuarios del panel', historial: 'Historial de cambios' };
   var ayudas = { inicio: 'Esto es lo que hay hoy en el sistema.', facturas: 'Pulsa una factura para verla y corregirla. El botón Excel descarga lo que ves filtrado.',
     albaranes: 'Pulsa un albarán para verlo. El botón Excel descarga lo que ves filtrado.', revision: 'Documentos que necesitan que alguien los mire.',
     combustible: 'Cada repostaje de las facturas de gasolinera comparado con el precio de ese día en la tabla que llega por correo.',
     tickets: 'Gastos generales (gasolina, comidas, aparcamientos…). No son de ninguna empresa. Sube la foto y se lee sola.',
     documentos: 'Los originales y las copias tachadas que se enviaron a la IA.', negocio: 'Pagos y cobros vencidos, coste por camión y movimientos del mes.',
-    usuarios: 'Quién puede entrar al panel. El acceso es solo por invitación.' };
+    usuarios: 'Quién puede entrar al panel. El acceso es solo por invitación.',
+    historial: 'Quién ha cambiado qué y cuándo. Cada cambio hecho en el panel queda apuntado aquí y no se puede borrar desde la web.' };
   vista.appendChild(h('div', { class: 'cab-vista' }, [h('div', {}, [h('h1', {}, titulos[S.vista]), h('p', { class: 'sub' }, ayudas[S.vista])])]));
-  ({ inicio: vInicio, facturas: vFacturas, albaranes: vAlbaranes, revision: vRevision, combustible: vCombustible, tickets: vTickets, documentos: vDocumentos, usuarios: vUsuarios, negocio: vNegocio })[S.vista](vista, S.datos);
+  ({ inicio: vInicio, facturas: vFacturas, albaranes: vAlbaranes, revision: vRevision, combustible: vCombustible, tickets: vTickets, documentos: vDocumentos, usuarios: vUsuarios, negocio: vNegocio, historial: vHistorial })[S.vista](vista, S.datos);
   if (busqueda && document.getElementById('busquedaTabla')) { var n = document.getElementById('busquedaTabla'); n.focus(); n.setSelectionRange(cursor, cursor); }
 }
 
@@ -967,7 +972,7 @@ function fichaTicket(t) {
     h('section', { class: 'vista-documento' }, [h('div', { class: 'cab-documento' }, [h('h3', {}, 'Foto del ticket')]), visor]),
     h('section', { class: 'editor-documento' }, [h('div', { class: 'resumen-ficha' }, [h('span', { class: 'pill marca' }, t.categoria), pillEstado(t.estado)]),
       t.observaciones ? h('p', { class: 'ayuda-campo' }, t.observaciones) : null,
-      h('fieldset', { class: 'seccion-ficha' }, [h('legend', {}, 'Datos del ticket'), rejilla])])])]);
+      h('fieldset', { class: 'seccion-ficha' }, [h('legend', {}, 'Datos del ticket'), rejilla]), historialDocumento('', t.id_doc)])])]);
   function cambios() { var c = {}; Object.keys(entradas).forEach(function (k) { var antes = t[k] === null || t[k] === undefined ? '' : String(t[k]).slice(0, k === 'fecha' ? 10 : 300); if (entradas[k].value !== antes) c[k] = entradas[k].value; }); return c; }
   function guardar(revisado) {
     var c = cambios(); if (!Object.keys(c).length && !revisado) { mensaje.textContent = 'No hay cambios.'; return; }
@@ -1158,6 +1163,173 @@ function vUsuarios(v, usuarios) {
     return { celdas: [u.email, u.nombre, u.rol, u.activo ? 'Sí' : 'No', estadoInvitacion(u)], abrir: function () { email.value = u.email; nombre.value = u.nombre || ''; rol.value = u.rol; activo.checked = !!u.activo; email.focus(); } };
   }));
 }
+// ---------------------------------------------------------------------
+// HISTORIAL (solo administrador): quién ha cambiado qué y cuándo
+//  Lee la tabla "auditoria", que rellenan las funciones panel_* de la base de datos
+//  en cada cambio. La base de datos solo deja leerla a los administradores y nadie
+//  puede borrarla ni modificarla desde el panel.
+// ---------------------------------------------------------------------
+var ACCIONES = {
+  'Guardar ficha': 'Cambió un dato', 'Descartar documento': 'Descartó un documento', 'Guardar ticket': 'Cambió un ticket',
+  'Ticket revisado': 'Revisó un ticket', 'Descartar ticket': 'Descartó un ticket', 'Gestionar usuario': 'Cambió un usuario',
+  'Reenviar invitacion': 'Reenvió una invitación', 'Regla periodica': 'Cambió una regla periódica', 'Procesar ahora': 'Pidió procesar ahora',
+  'Ver documento': 'Abrió un documento', 'Descargar documento': 'Descargó documentos'
+};
+var CONSULTAS_HISTORIAL = ['Ver documento', 'Descargar documento'];
+var TIPOS_HISTORIAL = [['cambios', 'Solo cambios'], ['consultas', 'Solo aperturas y descargas'], ['', 'Todo']];
+var TAMANO_HISTORIAL = 100;
+function nombreAccion(a) { return ACCIONES[a] || a || '—'; }
+function inicioDiaLocal(iso) { return new Date(iso + 'T00:00:00').toISOString(); }   // medianoche de España, no de Londres
+function consultaHistorial(f) {
+  var q = sb.from('auditoria').select('*', { count: 'exact' });
+  var rango = rangoPeriodo(f.periodo);
+  if (rango) q = q.gte('fecha', inicioDiaLocal(rango[0])).lt('fecha', inicioDiaLocal(rango[1]));
+  if (f.tipo === 'cambios') q = q.not('accion', 'in', '("' + CONSULTAS_HISTORIAL.join('","') + '")');
+  else if (f.tipo === 'consultas') q = q.in('accion', CONSULTAS_HISTORIAL);
+  if (f.usuario) q = q.eq('usuario', f.usuario);
+  if (f.empresa) q = q.eq('empresa', f.empresa);
+  var b = limpiarBusqueda(f.buscar || '');
+  if (b) q = q.or(['id_doc', 'campo', 'antes', 'despues', 'usuario'].map(function (c) { return c + '.ilike.%' + b + '%'; }).join(','));
+  return q.order('fecha', { ascending: false }).order('id', { ascending: false });
+}
+function filtrosHistorial(s) { return { periodo: s.periodoHis, tipo: s.tipoHis, usuario: s.usuarioHis, empresa: s.empresaHis, buscar: s.buscar }; }
+function cargarHistorial(s) {
+  var f = filtrosHistorial(s), desde = (s.pagina - 1) * TAMANO_HISTORIAL;
+  return Promise.all([consulta(consultaHistorial(f).range(desde, desde + TAMANO_HISTORIAL - 1)), consulta(sb.from('usuarios').select('email,nombre').order('email'))])
+    .then(function (r) { return { filtros: f, pagina: s.pagina, tamano: TAMANO_HISTORIAL, total: r[0].count || 0, filas: r[0].data || [], usuarios: r[1].data || [] }; });
+}
+function nombresUsuarios(lista) { var m = {}; (lista || []).forEach(function (u) { m[String(u.email || '').toLowerCase()] = u.nombre || ''; }); return m; }
+function fechaHora(iso) { var d = new Date(iso); return isNaN(d) ? texto(iso) : d.toLocaleDateString('es-ES') + ' ' + d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }); }
+function valorHistorial(v) {
+  var t = texto(v).replace(/\| true$/, '| puede entrar').replace(/\| false$/, '| sin acceso');   // usuarios: activo sí/no
+  if (t === '') return h('span', { class: 'vacio-historial' }, '(vacío)');
+  return t.length > 160 ? h('span', { title: t }, t.slice(0, 160) + '…') : t;
+}
+function etiquetaCampo(x) {
+  if (x.accion === 'Gestionar usuario' || x.accion === 'Reenviar invitacion') return 'Usuario ' + texto(x.campo);
+  if (x.accion === 'Regla periodica') return 'NIF ' + texto(x.campo);
+  if (CONSULTAS_HISTORIAL.indexOf(x.accion) >= 0) return x.campo === 'tachado' ? 'Copia tachada' : x.campo === 'zip' ? 'ZIP de originales' : x.campo === 'original' ? 'Original' : texto(x.campo);
+  return ETIQUETAS[x.campo] || texto(x.campo) || '—';
+}
+function textoDocumento(x) {
+  if (!x.id_doc) return '—';
+  return (x.empresa && x.empresa !== '_revision' ? x.empresa + ' · ' : '') + x.id_doc;
+}
+function abrirDesdeHistorial(x) {
+  var titulos = { facturas: 'Factura', albaranes: 'Albarán', revision: 'Revisión' };
+  if (titulos[x.hoja] && x.id_doc) { abrirFichaPorId(titulos[x.hoja], x.empresa || '_revision', x.hoja, x.id_doc); return; }
+  if (x.hoja === 'tickets' && x.id_doc) {
+    abrirModal('Ticket ' + x.id_doc, h('div', { class: 'cargando', role: 'status' }, 'Cargando ticket…'));
+    var numero = secuenciaFicha;
+    consulta(sb.from('tickets').select('*').eq('id_doc', x.id_doc).maybeSingle()).then(function (r) {
+      if (numero !== secuenciaFicha) return;
+      if (!r.data) throw new Error('No se encuentra el ticket.');
+      fichaTicket(r.data);
+    }).catch(function (e) { if (numero === secuenciaFicha) abrirModal('No se ha podido abrir el ticket', h('p', {}, mensajeError(e))); });
+  }
+}
+function sePuedeAbrir(x) { return !!x.id_doc && ['facturas', 'albaranes', 'revision', 'tickets'].indexOf(x.hoja) >= 0; }
+
+function vHistorial(v, d) {
+  var nombres = nombresUsuarios(d.usuarios);
+  function selector(etiqueta, opciones, valor, cambiar) {
+    var s = h('select', { 'aria-label': etiqueta }, opciones.map(function (o) { return h('option', { value: o[0] }, o[1]); }));
+    s.value = valor; s.addEventListener('change', function () { clearTimeout(temporizadorBusqueda); cambiar(s.value); S.pagina = 1; cargar(true, true); });
+    return h('label', { class: 'campo-corto' }, [etiqueta, s]);
+  }
+  var personas = [['', 'Todas']].concat(d.usuarios.map(function (u) { return [u.email, (u.nombre ? u.nombre + ' · ' : '') + u.email]; }));
+  if (S.usuarioHis && !d.usuarios.some(function (u) { return u.email === S.usuarioHis; })) personas.push([S.usuarioHis, S.usuarioHis]);
+  var buscar = h('input', { id: 'busquedaTabla', type: 'search', maxlength: '100', 'aria-label': 'Buscar en el historial', placeholder: 'Buscar ID de documento, dato o valor…' });
+  buscar.value = S.buscar;
+  buscar.addEventListener('input', function () { S.buscar = buscar.value; S.pagina = 1; ++secuenciaCarga; clearTimeout(temporizadorBusqueda); temporizadorBusqueda = setTimeout(function () { cargar(true, true); }, 350); });
+  var hayFiltros = S.buscar || S.usuarioHis || S.empresaHis || S.tipoHis !== 'cambios' || S.periodoHis !== 'mes';
+  var limpiar = h('button', { type: 'button', class: 'boton enlace', hidden: hayFiltros ? null : 'hidden', onclick: function () {
+    S.buscar = ''; S.usuarioHis = ''; S.empresaHis = ''; S.tipoHis = 'cambios'; S.periodoHis = 'mes'; S.pagina = 1; cargar(true);
+  } }, 'Quitar filtros');
+
+  // Excel: todo lo filtrado (hasta 5.000 filas)
+  var estadoX = h('span', { class: 'estado-excel', role: 'status' });
+  var excel = h('button', { type: 'button', class: 'boton descarga', onclick: async function () {
+    excel.disabled = true; estadoX.textContent = 'Preparando…';
+    try {
+      var r = await consulta(consultaHistorial(d.filtros).range(0, 4999)), filas = r.data || [];
+      var X = await prepararExcel(), libro = new X.Workbook(); libro.creator = 'MCD';
+      var hoja = libro.addWorksheet('Historial', { views: [{ state: 'frozen', ySplit: 1 }] });
+      hoja.columns = [{ header: 'Fecha y hora', key: 'fecha', width: 19, style: { numFmt: 'dd/mm/yyyy hh:mm:ss' } }, { header: 'Persona', key: 'persona', width: 26 },
+        { header: 'Correo', key: 'usuario', width: 30 }, { header: 'Acción', key: 'accion', width: 24 }, { header: 'Empresa', key: 'empresa', width: 12 },
+        { header: 'Sección', key: 'hoja', width: 12 }, { header: 'Documento (ID)', key: 'id_doc', width: 22 }, { header: 'Dato', key: 'campo', width: 26 },
+        { header: 'Antes', key: 'antes', width: 40 }, { header: 'Después', key: 'despues', width: 40 }];
+      filas.forEach(function (x) {
+        var d0 = new Date(x.fecha);
+        // Excel guarda la hora sin zona: se pasa la hora de España como si fuera UTC para que se vea igual que en el panel
+        var local = isNaN(d0) ? null : new Date(d0.getTime() - d0.getTimezoneOffset() * 60000);
+        var fila = { fecha: local, persona: nombres[String(x.usuario || '').toLowerCase()] || '', usuario: texto(x.usuario), accion: nombreAccion(x.accion),
+          empresa: x.empresa === '_revision' ? '' : texto(x.empresa), hoja: texto(x.hoja), id_doc: texto(x.id_doc), campo: etiquetaCampo(x), antes: texto(x.antes), despues: texto(x.despues) };
+        Object.keys(fila).forEach(function (k) { if (typeof fila[k] === 'string' && /^[=+\-@\t\r]/.test(fila[k])) fila[k] = "'" + fila[k]; });
+        hoja.addRow(fila);
+      });
+      hoja.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      hoja.getRow(1).eachCell(function (c) { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0A4FC4' } }; });
+      if (filas.length) hoja.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 10 } };
+      await guardarLibro(libro, ['MCD', 'Historial', nombrePeriodo(S.periodoHis), new Date().toISOString().slice(0, 10)].join('_'));
+      estadoX.textContent = (r.count || 0) > filas.length ? 'Descargadas las ' + filas.length + ' más recientes de ' + r.count + '. Acota las fechas para el resto.' : 'Descargado';
+    } catch (e) { estadoX.textContent = 'No se ha descargado: ' + mensajeError(e); }
+    finally { excel.disabled = false; }
+  } }, [iconoPanel('excel'), 'Descargar Excel']);
+
+  v.appendChild(h('div', { class: 'herramientas' }, [
+    h('div', { class: 'fila-herramientas' }, [
+      selector('Qué', TIPOS_HISTORIAL, S.tipoHis, function (x) { S.tipoHis = x; }),
+      selector('Fecha', PERIODOS, S.periodoHis, function (x) { S.periodoHis = x; }),
+      selector('Persona', personas, S.usuarioHis, function (x) { S.usuarioHis = x; }),
+      selector('Empresa', [['', 'Todas']].concat(EMPRESAS.map(function (e) { return [e, e]; })), S.empresaHis, function (x) { S.empresaHis = x; })]),
+    h('div', { class: 'fila-herramientas' }, [buscar, limpiar, h('span', { class: 'contador' }, contadorTabla(d, 'registros')), h('div', { class: 'descarga-directa' }, [excel, estadoX])])]));
+
+  var cuerpo = h('div', { id: 'cuerpo' }); v.appendChild(cuerpo);
+  if (!d.filas.length) {
+    cuerpo.appendChild(h('div', { class: 'tarjeta vacio' }, hayFiltros ? 'No hay nada apuntado con estos filtros. Prueba con "Cualquier fecha" o "Todo".' : 'Todavía no hay cambios apuntados este mes.'));
+    return;
+  }
+  tabla(cuerpo, ['Fecha y hora', 'Persona', 'Acción', 'Documento', 'Dato', { t: 'Cambio (antes → después)', largo: 1 }], d.filas.map(function (x) {
+    var correo = texto(x.usuario), nombre = nombres[correo.toLowerCase()];
+    return {
+      abrir: sePuedeAbrir(x) ? function () { abrirDesdeHistorial(x); } : null,
+      celdas: [fechaHora(x.fecha), h('span', { title: correo }, nombre || correo || '—'), h('span', { class: 'pill ' + (CONSULTAS_HISTORIAL.indexOf(x.accion) >= 0 ? '' : /Descart/.test(x.accion || '') ? 'error' : 'marca') }, nombreAccion(x.accion)),
+        textoDocumento(x), etiquetaCampo(x), CONSULTAS_HISTORIAL.indexOf(x.accion) >= 0 ? h('span', { class: 'vacio-historial' }, 'Solo consulta') :
+          h('span', { class: 'cambio-historial' }, [valorHistorial(x.antes), ' → ', valorHistorial(x.despues)])]
+    };
+  }), 'documento');
+  paginacion(cuerpo, d);
+  cuerpo.appendChild(h('p', { class: 'sub' }, 'Pulsa una fila para abrir ese documento. Al guardar una ficha se apunta una línea por cada dato cambiado.'));
+}
+
+// Historial dentro de la ficha de un documento (solo administrador). Se carga al abrirlo.
+function historialDocumento(empresa, id) {
+  if (S.rol !== 'Administrador' || !id) return null;
+  var lista = h('div', { class: 'historial-ficha' }, h('p', { class: 'vacio' }, 'Cargando…')), cargado = false;
+  var caja = h('details', { class: 'datos-adicionales historial-documento' }, [h('summary', {}, 'Historial de este documento'), lista]);
+  caja.addEventListener('toggle', function () {
+    if (!caja.open || cargado) return; cargado = true;
+    var empresas = [empresa || '', ''].filter(function (x, i, a) { return a.indexOf(x) === i; });
+    Promise.all([consulta(sb.from('auditoria').select('*').eq('id_doc', id).in('empresa', empresas).order('fecha', { ascending: false }).limit(200)),
+                 consulta(sb.from('usuarios').select('email,nombre'))]).then(function (r) {
+      var filas = r[0].data || [], nombres = nombresUsuarios(r[1].data); lista.textContent = '';
+      if (!filas.length) { lista.appendChild(h('p', { class: 'vacio' }, 'Nadie ha cambiado ni abierto este documento desde el panel.')); return; }
+      lista.appendChild(h('ul', { class: 'lista-historial' }, filas.map(function (x) {
+        var quien = nombres[texto(x.usuario).toLowerCase()] || texto(x.usuario) || '—', consultaDoc = CONSULTAS_HISTORIAL.indexOf(x.accion) >= 0;
+        return h('li', {}, [h('span', { class: 'cuando' }, fechaHora(x.fecha)), ' · ', h('b', {}, quien), ' · ', nombreAccion(x.accion)].concat(
+          consultaDoc ? [' (' + etiquetaCampo(x) + ')'] : [': ', h('i', {}, etiquetaCampo(x)), ' ', valorHistorial(x.antes), ' → ', valorHistorial(x.despues)]));
+      })));
+      lista.appendChild(h('button', { type: 'button', class: 'boton enlace', onclick: function () {
+        cerrarModal(); if (document.getElementById('modal').classList.contains('abierto')) return;
+        clearTimeout(temporizadorBusqueda);
+        S.vista = 'historial'; S.buscar = id; S.tipoHis = ''; S.periodoHis = ''; S.usuarioHis = ''; S.empresaHis = ''; S.pagina = 1; pintarMenu(); cargar(true); window.scrollTo(0, 0);
+      } }, 'Ver en la pantalla Historial'));
+    }).catch(function (e) { cargado = false; lista.textContent = ''; lista.appendChild(h('p', { class: 'vacio' }, 'No se ha podido cargar: ' + mensajeError(e))); });
+  });
+  return caja;
+}
+
 function exportarOriginales(v) {
   var empresaExportar = h('select', { 'aria-label': 'Empresa de los originales' }, EMPRESAS.map(function (e) { return h('option', { value: e }, e); })), mesExportar = h('input', { type: 'month', 'aria-label': 'Mes de los originales' }); mesExportar.value = S.mes;
   var estado = h('div', { class: 'mensaje' });
@@ -1293,6 +1465,7 @@ function ficha(titulo, fila, contexto) {
     otros.appendChild(h('div', { class: 'campo-ficha' }, [h('span', { class: 'etiqueta-ficha' }, ETIQUETAS[c] || c), h('div', { class: 'valor-ficha' }, texto(v) || '—')]));
   });
   formulario.appendChild(h('details', { class: 'datos-adicionales' }, [h('summary', {}, 'Otros datos del documento'), otros]));
+  var historialFicha = historialDocumento(empresa, id); if (historialFicha) formulario.appendChild(historialFicha);
   var zona = h('div', { class: 'zona-revision' }, [panelDocumento, h('section', { class: 'editor-documento' }, [
     h('div', { class: 'resumen-ficha' }, [h('span', { class: 'pill marca' }, empresa === '_revision' ? 'Revisión' : empresa), estado]),
     h('p', { class: 'ayuda-campo' }, editable ? 'Edita directamente los campos. Al guardar se comprueban todos los cambios.' : 'Puedes consultar todos los datos y el documento. Tu rol no permite editarlos.'), formulario])]);

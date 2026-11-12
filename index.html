@@ -279,6 +279,13 @@
     .tabla td:first-child { font-size:16px; padding-bottom:8px; } .tabla td:first-child::before { content:none; }
     .tabla td.largo { min-width:0; } .tabla td:empty { display:none; }
   }
+  /* Historial de cambios */
+  .lista-historial { list-style:none; margin:0; padding:0; font-size:13px; }
+  .lista-historial li { padding:7px 0; border-bottom:1px solid var(--borde, #e3e8f0); overflow-wrap:anywhere; }
+  .lista-historial .cuando { color:var(--suave); font-variant-numeric:tabular-nums; }
+  .vacio-historial { color:var(--suave); font-style:italic; }
+  .cambio-historial { overflow-wrap:anywhere; }
+  .historial-ficha .vacio { padding:12px; text-align:left; }
 </style>
 </head>
 <body>
@@ -296,6 +303,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=estaciones-20261111"></script>
+<script src="app.js?v=historial-20261112"></script>
 </body>
 </html>
