@@ -635,7 +635,8 @@ async function seguirSubida(s) {
         s.registro = x; s.clase = x.hoja === 'revision' || x.estado === 'Revisar' || x.repetido ? 'aviso' : 'exito';
         s.texto = x.repetido ? textoRegistro(x) : 'Registrado: ' + textoRegistro(x); pintarSubidas();
         if (x.repetido || /Posible repetido/.test((x.ticket && x.ticket.observaciones) || '')) avisoBreve('Ojo: ' + s.nombre + ' parece repetido');
-        if (S.vista === 'inicio' || (S.vista === 'tickets' && x.hoja === 'tickets')) cargar(false);
+        if (S.vista === 'inicio' || S.vista === 'revision' || (S.vista === 'tickets' && x.hoja === 'tickets')) cargar(false);
+        if (/^tachado_/.test(s.nombre) && x.hoja && x.hoja !== 'revision') avisoBreve(s.nombre.replace(/^tachado_|\.pdf$/g, '') + ' ya está leído: ' + textoRegistro(x).split(' · ')[0] + '. Pulsa "Abrir" para revisar sus datos.');
         return;
       }
       var segundos = Math.round((Date.now() - inicio) / 1000);
@@ -1138,6 +1139,13 @@ function vRevision(v, lista) {
     var n = lista.filter(function (x) { return !t || x.tipo === t; }).length;
     return t && !n ? null : h('button', { class: S.filtro === t ? 'activo' : '', onclick: function () { S.filtro = t; pintar(); } }, (t || 'Todo') + ' (' + n + ')');
   }))));
+  var enviados = SUBIDAS.filter(function (s) { return /^tachado_/.test(s.nombre); });
+  if (enviados.length) {
+    v.appendChild(h('section', { class: 'tarjeta enviados-tachado' }, [h('h3', {}, 'Enviados a la IA'),
+      h('p', { class: 'sub' }, 'El servicio los lee en un minuto. Cuando estén leídos, pulsa "Abrir" para revisar y corregir sus datos.'),
+      h('ul', { id: 'listaSubidas', class: 'lista-subidas' })]));
+    setTimeout(pintarSubidas, 0);
+  }
   var filas = lista.filter(function (x) { return !S.filtro || x.tipo === S.filtro; });
   v.appendChild(h('p', { class: 'sub' }, 'Un albarán solo aparece aquí si lleva más de ' + DIAS_AVISO_ALBARAN + ' días sin su factura: es normal que el albarán llegue antes. ' +
     'Para quitar un documento de esta lista pulsa "Guardar y marcar revisado" o "Descartar".'));
@@ -1145,7 +1153,9 @@ function vRevision(v, lista) {
   tabla(v, ['Documento', 'Qué pasa', 'Empresa', 'Fecha', 'Cliente / proveedor', { t: 'Importe', num: 1 }, { t: 'Motivo', largo: 1 }], filas.map(function (x) {
     return { abrir: function () { if (x.hoja === 'tickets') { abrirDesdeHistorial({ hoja: 'tickets', id_doc: x.id }); return; }
         abrirFichaPorId(x.hoja === 'facturas' ? 'Factura' : x.hoja === 'albaranes' ? 'Albarán' : 'Revisión manual', x.empresa, x.hoja, x.id); },
-      celdas: [x.numero || x.id, pillEstado(x.tipo === 'Albarán sin factura' ? 'Sin factura' : x.tipo), x.empresa === '_revision' || !x.empresa ? '—' : x.empresa, fecha(x.fecha), x.nombre, { t: x.total === null || x.total === undefined ? '' : euros(x.total), num: 1 }, x.motivo] };
+      celdas: [x.numero || x.id, ENVIADOS_TACHADO[x.id] && x.tipo === 'Revisión manual' ? h('span', { class: 'pill ok' }, 'Enviado a la IA') : pillEstado(x.tipo === 'Albarán sin factura' ? 'Sin factura' : x.tipo),
+        x.empresa === '_revision' || !x.empresa ? '—' : x.empresa, fecha(x.fecha), x.nombre, { t: x.total === null || x.total === undefined ? '' : euros(x.total), num: 1 },
+        ENVIADOS_TACHADO[x.id] && x.tipo === 'Revisión manual' ? 'Copia tachada enviada: se está leyendo (tarda un minuto)' : x.motivo] };
   }), 'Revisión');
 }
 function abrirFichaPorId(titulo, empresa, hoja, id) {
@@ -1676,7 +1686,9 @@ function ficha(titulo, fila, contexto) {
     }
     [['Original', 'original', d.original], ['Copia tachada', 'tachado', d.tachado]].forEach(function (x) { if (x[2]) opcionesDocumento.appendChild(h('button', { class: 'boton', type: 'button', onclick: function () { mostrar(x[1], x[2]); } }, x[0])); });
     // Revisión manual: tacharlo a mano y enviarlo a la IA (PDF o foto)
-    if (hoja === 'revision' && editable && d.original) {
+    if (hoja === 'revision' && editable && d.original && ENVIADOS_TACHADO[id]) {
+      panelDocumento.appendChild(h('p', { class: 'ayuda-campo aviso-tachado' }, 'Ya se envió la copia tachada a la IA. En un minuto saldrá de esta lista y aparecerá como factura, albarán o ticket.'));
+    } else if (hoja === 'revision' && editable && d.original) {
       var tachable = /\.(pdf|jpe?g|png|webp|gif|bmp)$/i.test(d.original.nombre);
       panelDocumento.appendChild(h('div', { class: 'aviso-tachado' }, [      // fuera de estadoArchivo: la vista previa lo vacía al cargar
         h('button', { type: 'button', class: 'boton principal', disabled: tachable ? null : 'disabled', onclick: function () {
@@ -1698,6 +1710,7 @@ function ficha(titulo, fila, contexto) {
 //    el servicio la acepta. El servicio vuelve a tachar y comprobar por su cuenta.
 //  - El original sin tachar no sale de la revisión.
 // ---------------------------------------------------------------------
+var ENVIADOS_TACHADO = {};    // revisión -> cuándo se envió su copia tachada (mientras el servicio la lee)
 var PDFJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
 var PDFJS_SRI = 'sha384-/1qUCSGwTur9vjf/z9lmu/eCUYbpOTgSjmpbMQZ1/CtX2v/WcAIKqRv+U1DUCG6e';
 var PDFJS_WORKER_SRI = 'sha384-SnzOobpRMLXZ52iJvZm/C0fYw0OQemTXzTjIsdsfMcrCtCEe9qgzxTd3RSklO5x2';
@@ -1818,7 +1831,9 @@ function abrirTachado(revId, archivo) {
       mensaje.textContent = 'Registrando la copia…';
       await rpc('panel_registrar_tachado_manual', { p_rev: revId, p_huella: huella, p_paginas: salida.length, p_recuadros: n });
       fichaSucia = null; cerrarModal(); avisoBreve('Copia tachada de ' + revId + ' enviada: el servicio la leerá en un minuto');
-      verSubidas([fichero]);
+      ENVIADOS_TACHADO[revId] = Date.now();
+      subirArchivos([fichero]);                     // sin cambiar de pantalla: se sigue en Pendientes
+      if (S.vista === 'revision') pintar(); else irA('revision');
     } catch (e) { mensaje.className = 'mensaje-ficha fallo'; mensaje.textContent = 'No se ha enviado: ' + mensajeError(e); enviar.disabled = !confirma.checked; deshacer.disabled = !historia.length; }
   }
   var cuerpo = h('div', { class: 'contenido-tachado' }, [
