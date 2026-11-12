@@ -535,6 +535,30 @@ function vInicio(v, d) {
     ' · última señal ' + hora(s.latido), ' · Gmail ' + (s.gmail_conectado ? 'conectado' : 'desconectado'),
     s.ultima_vuelta ? ' · última vuelta ' + hora(s.ultima_vuelta.hora) : '', ' · coste de la IA este mes ' + costeEuros(d.costeMes)
   ] : 'El servicio aún no ha enviado su estado.'));
+  if (S.rol === 'Administrador') lineaCopias(v);
+}
+
+// Copias de seguridad (solo administrador): la del día en este ordenador y la de Google Drive
+function fechaLocalIso(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function lineaCopias(v) {
+  var linea = h('p', { class: 'linea-servicio linea-copias', role: 'status' }, 'Comprobando las copias de seguridad…'); v.appendChild(linea);
+  consulta(sb.from('estado_servicio').select('latido,datos').eq('clave', 'copias').maybeSingle()).then(function (r) {
+    var e = r.data && r.data.datos || null; linea.textContent = '';
+    // Vale la de hoy; hasta las 10:00 también la de ayer (el ordenador puede encenderse tarde)
+    var hoy = fechaLocalIso(new Date()), ayer = fechaLocalIso(new Date(Date.now() - 864e5)), temprano = new Date().getHours() < 10;
+    function reciente(f) { return !!f && (f >= hoy || (temprano && f >= ayer)); }
+    if (!e) {
+      linea.appendChild(h('span', { class: 'punto' }));
+      linea.appendChild(document.createTextNode('Copias de seguridad: aún sin datos (se hacen cada día a partir de las 2:00).'));
+      return;
+    }
+    var okL = reciente(e.ultima_local), okE = reciente(e.ultima_externa), estado = okL && okE ? 'ok' : okL ? 'aviso' : 'error';
+    linea.className = 'linea-servicio linea-copias ' + estado;
+    linea.appendChild(h('span', { class: 'punto ' + estado }));
+    linea.appendChild(document.createTextNode('Copia de seguridad · en este ordenador: ' + (e.ultima_local ? fecha(e.ultima_local) : 'ninguna') + (okL ? ' ✔' : ' ✖') +
+      ' · en ' + (e.externa || 'Google Drive') + ': ' + (e.ultima_externa ? fecha(e.ultima_externa) : 'ninguna') + (okE ? ' ✔' : ' ✖')));
+    if (e.error && !(okL && okE)) linea.appendChild(h('span', { class: 'detalle-copias' }, e.error));
+  }).catch(function () { linea.textContent = 'No se ha podido comprobar el estado de las copias de seguridad.'; });
 }
 
 // Documentos subidos en esta sesión y lo que ha pasado con cada uno (sobrevive al refresco automático de Inicio)

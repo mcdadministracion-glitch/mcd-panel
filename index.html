@@ -285,6 +285,12 @@
   .lista-historial .cuando { color:var(--suave); font-variant-numeric:tabular-nums; }
   .vacio-historial { color:var(--suave); font-style:italic; }
   .cambio-historial { overflow-wrap:anywhere; }
+  /* Estado de las copias de seguridad (Inicio, administradores) */
+  .linea-copias.aviso, .linea-copias.error { border-radius:10px; padding:10px 14px; font-weight:600; }
+  .linea-copias.aviso { background:#fff4e0; color:#8a4b00; }
+  .linea-copias.error { background:#fde8e8; color:#9b1c1c; }
+  .linea-copias .detalle-copias { display:block; font-weight:400; margin-top:4px; overflow-wrap:anywhere; }
+  .punto.aviso { background:#f59e0b; }
   .historial-ficha .vacio { padding:12px; text-align:left; }
 </style>
 </head>
@@ -303,6 +309,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=programa-20261112"></script>
+<script src="app.js?v=copias-20261112"></script>
 </body>
 </html>
