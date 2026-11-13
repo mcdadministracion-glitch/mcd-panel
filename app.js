@@ -1671,11 +1671,11 @@ function tabla(contenedor, columnas, filas, tituloFicha) {
 }
 
 var CAMPOS_FICHA = {
-  facturas: [['Datos de la factura', ['num_factura', 'fecha', 'fecha_vencimiento', 'nif', 'nombre', 'matricula', 'concepto']],
+  facturas: [['Datos de la factura', ['tipo_factura', 'num_factura', 'fecha', 'fecha_vencimiento', 'nif', 'nombre', 'matricula', 'concepto']],
              ['Importes', ['base_imponible', 'iva_porcentaje', 'cuota_iva', 'retencion_irpf', 'otros_importes', 'total']],
              ['Cobro o pago', ['estado_cobro_pago', 'importe_cobrado_pagado', 'fecha_cobro_pago']],
              ['Notas de revisión', ['observaciones']]],
-  albaranes: [['Datos del albarán', ['num_albaran', 'fecha', 'nif', 'nombre', 'matricula']],
+  albaranes: [['Datos del albarán', ['tipo_albaran', 'num_albaran', 'fecha', 'nif', 'nombre', 'matricula']],
               ['Servicio y vinculación', ['origen', 'destino', 'concepto', 'importe', 'num_factura']],
               ['Notas de revisión', ['observaciones']]],
   revision: [['Motivo de revisión', ['motivo']]]
@@ -1684,7 +1684,7 @@ var ETIQUETAS = { num_factura: 'Número de factura', num_albaran: 'Número de al
   nif: 'NIF del cliente o proveedor', nombre: 'Cliente o proveedor', matricula: 'Matrícula', concepto: 'Concepto del servicio', base_imponible: 'Base imponible (€)',
   iva_porcentaje: 'IVA (%)', cuota_iva: 'Cuota de IVA (€)', retencion_irpf: 'Retención IRPF (€)', otros_importes: 'Otros importes (€)', total: 'Total (€)', importe: 'Importe (€)',
   estado_cobro_pago: 'Estado del cobro o pago', importe_cobrado_pagado: 'Importe cobrado o pagado (€)', fecha_cobro_pago: 'Fecha del movimiento', origen: 'Origen', destino: 'Destino',
-  observaciones: 'Observaciones', motivo: 'Motivo de revisión', id_doc: 'ID', empresa: 'Empresa', tipo_factura: 'Tipo', tipo_albaran: 'Tipo', estado: 'Estado', albaranes: 'Albaranes citados',
+  observaciones: 'Observaciones', motivo: 'Motivo de revisión', id_doc: 'ID', empresa: 'Empresa', tipo_factura: 'Tipo (emitida o recibida)', tipo_albaran: 'Tipo (emitido o recibido)', estado: 'Estado', albaranes: 'Albaranes citados',
   comprobacion_albaranes: 'Comprobación de albaranes', estado_factura: 'Estado de facturación', factura_vinculada: 'Factura vinculada', dias_sin_factura: 'Días sin factura',
   posible_factura: 'Posible factura', categoria_gasto: 'Categoría de gasto', creado_en: 'Registrado', actualizado_en: 'Última modificación', fecha_alta: 'Fecha de alta',
   archivo_original: 'Archivo original', hash_sha256: 'Huella del archivo', tokens_entrada: 'Tokens de entrada', tokens_salida: 'Tokens de salida', coste_eur: 'Coste IA (€)' };
@@ -1725,6 +1725,12 @@ function ficha(titulo, fila, contexto) {
       if (!editable) { rejilla.appendChild(h('div', { class: 'campo-ficha' + (largo ? ' campo-ancho' : '') }, [h('span', { class: 'etiqueta-ficha' }, etiqueta), h('div', { class: 'valor-ficha' }, c === 'fecha_vencimiento' ? vence(base[c]) : /^fecha/.test(c) ? fecha(valor) || '—' : valor || '—')])); return; }
       var entrada;
       if (c === 'estado_cobro_pago') entrada = h('select', { id: 'campo-' + c }, ['Pendiente', 'Parcial', 'Pagado', 'Cobrado'].map(function (x) { return h('option', { value: x }, x); }));
+      else if (c === 'tipo_factura' || c === 'tipo_albaran') {      // emitido = lo hace la empresa; recibido = de un proveedor
+        var tipos = c === 'tipo_factura' ? [['Emitida', 'Emitida (la hace la empresa)'], ['Recibida', 'Recibida (de un proveedor)']]
+                                         : [['Emitido', 'Emitido (viaje o servicio nuestro)'], ['Recibido', 'Recibido (de un proveedor)']];
+        if (!valor) tipos.unshift(['', 'Sin indicar']);
+        entrada = h('select', { id: 'campo-' + c }, tipos.map(function (x) { return h('option', { value: x[0] }, x[1]); }));
+      }
       else if (largo) entrada = h('textarea', { id: 'campo-' + c, rows: c === 'concepto' ? '3' : '4' });
       else entrada = h('input', { id: 'campo-' + c, type: /^fecha/.test(c) ? 'date' : 'text' });
       if (/base|cuota|retencion|otros|total|importe|porcentaje/.test(c)) entrada.setAttribute('inputmode', 'decimal');
