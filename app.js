@@ -89,7 +89,7 @@ async function consultaTodo(crear, maximo) {
 // Estado de la pantalla
 // ---------------------------------------------------------------------
 var EMPRESAS = [];
-var S = { vista: 'inicio', empresa: null, todasEmpresas: true, buscar: '', filtro: 'Activos', periodo: '', periodoComb: 'mes', periodoTck: '', estadoTck: '', catTck: 'comidas', gasTck: 'nieves', pagina: 1, carpeta: '', mes: mesActual(), datos: null, pendientes: 0, rol: null, usuario: null, denegado: false,
+var S = { vista: 'inicio', empresa: null, todasEmpresas: true, buscar: '', filtro: 'Activos', periodo: '', periodoComb: 'mes', periodoTck: '', estadoTck: '', catTck: 'comidas', gasTck: 'nieves', tablaComb: '', pagina: 1, carpeta: '', mes: mesActual(), datos: null, pendientes: 0, rol: null, usuario: null, denegado: false,
   periodoHis: 'mes', tipoHis: 'cambios', usuarioHis: '', empresaHis: '' };
 var VISTAS = [['inicio', 'Inicio'], ['facturas', 'Facturas'], ['albaranes', 'Albaranes'], ['revision', 'Pendientes'], ['combustible', 'Combustible'], ['tickets', 'Tickets'], ['documentos', 'Archivos'], ['negocio', 'Vencimientos']];
 var temporizadorBusqueda = null, secuenciaCarga = 0;
@@ -950,20 +950,45 @@ function vCombustible(v, d) {
           { t: t.total === null || t.total === undefined ? '—' : euros(t.total), num: 1 }, pillEstado(t.estado)] };
     }), 'Ticket');
 
-  // Precios por ESTACIÓN: la última tabla vigente de cada empresa ("desde X hasta nuevo aviso")
+  // Tablas de precios por ESTACIÓN: una pestaña por cada tabla recibida (no se borra ninguna: las facturas
+  // llegan tarde y cada repostaje se compara con la tabla que estaba en vigor el día que se repostó)
   var porEstacion = d.precios.filter(function (p) { return p.estacion; });
-  var vigentes = {};    // empresa -> fecha de su última tabla
-  porEstacion.forEach(function (p) { var k = p.empresa || ''; var f = String(p.fecha).slice(0, 10); if (!vigentes[k] || f > vigentes[k]) vigentes[k] = f; });
-  Object.keys(vigentes).sort().forEach(function (k) {
-    var filas = porEstacion.filter(function (p) { return (p.empresa || '') === k && String(p.fecha).slice(0, 10) === vigentes[k]; });
-    var pv = filas[0] && filas[0].proveedor ? filas[0].proveedor + ' · ' : '';
-    v.appendChild(h('h3', {}, 'Precios por estación' + (k ? ' para ' + k : '') + ' — vigentes desde el ' + fecha(vigentes[k]) + (filas[0] && filas[0].hasta_nuevo_aviso ? ' (hasta nuevo aviso)' : '')));
-    v.appendChild(h('p', { class: 'sub' }, pv + filas.length + ' precio(s). Cada repostaje se compara con el de su estación.'));
+  var tablas = {};
+  porEstacion.forEach(function (p) {
+    var k = String(p.fecha).slice(0, 10) + '|' + (p.empresa || '');
+    (tablas[k] = tablas[k] || []).push(p);
+  });
+  var claves = Object.keys(tablas).sort().reverse();          // la más reciente primero
+  if (claves.length) {
+    var ultimaDe = {};                                          // empresa -> fecha de su tabla más nueva
+    claves.forEach(function (k) { var e = k.split('|')[1]; if (!ultimaDe[e]) ultimaDe[e] = k.split('|')[0]; });
+    function siguiente(k) {                                     // fecha de la tabla que la sustituyó (misma empresa)
+      var f = k.split('|')[0], e = k.split('|')[1];
+      return claves.filter(function (x) { return x.split('|')[1] === e && x.split('|')[0] > f; }).map(function (x) { return x.split('|')[0]; }).sort()[0];
+    }
+    if (claves.indexOf(S.tablaComb) < 0) S.tablaComb = claves[0];
+    var mostrar = claves.slice(0, 40);
+    if (mostrar.indexOf(S.tablaComb) < 0) mostrar.push(S.tablaComb);
+    v.appendChild(h('h3', {}, 'Tablas de precios recibidas'));
+    v.appendChild(h('p', { class: 'sub' }, 'Cada tabla que llega se guarda con su fecha y no sustituye a las anteriores. Cada repostaje se compara con la tabla que ' +
+      'estaba en vigor el día que se repostó, aunque la factura llegue mucho después.'));
+    v.appendChild(h('div', { class: 'segmentos pestanas-precios', role: 'tablist', 'aria-label': 'Tablas de precios' }, mostrar.map(function (k) {
+      var f = k.split('|')[0], e = k.split('|')[1], activo = k === S.tablaComb;
+      return h('button', { type: 'button', role: 'tab', 'aria-selected': activo ? 'true' : 'false', class: activo ? 'activo' : '',
+        onclick: function () { S.tablaComb = k; pintar(); } }, fecha(f) + (e ? ' · ' + e : '') + (ultimaDe[e] === f ? ' (en vigor)' : ''));
+    })));
+    var k = S.tablaComb, filas = tablas[k], fTabla = k.split('|')[0], eTabla = k.split('|')[1], sig = siguiente(k);
+    var vigencia = filas[0] && filas[0].hasta_nuevo_aviso
+      ? (sig ? 'Vigente del ' + fecha(fTabla) + ' al ' + fecha(sig) + ' (ese día llegó la siguiente)' : 'En vigor desde el ' + fecha(fTabla) + ' hasta que llegue otra')
+      : 'Solo para el día ' + fecha(fTabla);
+    v.appendChild(h('p', { class: 'sub' }, [h('b', {}, vigencia), ' · ' + (eTabla ? 'para ' + eTabla : 'para todas las empresas') +
+      (filas[0] && filas[0].proveedor ? ' · ' + filas[0].proveedor : '') + ' · ' + filas.length + ' precio(s)']));
     tabla(v, [{ t: 'Estación', largo: 1 }, 'Población', 'Provincia', 'Combustible', { t: 'Sin IVA', num: 1 }, { t: 'Con IVA', num: 1 }], filas.map(function (p) {
       return { celdas: [p.estacion, p.poblacion || '—', p.provincia || '—', p.combustible, { t: eurosLitro(p.precio_litro), num: 1 },
         { t: p.precio_con_iva ? eurosLitro(p.precio_con_iva) : '—', num: 1 }] };
     }));
-  });
+    if (claves.length > mostrar.length) v.appendChild(h('p', { class: 'sub' }, 'Se ven las 40 tablas más recientes; el Excel las incluye todas.'));
+  }
 
   // Precios por DÍA (tablas sin estaciones): una fila por día y una columna por combustible
   var generales = d.precios.filter(function (p) { return !p.estacion; });
