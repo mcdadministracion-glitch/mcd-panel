@@ -89,7 +89,7 @@ async function consultaTodo(crear, maximo) {
 // Estado de la pantalla
 // ---------------------------------------------------------------------
 var EMPRESAS = [];
-var S = { vista: 'inicio', empresa: null, todasEmpresas: true, buscar: '', filtro: 'Activos', periodo: '', periodoComb: 'mes', periodoTck: '', estadoTck: '', catTck: 'comidas', gasTck: 'nieves', tablaComb: '', pagina: 1, carpeta: '', mes: mesActual(), datos: null, pendientes: 0, rol: null, usuario: null, denegado: false,
+var S = { vista: 'inicio', empresa: null, todasEmpresas: true, buscar: '', filtro: 'Activos', periodo: '', periodoComb: 'mes', periodoTck: '', estadoTck: '', catTck: 'comidas', gasTck: 'nieves', tablaComb: '', sentido: 'recibidos', pagina: 1, carpeta: '', mes: mesActual(), datos: null, pendientes: 0, rol: null, usuario: null, denegado: false,
   periodoHis: 'mes', tipoHis: 'cambios', usuarioHis: '', empresaHis: '' };
 var VISTAS = [['inicio', 'Inicio'], ['facturas', 'Facturas'], ['albaranes', 'Albaranes'], ['revision', 'Pendientes'], ['combustible', 'Combustible'], ['tickets', 'Tickets'], ['documentos', 'Archivos'], ['negocio', 'Vencimientos']];
 var temporizadorBusqueda = null, secuenciaCarga = 0;
@@ -125,7 +125,7 @@ var COLUMNAS_EXCEL = {
     ['otros_importes', 'Otros importes (€)', EUR], ['total', 'Total (€)', EUR], ['fecha_vencimiento', 'Vencimiento', FECHA], ['estado_cobro_pago', 'Cobro / pago'],
     ['importe_cobrado_pagado', 'Cobrado / pagado (€)', EUR], ['fecha_cobro_pago', 'Fecha cobro / pago', FECHA], ['estado', 'Estado'],
     ['comprobacion_albaranes', 'Albaranes'], ['observaciones', 'Observaciones'], ['id_doc', 'ID interno']],
-  albaranes: [['empresa', 'Empresa'], ['num_albaran', 'Número de albarán'], ['fecha', 'Fecha', FECHA], ['nif', 'NIF'], ['nombre', 'Cliente / proveedor'],
+  albaranes: [['empresa', 'Empresa'], ['tipo_albaran', 'Tipo'], ['num_albaran', 'Número de albarán'], ['fecha', 'Fecha', FECHA], ['nif', 'NIF'], ['nombre', 'Cliente / proveedor'],
     ['matricula', 'Matrícula'], ['origen', 'Origen'], ['destino', 'Destino'], ['concepto', 'Concepto'], ['importe', 'Importe (€)', EUR],
     ['estado_factura', 'Facturación'], ['factura_vinculada', 'Factura vinculada'], ['dias_sin_factura', 'Días sin factura'], ['estado', 'Estado'],
     ['observaciones', 'Observaciones'], ['id_doc', 'ID interno']]
@@ -157,12 +157,24 @@ function prepararExcel() {
   return bibliotecaExcel;
 }
 
+// Emitidos (los hace la empresa del grupo) y recibidos (los hace otro y nos llegan), por separado
+var SENTIDOS = [['recibidos', 'Recibidas', 'Recibidos'], ['emitidos', 'Emitidas', 'Emitidos'], ['', 'Todas', 'Todos']];
+function valorSentido(tabla, sentido) {
+  if (!sentido) return '';
+  return tabla === 'facturas' ? (sentido === 'emitidos' ? 'Emitida' : 'Recibida') : (sentido === 'emitidos' ? 'Emitido' : 'Recibido');
+}
+function nombreSentido(tabla, sentido) {
+  var s = SENTIDOS.filter(function (x) { return x[0] === (sentido || ''); })[0] || SENTIDOS[2];
+  return tabla === 'facturas' ? s[1] : s[2];
+}
+
 // Consulta de facturas o albaranes con los mismos filtros que la pantalla.
-// f = { tabla, empresa ('' = todas), filtro, buscar, periodo }
+// f = { tabla, empresa ('' = todas), sentido ('emitidos' / 'recibidos' / '' = todos), filtro, buscar, periodo }
 function consultaLista(f) {
   var tabla = f.tabla, campo = tabla === 'facturas' ? 'estado' : 'estado_factura';
   var q = sb.from(tabla).select('*', { count: 'exact' });
   if (f.empresa) q = q.eq('empresa', f.empresa);
+  if (f.sentido) q = q.eq(tabla === 'facturas' ? 'tipo_factura' : 'tipo_albaran', valorSentido(tabla, f.sentido));
   if (f.filtro === 'Activos') q = q.not('estado', 'in', '("Descartado","Duplicado")');
   else if (f.filtro === 'Descartado' || f.filtro === 'Duplicado') q = q.eq('estado', f.filtro);
   else if (f.filtro) q = q.eq(campo, f.filtro);
@@ -177,7 +189,7 @@ function consultaLista(f) {
   return q.order('fecha', { ascending: false, nullsFirst: false }).order('empresa').order('id_doc', { ascending: false });
 }
 function filtrosPantalla() {
-  return { tabla: S.vista, empresa: S.todasEmpresas ? '' : S.empresa, filtro: S.filtro, buscar: S.buscar, periodo: S.periodo };
+  return { tabla: S.vista, empresa: S.todasEmpresas ? '' : S.empresa, sentido: S.sentido, filtro: S.filtro, buscar: S.buscar, periodo: S.periodo };
 }
 
 async function leerTodo(f, progreso) {
@@ -284,7 +296,7 @@ function botonExcelLista(d) {
     try {
       var excel = await prepararExcel(), filas = await leerTodo(f, function (n, t) { estado.textContent = n + ' de ' + t + '…'; });
       var libro = new excel.Workbook(); libro.creator = 'MCD'; hojaExcel(libro, f.tabla, filas);
-      await guardarLibro(libro, ['MCD', TITULO_EXCEL[f.tabla], f.empresa || 'todas', f.periodo ? nombrePeriodo(f.periodo) : '', new Date().toISOString().slice(0, 10)].filter(Boolean).join('_'));
+      await guardarLibro(libro, ['MCD', TITULO_EXCEL[f.tabla] + (f.sentido ? ' ' + nombreSentido(f.tabla, f.sentido).toLowerCase() : ''), f.empresa || 'todas', f.periodo ? nombrePeriodo(f.periodo) : '', new Date().toISOString().slice(0, 10)].filter(Boolean).join('_'));
       estado.textContent = filas.length + ' filas descargadas';
     } catch (e) { estado.textContent = 'No se ha descargado: ' + mensajeError(e); }
     finally { boton.disabled = false; }
@@ -432,7 +444,7 @@ function salir() { sb.auth.signOut().then(function () { ++secuenciaCarga; S.rol 
 // ---------------------------------------------------------------------
 function cargar(mostrarCargando, conservarBarra) {
   if (S.denegado || !S.rol && S.vista !== 'inicio') return;
-  var solicitud = { numero: ++secuenciaCarga, vista: S.vista, empresa: S.empresa, todasEmpresas: !!S.todasEmpresas, carpeta: S.carpeta, mes: S.mes, pagina: S.pagina, buscar: S.buscar, filtro: S.filtro, periodo: S.periodo, periodoComb: S.periodoComb, periodoTck: S.periodoTck, estadoTck: S.estadoTck,
+  var solicitud = { numero: ++secuenciaCarga, vista: S.vista, empresa: S.empresa, todasEmpresas: !!S.todasEmpresas, sentido: S.sentido, carpeta: S.carpeta, mes: S.mes, pagina: S.pagina, buscar: S.buscar, filtro: S.filtro, periodo: S.periodo, periodoComb: S.periodoComb, periodoTck: S.periodoTck, estadoTck: S.estadoTck,
     periodoHis: S.periodoHis, tipoHis: S.tipoHis, usuarioHis: S.usuarioHis, empresaHis: S.empresaHis };
   var vista = document.getElementById('vista');
   if (mostrarCargando) {
@@ -469,9 +481,14 @@ function cargar(mostrarCargando, conservarBarra) {
 function limpiarBusqueda(q) { return q.replace(/[,()"'\\%*]/g, ' ').trim().slice(0, 100); }
 function cargarTabla(s) {
   var desde = (s.pagina - 1) * 50;
-  var f = { tabla: s.vista, empresa: s.todasEmpresas ? '' : s.empresa, filtro: s.filtro, buscar: s.buscar, periodo: s.periodo };
-  return consulta(consultaLista(f).range(desde, desde + 49)).then(function (r) {
-    return { filtros: f, paginada: true, pagina: s.pagina, tamano: 50, total: r.count || 0, filas: r.data || [] };
+  var f = { tabla: s.vista, empresa: s.todasEmpresas ? '' : s.empresa, sentido: s.sentido, filtro: s.filtro, buscar: s.buscar, periodo: s.periodo };
+  function cuenta(sentido) {               // cuántos hay de cada lado con los demás filtros iguales
+    return consulta(consultaLista(Object.assign({}, f, { sentido: sentido })).range(0, 0)).then(function (r) { return r.count || 0; });
+  }
+  return Promise.all([consulta(consultaLista(f).range(desde, desde + 49)), cuenta('recibidos'), cuenta('emitidos'), cuenta('')]).then(function (rs) {
+    var r = rs[0];
+    return { filtros: f, paginada: true, pagina: s.pagina, tamano: 50, total: r.count || 0, filas: r.data || [],
+      cuentas: { recibidos: rs[1], emitidos: rs[2], '': rs[3] } };
   });
 }
 function contarPendientes(ini) { return ini.empresas.reduce(function (t, e) { return t + Number(e.documentosConAvisos || 0); }, 0) + Number(ini.enRevisionManual || 0) + Number(ini.ticketsRevisar || 0); }
@@ -500,8 +517,8 @@ function pintar() {
   var vista = document.getElementById('vista'); vista.textContent = '';
   var titulos = { inicio: 'Hola' + (S.usuario && S.usuario.nombre ? ', ' + S.usuario.nombre.split(' ')[0] : ''), facturas: 'Facturas', albaranes: 'Albaranes',
     revision: 'Pendientes de revisar', combustible: 'Combustible', tickets: 'Tickets', documentos: 'Archivos', negocio: 'Vencimientos y costes', usuarios: 'Usuarios del panel', historial: 'Historial de cambios' };
-  var ayudas = { inicio: 'Esto es lo que hay hoy en el sistema.', facturas: 'Pulsa una factura para verla y corregirla. El botón Excel descarga lo que ves filtrado.',
-    albaranes: 'Pulsa un albarán para verlo. El botón Excel descarga lo que ves filtrado.', revision: 'Documentos que necesitan que alguien los mire.',
+  var ayudas = { inicio: 'Esto es lo que hay hoy en el sistema.', facturas: 'Emitidas: las que hace la empresa a sus clientes. Recibidas: las de proveedores. Pulsa una para verla y corregirla; el botón Excel descarga lo que ves filtrado.',
+    albaranes: 'Emitidos: los que hace la empresa. Recibidos: los de proveedores. Pulsa un albarán para verlo; el botón Excel descarga lo que ves filtrado.', revision: 'Documentos que necesitan que alguien los mire.',
     combustible: 'Cada repostaje de las facturas de gasolinera comparado con el precio de ese día en la tabla que llega por correo.',
     tickets: 'Comidas, peajes, gasolina y otros gastos, por año y mes. Sube la foto y se lee sola. La gasolina de Petronieves y la de otras gasolineras van por separado.',
     documentos: 'Los originales y las copias tachadas que se enviaron a la IA.', negocio: 'Pagos y cobros vencidos, coste por camión y movimientos del mes.',
@@ -754,10 +771,22 @@ function barraFiltros(v, d, opcionesEstado) {
   var limpiar = h('button', { type: 'button', class: 'boton enlace', hidden: !(S.buscar || S.periodo || S.filtro !== 'Activos') ? 'hidden' : null, onclick: function () {
     S.buscar = ''; S.periodo = ''; S.filtro = 'Activos'; S.pagina = 1; cargar(true);
   } }, 'Quitar filtros');
+  var tablaVista = S.vista, cuentas = d.cuentas || {};
+  var sentidos = h('div', { class: 'segmentos sentidos', role: 'group', 'aria-label': 'Emitidas o recibidas' }, SENTIDOS.map(function (o) {
+    var activo = (S.sentido || '') === o[0];
+    return h('button', { type: 'button', class: activo ? 'activo' : '', 'aria-pressed': activo ? 'true' : 'false', onclick: function () {
+      if (activo) return;
+      clearTimeout(temporizadorBusqueda); S.sentido = o[0]; S.pagina = 1; cargar(true, true);
+    } }, nombreSentido(tablaVista, o[0]) + (cuentas[o[0]] === undefined ? '' : ' (' + cuentas[o[0]] + ')'));
+  }));
   v.appendChild(h('div', { class: 'herramientas' }, [
+    h('div', { class: 'fila-herramientas' }, [sentidos]),
     h('div', { class: 'fila-herramientas' }, [empresas, botonExcelLista(d)]),
     h('div', { class: 'fila-herramientas' }, [buscar, h('label', { class: 'campo-corto' }, ['Estado', estado]), h('label', { class: 'campo-corto' }, ['Fecha', periodo]), limpiar,
       h('span', { class: 'contador', id: 'contador' })])]));
+  var sinTipo = (cuentas[''] || 0) - (cuentas.recibidos || 0) - (cuentas.emitidos || 0);
+  if (sinTipo > 0) v.appendChild(h('p', { class: 'sub' }, sinTipo + (tablaVista === 'facturas' ? ' factura(s)' : ' albarán(es)') +
+    (tablaVista === 'facturas' ? ' sin indicar si son emitidas o recibidas' : ' sin indicar si son emitidos o recibidos') + ': solo salen en "' + nombreSentido(tablaVista, '') + '".'));
   v.appendChild(h('div', { id: 'cuerpo' }));
 }
 function paginacion(c, d) {
@@ -770,22 +799,26 @@ function paginacion(c, d) {
 function contadorTabla(d, tipo) { return !d.total ? '0 ' + tipo : d.total <= d.tamano ? d.total + ' ' + tipo : ((d.pagina - 1) * d.tamano + 1) + '–' + Math.min(d.pagina * d.tamano, d.total) + ' de ' + d.total + ' ' + tipo; }
 function vFacturas(v, d) {
   barraFiltros(v, d, [['Activos', 'Todas las válidas'], ['Revisar', 'A revisar'], ['Procesado', 'Procesadas'], ['Descartado', 'Descartadas'], ['Duplicado', 'Duplicadas'], ['', 'Todo el historial']]);
-  document.getElementById('contador').textContent = contadorTabla(d, 'facturas');
-  var c = document.getElementById('cuerpo');
-  tabla(c, ['Nº factura', 'Fecha', { t: 'Cliente / proveedor', largo: 1 }, 'Empresa', 'Tipo', { t: 'Total', num: 1 }, 'Vence', 'Estado'], d.filas.map(function (f) {
+  document.getElementById('contador').textContent = contadorTabla(d, S.sentido ? 'facturas ' + nombreSentido('facturas', S.sentido).toLowerCase() : 'facturas');
+  var c = document.getElementById('cuerpo'), conTipo = !S.sentido;
+  var quien = S.sentido === 'emitidos' ? 'Cliente' : S.sentido === 'recibidos' ? 'Proveedor' : 'Cliente / proveedor';
+  tabla(c, ['Nº factura', 'Fecha', { t: quien, largo: 1 }, 'Empresa'].concat(conTipo ? ['Tipo'] : [], [{ t: 'Total', num: 1 }, 'Vence', 'Estado']), d.filas.map(function (f) {
     return { abrir: function () { ficha('Factura', f, { empresa: f.empresa, hoja: 'facturas' }); },
-      celdas: [f.num_factura || f.id_doc, fecha(f.fecha), f.nombre, f.empresa, f.tipo_factura, { t: euros(f.total), num: 1 }, vence(f.fecha_vencimiento), pillEstado(f.estado)] };
+      celdas: [f.num_factura || f.id_doc, fecha(f.fecha), f.nombre, f.empresa].concat(conTipo ? [f.tipo_factura || 'Sin indicar'] : [],
+        [{ t: euros(f.total), num: 1 }, vence(f.fecha_vencimiento), pillEstado(f.estado)]) };
   }), 'Factura');
   paginacion(c, d);
 }
 function vAlbaranes(v, d) {
   barraFiltros(v, d, [['Activos', 'Todos los válidos'], ['PENDIENTE DE FACTURA', 'Esperando factura'], ['Facturado', 'Facturados'], ['Descartado', 'Descartados'], ['Duplicado', 'Duplicados'], ['', 'Todo el historial']]);
-  document.getElementById('contador').textContent = contadorTabla(d, 'albaranes');
-  var c = document.getElementById('cuerpo');
-  tabla(c, ['Nº albarán', 'Fecha', { t: 'Cliente / proveedor', largo: 1 }, 'Empresa', 'Ruta', { t: 'Importe', num: 1 }, 'Factura'], d.filas.map(function (f) {
+  document.getElementById('contador').textContent = contadorTabla(d, S.sentido ? 'albaranes ' + nombreSentido('albaranes', S.sentido).toLowerCase() : 'albaranes');
+  var c = document.getElementById('cuerpo'), conTipo = !S.sentido;
+  var quien = S.sentido === 'emitidos' ? 'Cliente' : S.sentido === 'recibidos' ? 'Proveedor' : 'Cliente / proveedor';
+  tabla(c, ['Nº albarán', 'Fecha', { t: quien, largo: 1 }, 'Empresa'].concat(conTipo ? ['Tipo'] : [], ['Ruta', { t: 'Importe', num: 1 }, 'Factura']), d.filas.map(function (f) {
     return { abrir: function () { ficha('Albarán', f, { empresa: f.empresa, hoja: 'albaranes' }); },
-      celdas: [f.num_albaran || f.id_doc, fecha(f.fecha), f.nombre, f.empresa, [f.origen, f.destino].filter(Boolean).join(' → '), { t: euros(f.importe), num: 1 },
-        f.factura_vinculada ? h('span', { class: 'pill ok' }, f.factura_vinculada) : f.estado_factura === 'PENDIENTE DE FACTURA' ? pillEsperaFactura(f) : pillEstado(f.estado_factura)] };
+      celdas: [f.num_albaran || f.id_doc, fecha(f.fecha), f.nombre, f.empresa].concat(conTipo ? [f.tipo_albaran || 'Sin indicar'] : [],
+        [[f.origen, f.destino].filter(Boolean).join(' → '), { t: euros(f.importe), num: 1 },
+        f.factura_vinculada ? h('span', { class: 'pill ok' }, f.factura_vinculada) : f.estado_factura === 'PENDIENTE DE FACTURA' ? pillEsperaFactura(f) : pillEstado(f.estado_factura)]) };
   }), 'Albarán');
   paginacion(c, d);
 }
