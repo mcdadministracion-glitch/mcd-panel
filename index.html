@@ -188,17 +188,20 @@
   .segmentos { display:inline-flex; flex-wrap:wrap; gap:4px; background:var(--gris-f); padding:4px; border-radius:12px; }
   .segmentos button { border:0; background:none; color:var(--suave); border-radius:9px; padding:8px 16px; font:inherit; font-weight:600; cursor:pointer; min-height:38px; }
   .segmentos button:hover { color:var(--texto); }
-  .pestanas-precios { display:flex; max-width:100%; overflow-x:auto; flex-wrap:nowrap; margin:8px 0 12px; } .pestanas-precios button { white-space:nowrap; }
+  .pestanas-precios { display:flex; max-width:100%; flex-wrap:wrap; margin:8px 0 12px; } .pestanas-precios button { white-space:nowrap; }
   .segmentos button.activo { background:var(--panel); color:var(--marca); box-shadow:0 1px 3px rgba(15,23,42,.12); }
   .chips { display:flex; flex-wrap:wrap; gap:6px; }
   .chips button { border:1px solid var(--borde); background:var(--panel); color:var(--texto); border-radius:999px; padding:7px 14px; font:inherit; font-size:14px; font-weight:600; cursor:pointer; min-height:38px; }
   .chips button.activo { background:var(--marca); border-color:var(--marca); color:#fff; }
   .barra { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:14px; }
-  .tabla { overflow:auto; background:var(--panel); border:1px solid var(--borde); border-radius:var(--radio); box-shadow:var(--sombra); max-height:calc(100vh - 260px); }
+  /* Tablas: nunca hay que deslizar. Sin barra por dentro (baja la página entera, la cabecera se queda
+     arriba) y el texto largo pasa a la línea siguiente en vez de empujar la tabla hacia la derecha. */
+  .tabla { overflow:clip; background:var(--panel); border:1px solid var(--borde); border-radius:var(--radio); box-shadow:var(--sombra); }
   table { border-collapse:collapse; width:100%; font-size:14px; }
-  th { text-align:left; background:var(--gris-f); color:var(--suave); font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:.03em; padding:11px 14px; position:sticky; top:0; white-space:nowrap; z-index:1; }
-  td { padding:12px 14px; border-top:1px solid var(--borde); vertical-align:middle; white-space:nowrap; }
-  td.largo { white-space:normal; min-width:220px; } td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; } td.num { font-weight:600; }
+  th { text-align:left; background:var(--gris-f); color:var(--suave); font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:.03em; padding:11px 12px; position:sticky; top:0; z-index:1; }
+  td { padding:11px 12px; border-top:1px solid var(--borde); vertical-align:middle; overflow-wrap:break-word; }
+  td.largo { min-width:180px; } td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; } td.num { font-weight:600; white-space:nowrap; }
+  td .pill { white-space:nowrap; }
   tbody tr.abrible { cursor:pointer; } tbody tr.abrible:hover { background:var(--marca-suave); }
   .abrir-fila { color:var(--marca); background:none; border:0; padding:0; font:inherit; font-weight:700; text-align:left; cursor:pointer; }
   .abrir-fila:hover { text-decoration:underline; }
@@ -270,13 +273,17 @@
     .descarga-directa, .descarga-directa .boton { width:100%; } .descarga-directa .estado-excel { text-align:left; }
     .ultimos li { grid-template-columns:auto minmax(0,1fr) auto; } .ultimo-empresa, .ultimo-fecha { display:none; }
     .campos-ficha, .otros-datos { grid-template-columns:1fr; } .modal { padding:4px; }
-    /* En el móvil cada fila de tabla se ve como una tarjeta */
-    .tabla { max-height:none; overflow:visible; background:none; border:0; box-shadow:none; }
-    .tabla table, .tabla tbody { display:block; } .tabla thead { display:none; }
-    .tabla tr { display:block; background:var(--panel); border:1px solid var(--borde); border-radius:12px; padding:10px 14px; margin-bottom:10px; box-shadow:var(--sombra); }
+  }
+  /* Pantallas de hasta 1100 px (portátil pequeño, tableta, móvil): cada fila de tabla es una tarjeta con
+     sus datos uno debajo de otro, así todo cabe a lo ancho. En tableta van dos tarjetas por fila. */
+  @media (max-width:1100px) {
+    .tabla { overflow:visible; background:none; border:0; box-shadow:none; }
+    .tabla table { display:block; } .tabla thead { display:none; }
+    .tabla tbody { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap:10px; }
+    .tabla tr { display:block; background:var(--panel); border:1px solid var(--borde); border-radius:12px; padding:10px 14px; box-shadow:var(--sombra); min-width:0; }
     .tabla tbody tr:nth-child(even) { background:var(--panel); }
-    .tabla td { display:flex; justify-content:space-between; gap:12px; border:0; padding:5px 0; white-space:normal; text-align:right; min-width:0; }
-    .tabla td::before { content:attr(data-etiqueta); color:var(--suave); font-size:12px; font-weight:600; text-align:left; flex-shrink:0; }
+    .tabla td { display:flex; justify-content:space-between; align-items:baseline; gap:12px; border:0; padding:5px 0; white-space:normal; text-align:right; min-width:0; overflow-wrap:anywhere; }
+    .tabla td::before { content:attr(data-etiqueta); color:var(--suave); font-size:12px; font-weight:600; text-align:left; flex-shrink:0; max-width:45%; }
     .tabla td:first-child { font-size:16px; padding-bottom:8px; } .tabla td:first-child::before { content:none; }
     .tabla td.largo { min-width:0; } .tabla td:empty { display:none; }
   }
@@ -331,6 +338,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=tipo-20261113"></script>
+<script src="app.js?v=tablas-20261113"></script>
 </body>
 </html>
