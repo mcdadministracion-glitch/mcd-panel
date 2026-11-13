@@ -68,6 +68,17 @@ function rpc(fn, args) {
   return sb.rpc(fn, args || {}).then(function (r) { if (r.error) throw new Error(r.error.message); return r.data; });
 }
 function consulta(q) { return q.then(function (r) { if (r.error) throw new Error(r.error.message); return r; }); }
+// Supabase devuelve como máximo 1000 filas por consulta: se piden por páginas hasta tenerlas todas.
+// "crear" es una función que devuelve la consulta nueva cada vez (con su order para que las páginas no se mezclen).
+async function consultaTodo(crear, maximo) {
+  var todas = [], desde = 0, paso = 1000; maximo = maximo || 50000;
+  while (true) {
+    var r = await consulta(crear().range(desde, desde + paso - 1)), d = r.data || [];
+    todas = todas.concat(d);
+    if (d.length < paso || todas.length >= maximo) return { data: todas, error: null };
+    desde += paso;
+  }
+}
 
 // ---------------------------------------------------------------------
 // Estado de la pantalla
@@ -779,16 +790,23 @@ function vAlbaranes(v, d) {
 // ---------------------------------------------------------------------
 function cargarCombustible(s) {
   var rango = rangoPeriodo(s.periodoComb);
-  var q = sb.from('repostajes').select('*').order('fecha', { ascending: false, nullsFirst: false }).order('id_doc').limit(3000);
-  if (!s.todasEmpresas) q = q.eq('empresa', s.empresa);
-  if (rango) q = q.gte('fecha', rango[0]).lt('fecha', rango[1]);
+  function q() {
+    var x = sb.from('repostajes').select('*').order('fecha', { ascending: false, nullsFirst: false }).order('id_doc').order('id');
+    if (!s.todasEmpresas) x = x.eq('empresa', s.empresa);
+    if (rango) x = x.gte('fecha', rango[0]).lt('fecha', rango[1]);
+    return x;
+  }
   // Precios: los del periodo y, de las tablas "hasta nuevo aviso", también las anteriores que siguen vigentes
-  var qp = sb.from('precios_combustible').select('fecha,combustible,precio_litro,precio_con_iva,iva_incluido,proveedor,estacion,poblacion,provincia,empresa,hasta_nuevo_aviso')
-    .order('fecha', { ascending: false }).order('estacion').limit(5000);
-  if (rango) qp = qp.lt('fecha', rango[1]);
-  var qt = sb.from('tickets').select('*').eq('categoria', 'Combustible').neq('estado', 'Descartado').order('fecha', { ascending: false, nullsFirst: true }).limit(2000);
-  if (rango) qt = qt.gte('fecha', rango[0]).lt('fecha', rango[1]);
-  return Promise.all([consulta(q), consulta(qp), consulta(qt)]).then(function (r) {
+  function qp() {
+    var x = sb.from('precios_combustible').select('fecha,combustible,precio_litro,precio_con_iva,iva_incluido,proveedor,estacion,poblacion,provincia,empresa,hasta_nuevo_aviso')
+      .order('fecha', { ascending: false }).order('estacion').order('id');
+    return rango ? x.lt('fecha', rango[1]) : x;
+  }
+  function qt() {
+    var x = sb.from('tickets').select('*').eq('categoria', 'Combustible').neq('estado', 'Descartado').order('fecha', { ascending: false, nullsFirst: true }).order('id_doc');
+    return rango ? x.gte('fecha', rango[0]).lt('fecha', rango[1]) : x;
+  }
+  return Promise.all([consultaTodo(q), consultaTodo(qp), consultaTodo(qt)]).then(function (r) {
     var tks = (r[2].data || []).filter(function (t) { return s.todasEmpresas || !t.empresa || t.empresa === s.empresa; });   // el fondo común se ve siempre
     return { repostajes: r[0].data || [], precios: r[1].data || [], tickets: tks };
   });
@@ -942,11 +960,14 @@ function vCombustible(v, d) {
 var CATEGORIAS_TICKET = ['Combustible', 'Comida', 'Aparcamiento', 'Peaje', 'Alojamiento', 'Transporte', 'Otros'];
 function cargarTickets(s) {
   var rango = rangoPeriodo(s.periodoTck);
-  var q = sb.from('tickets').select('*').order('fecha', { ascending: false, nullsFirst: true }).order('id_doc', { ascending: false }).limit(5000);
-  if (rango) q = q.gte('fecha', rango[0]).lt('fecha', rango[1]);
-  if (s.estadoTck === 'Descartado') q = q.eq('estado', 'Descartado'); else q = q.neq('estado', 'Descartado');
-  if (s.estadoTck === 'Revisar') q = q.eq('estado', 'Revisar');
-  return consulta(q).then(function (r) { return { tickets: r.data || [] }; });
+  function q() {
+    var x = sb.from('tickets').select('*').order('fecha', { ascending: false, nullsFirst: true }).order('id_doc', { ascending: false });
+    if (rango) x = x.gte('fecha', rango[0]).lt('fecha', rango[1]);
+    if (s.estadoTck === 'Descartado') x = x.eq('estado', 'Descartado'); else x = x.neq('estado', 'Descartado');
+    if (s.estadoTck === 'Revisar') x = x.eq('estado', 'Revisar');
+    return x;
+  }
+  return consultaTodo(q).then(function (r) { return { tickets: r.data || [] }; });
 }
 // Pestañas de Tickets: comidas, peajes, gasolina y el resto juntos
 var GRUPOS_TICKET = [['comidas', 'Comidas', ['Comida']], ['peajes', 'Peajes', ['Peaje']], ['gasolina', 'Gasolina', ['Combustible']],
@@ -1401,12 +1422,12 @@ function vHistorial(v, d) {
     S.buscar = ''; S.usuarioHis = ''; S.empresaHis = ''; S.tipoHis = 'cambios'; S.periodoHis = 'mes'; S.pagina = 1; cargar(true);
   } }, 'Quitar filtros');
 
-  // Excel: todo lo filtrado (hasta 5.000 filas)
+  // Excel: todo lo filtrado (se lee por páginas de 1000)
   var estadoX = h('span', { class: 'estado-excel', role: 'status' });
   var excel = h('button', { type: 'button', class: 'boton descarga', onclick: async function () {
     excel.disabled = true; estadoX.textContent = 'Preparando…';
     try {
-      var r = await consulta(consultaHistorial(d.filtros).range(0, 4999)), filas = r.data || [];
+      var r = await consultaTodo(function () { return consultaHistorial(d.filtros); }), filas = r.data || [];
       var X = await prepararExcel(), libro = new X.Workbook(); libro.creator = 'MCD';
       var hoja = libro.addWorksheet('Historial', { views: [{ state: 'frozen', ySplit: 1 }] });
       hoja.columns = [{ header: 'Fecha y hora', key: 'fecha', width: 19, style: { numFmt: 'dd/mm/yyyy hh:mm:ss' } }, { header: 'Persona', key: 'persona', width: 26 },
