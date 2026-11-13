@@ -49,6 +49,11 @@ function pillEsperaFactura(a) {
   if (dias !== null && dias !== undefined && dias > DIAS_AVISO_ALBARAN) return h('span', { class: 'pill error', title: 'Lo normal es menos de ' + DIAS_AVISO_ALBARAN + ' días' }, 'Sin factura · ' + dias + ' días');
   return h('span', { class: 'pill', title: 'Es normal: la factura suele llegar después del albarán' }, 'Esperando factura' + (dias !== null && dias !== undefined ? ' · ' + dias + ' días' : ''));
 }
+// La tabla de precios es de Petronieves (EESS Nieves / Nieves Mobility): solo sus repostajes se comparan
+var NOMBRE_GASOLINERA_TABLA = 'Petronieves';
+function esNieves() {
+  return Array.prototype.some.call(arguments, function (x) { return /NIEVES/.test(String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase()); });
+}
 function pillEstado(t) {
   t = texto(t);
   var c = /PENDIENTE|Sin factura|Faltan|≠|ERROR/.test(t) ? 'error' : /Revisar|revisar|Duplicado|revisión|Revisión/.test(t) ? 'aviso' : /Procesado|Facturado|recibidos/.test(t) ? 'ok' : '';
@@ -84,7 +89,7 @@ async function consultaTodo(crear, maximo) {
 // Estado de la pantalla
 // ---------------------------------------------------------------------
 var EMPRESAS = [];
-var S = { vista: 'inicio', empresa: null, todasEmpresas: true, buscar: '', filtro: 'Activos', periodo: '', periodoComb: 'mes', periodoTck: '', estadoTck: '', catTck: 'comidas', pagina: 1, carpeta: '', mes: mesActual(), datos: null, pendientes: 0, rol: null, usuario: null, denegado: false,
+var S = { vista: 'inicio', empresa: null, todasEmpresas: true, buscar: '', filtro: 'Activos', periodo: '', periodoComb: 'mes', periodoTck: '', estadoTck: '', catTck: 'comidas', gasTck: 'nieves', pagina: 1, carpeta: '', mes: mesActual(), datos: null, pendientes: 0, rol: null, usuario: null, denegado: false,
   periodoHis: 'mes', tipoHis: 'cambios', usuarioHis: '', empresaHis: '' };
 var VISTAS = [['inicio', 'Inicio'], ['facturas', 'Facturas'], ['albaranes', 'Albaranes'], ['revision', 'Pendientes'], ['combustible', 'Combustible'], ['tickets', 'Tickets'], ['documentos', 'Archivos'], ['negocio', 'Vencimientos']];
 var temporizadorBusqueda = null, secuenciaCarga = 0;
@@ -498,7 +503,7 @@ function pintar() {
   var ayudas = { inicio: 'Esto es lo que hay hoy en el sistema.', facturas: 'Pulsa una factura para verla y corregirla. El botón Excel descarga lo que ves filtrado.',
     albaranes: 'Pulsa un albarán para verlo. El botón Excel descarga lo que ves filtrado.', revision: 'Documentos que necesitan que alguien los mire.',
     combustible: 'Cada repostaje de las facturas de gasolinera comparado con el precio de ese día en la tabla que llega por correo.',
-    tickets: 'Gastos generales (gasolina, comidas, aparcamientos…). No son de ninguna empresa. Sube la foto y se lee sola.',
+    tickets: 'Comidas, peajes, gasolina y otros gastos, por año y mes. Sube la foto y se lee sola. La gasolina de Petronieves y la de otras gasolineras van por separado.',
     documentos: 'Los originales y las copias tachadas que se enviaron a la IA.', negocio: 'Pagos y cobros vencidos, coste por camión y movimientos del mes.',
     usuarios: 'Quién puede entrar al panel. El acceso es solo por invitación.',
     historial: 'Quién ha cambiado qué y cuándo: lo que hacen las personas en el panel y lo que hace el programa solo. Nadie puede borrarlo ni modificarlo; se guarda 2 años (protección de datos).' };
@@ -870,21 +875,26 @@ function vCombustible(v, d) {
   v.appendChild(h('div', { class: 'herramientas' }, [h('div', { class: 'fila-herramientas' }, [empresas,
     h('label', { class: 'campo-corto' }, ['Fecha', periodo]), h('div', { class: 'descarga-directa' }, [excel, estadoX])])]));
 
-  var reps = d.repostajes, caros = reps.filter(function (x) { return x.estado === 'Más caro'; });
+  var otrasReps = d.repostajes.filter(function (x) { return x.estado === 'Otra gasolinera'; });
+  var reps = d.repostajes.filter(function (x) { return x.estado !== 'Otra gasolinera'; }), caros = reps.filter(function (x) { return x.estado === 'Más caro'; });
   var sinPrecio = reps.filter(function (x) { return x.estado === 'Sin precio'; });
   var demas = caros.reduce(function (t, x) { return t + (Number(x.sobrecoste) || 0); }, 0);
   var totLitros = reps.reduce(function (t, x) { return t + (Number(x.litros) || 0); }, 0);
+  var litrosOtras = otrasReps.reduce(function (t, x) { return t + (Number(x.litros) || 0); }, 0);
   function metrica(icono, color, valor, nombre, ayuda) {
     return h('div', { class: 'metrica ' + color, style: 'cursor:default' }, [h('span', { class: 'icono-redondo ' + color }, iconoPanel(icono)),
       h('span', { class: 'metrica-texto' }, [h('strong', {}, valor), h('span', { class: 'metrica-nombre' }, nombre), h('span', { class: 'metrica-ayuda' }, ayuda)])]);
   }
   v.appendChild(h('div', { class: 'metricas' }, [
     metrica('revision', caros.length ? 'naranja' : 'verde', euros(demas), 'Pagado de más', caros.length ? caros.length + ' repostaje(s) por encima de la tabla' : 'Todo coincide con la tabla'),
-    metrica('combustible', 'azul', reps.length ? Math.round(totLitros).toLocaleString('es-ES') + ' l' : '0 l', 'Repostajes', reps.length + ' repostaje(s) en el periodo'),
+    metrica('combustible', 'azul', Math.round(totLitros).toLocaleString('es-ES') + ' l', 'Repostajes en ' + NOMBRE_GASOLINERA_TABLA,
+      reps.length + ' repostaje(s)' + (otrasReps.length ? ' · otras gasolineras: ' + otrasReps.length + ' (' + Math.round(litrosOtras).toLocaleString('es-ES') + ' l)' : '')),
     metrica('documentos', sinPrecio.length ? 'naranja' : 'cian', String(sinPrecio.length), 'Sin comparar', sinPrecio.length ? 'Sin precio de ese día o estación (ver la nota)' : 'Todos tienen precio')]));
 
-  v.appendChild(h('h3', {}, 'Repostajes más caros que la tabla'));
-  if (!caros.length) v.appendChild(h('div', { class: 'tarjeta vacio' }, reps.length ? 'Ningún repostaje supera el precio del día.' : 'Todavía no hay repostajes en este periodo.'));
+  v.appendChild(h('p', { class: 'sub' }, 'Solo se comparan con la tabla de precios los repostajes de ' + NOMBRE_GASOLINERA_TABLA +
+    ' (EESS Nieves). Los de otras gasolineras (bonÀrea, Fuel Iberia…) van aparte y no se comparan.'));
+  v.appendChild(h('h3', {}, 'Repostajes más caros que la tabla (' + NOMBRE_GASOLINERA_TABLA + ')'));
+  if (!caros.length) v.appendChild(h('div', { class: 'tarjeta vacio' }, reps.length ? 'Ningún repostaje supera el precio del día.' : 'Todavía no hay repostajes de ' + NOMBRE_GASOLINERA_TABLA + ' en este periodo.'));
   else tabla(v, ['Fecha', { t: 'Estación', largo: 1 }, 'Empresa', 'Matrícula', 'Combustible', { t: 'Litros', num: 1 }, { t: 'Facturado', num: 1 }, { t: 'Tabla', num: 1 },
     { t: 'Diferencia', num: 1 }, { t: 'De más', num: 1 }], caros.map(function (x) {
       return { abrir: function () { abrirFichaPorId('Factura', x.empresa, 'facturas', x.id_doc); },
@@ -892,8 +902,9 @@ function vCombustible(v, d) {
           { t: eurosLitro(x.precio_tabla), num: 1 }, { t: '+' + eurosLitro(x.diferencia_litro), num: 1 }, { t: euros(x.sobrecoste), num: 1 }] };
     }), 'Factura');
 
-  v.appendChild(h('h3', {}, 'Todos los repostajes'));
-  tabla(v, ['Fecha', { t: 'Estación', largo: 1 }, 'Empresa', 'Combustible', { t: 'Litros', num: 1 }, { t: 'Facturado', num: 1 }, { t: 'Tabla', num: 1 }, 'Resultado'],
+  v.appendChild(h('h3', {}, 'Repostajes en ' + NOMBRE_GASOLINERA_TABLA));
+  if (!reps.length) v.appendChild(h('div', { class: 'tarjeta vacio' }, 'No hay repostajes de ' + NOMBRE_GASOLINERA_TABLA + ' en este periodo.'));
+  else tabla(v, ['Fecha', { t: 'Estación', largo: 1 }, 'Empresa', 'Combustible', { t: 'Litros', num: 1 }, { t: 'Facturado', num: 1 }, { t: 'Tabla', num: 1 }, 'Resultado'],
     reps.slice(0, 300).map(function (x) {
       return { abrir: function () { abrirFichaPorId('Factura', x.empresa, 'facturas', x.id_doc); },
         celdas: [fecha(x.fecha), x.estacion_tabla || x.estacion || x.gasolinera || '—', x.empresa, x.combustible || '—', { t: litros(x.litros), num: 1 }, { t: eurosLitro(x.precio_litro), num: 1 },
@@ -901,12 +912,24 @@ function vCombustible(v, d) {
             x.estado === 'Sin precio' ? 'Sin comparar' : x.estado)] };
     }), 'Factura');
 
+  v.appendChild(h('h3', {}, 'Repostajes en otras gasolineras'));
+  if (!otrasReps.length) v.appendChild(h('div', { class: 'tarjeta vacio' }, 'No hay repostajes en otras gasolineras en este periodo.'));
+  else tabla(v, ['Fecha', { t: 'Gasolinera', largo: 1 }, 'Empresa', 'Matrícula', 'Combustible', { t: 'Litros', num: 1 }, { t: 'Precio', num: 1 }, { t: 'Importe', num: 1 }],
+    otrasReps.slice(0, 300).map(function (x) {
+      return { abrir: function () { abrirFichaPorId('Factura', x.empresa, 'facturas', x.id_doc); },
+        celdas: [fecha(x.fecha), x.estacion || x.gasolinera || '—', x.empresa, x.matricula || '—', x.combustible || '—', { t: litros(x.litros), num: 1 },
+          { t: eurosLitro(x.precio_litro), num: 1 }, { t: x.importe === null || x.importe === undefined ? '—' : euros(x.importe), num: 1 }] };
+    }), 'Factura');
+
   // Tickets de gasolina: el fondo común (sin empresa, esperando la factura) y los ya enlazados
-  var tks = d.tickets || [], comun = tks.filter(function (t) { return !t.empresa; }), conFactura = tks.filter(function (t) { return t.empresa; });
-  v.appendChild(h('h3', {}, 'Tickets de gasolina'));
+  var todosTks = d.tickets || [];
+  var tks = todosTks.filter(function (t) { return esNieves(t.comercio, t.estacion); });
+  var tksOtras = todosTks.filter(function (t) { return !esNieves(t.comercio, t.estacion); });
+  var comun = tks.filter(function (t) { return !t.empresa; }), conFactura = tks.filter(function (t) { return t.empresa; });
+  v.appendChild(h('h3', {}, 'Tickets de gasolina (' + NOMBRE_GASOLINERA_TABLA + ')'));
   v.appendChild(h('p', { class: 'sub' }, 'Hasta que llega la factura de la gasolinera, el ticket está en el fondo común (sin empresa). Cuando llega y coincide ' +
     '(mismo día y mismos litros), pasa solo a la empresa de la factura, y su estación sirve para comparar el precio.'));
-  if (!tks.length) v.appendChild(h('div', { class: 'tarjeta vacio' }, 'No hay tickets de gasolina en este periodo. Se suben con el botón "Subir documentos" o "Hacer foto".'));
+  if (!tks.length) v.appendChild(h('div', { class: 'tarjeta vacio' }, 'No hay tickets de ' + NOMBRE_GASOLINERA_TABLA + ' en este periodo. Se suben con el botón "Subir documentos" o "Hacer foto".'));
   else tabla(v, ['Fecha', 'Ticket', { t: 'Estación', largo: 1 }, 'Matrícula', { t: 'Litros', num: 1 }, { t: 'Total', num: 1 }, 'Empresa', 'Estado'],
     comun.concat(conFactura).map(function (t) {
       return { abrir: function () { fichaTicket(t); },
@@ -918,6 +941,14 @@ function vCombustible(v, d) {
     }), 'Ticket');
   if (comun.length) v.appendChild(h('p', { class: 'sub' }, 'Fondo común: ' + comun.length + ' ticket(s) · ' +
     euros(comun.reduce(function (s, t) { return s + (Number(t.total) || 0); }, 0)) + ' esperando su factura.'));
+  v.appendChild(h('h3', {}, 'Tickets de otras gasolineras'));
+  if (!tksOtras.length) v.appendChild(h('div', { class: 'tarjeta vacio' }, 'No hay tickets de otras gasolineras en este periodo.'));
+  else tabla(v, ['Fecha', 'Ticket', { t: 'Gasolinera', largo: 1 }, 'Matrícula', { t: 'Litros', num: 1 }, { t: 'Total', num: 1 }, 'Estado'],
+    tksOtras.map(function (t) {
+      return { abrir: function () { fichaTicket(t); },
+        celdas: [t.fecha ? fecha(t.fecha) : '—', t.id_doc, t.comercio || t.estacion || '—', t.matricula || '—', { t: litros(t.litros), num: 1 },
+          { t: t.total === null || t.total === undefined ? '—' : euros(t.total), num: 1 }, pillEstado(t.estado)] };
+    }), 'Ticket');
 
   // Precios por ESTACIÓN: la última tabla vigente de cada empresa ("desde X hasta nuevo aviso")
   var porEstacion = d.precios.filter(function (p) { return p.estacion; });
@@ -984,6 +1015,17 @@ function vTickets(v, d) {
   if (!porGrupo[S.catTck]) S.catTck = (GRUPOS_TICKET.filter(function (g) { return porGrupo[g[0]].length; })[0] || GRUPOS_TICKET[0])[0];
   var grupo = GRUPOS_TICKET.filter(function (g) { return g[0] === S.catTck; })[0];
   var lista = porGrupo[S.catTck];
+  var selectorGas = null;
+  if (grupo[0] === 'gasolina') {          // Petronieves y el resto de gasolineras, por separado
+    var deNieves = lista.filter(function (t) { return esNieves(t.comercio, t.estacion); });
+    var deOtras = lista.filter(function (t) { return !esNieves(t.comercio, t.estacion); });
+    selectorGas = h('div', { class: 'segmentos', role: 'group', 'aria-label': 'Gasolinera' }, [['nieves', NOMBRE_GASOLINERA_TABLA, deNieves], ['otras', 'Otras gasolineras', deOtras]].map(function (o) {
+      var activo = S.gasTck === o[0];
+      return h('button', { type: 'button', class: activo ? 'activo' : '', 'aria-pressed': activo ? 'true' : 'false', onclick: function () { S.gasTck = o[0]; pintar(); } },
+        o[1] + ' (' + o[2].length + ')');
+    }));
+    lista = S.gasTck === 'otras' ? deOtras : deNieves;
+  }
   var pestanas = h('div', { class: 'pestanas-tickets', role: 'tablist', 'aria-label': 'Tipo de ticket' }, GRUPOS_TICKET.map(function (g) {
     var activo = g[0] === S.catTck;
     return h('button', { type: 'button', role: 'tab', 'aria-selected': activo ? 'true' : 'false', class: 'pestana-ticket' + (activo ? ' activo' : ''),
@@ -1043,7 +1085,8 @@ function vTickets(v, d) {
         fila.t = Math.round(sumaTotal(del) * 100) / 100; rs.addRow(fila);
       });
       rs.getRow(1).font = { bold: true };
-      await guardarLibro(libro, ['MCD', 'Tickets', grupo[1], nombrePeriodo(S.periodoTck), new Date().toISOString().slice(0, 10)].join('_'));
+      await guardarLibro(libro, ['MCD', 'Tickets', grupo[1] + (grupo[0] === 'gasolina' ? (S.gasTck === 'otras' ? ' otras' : ' ' + NOMBRE_GASOLINERA_TABLA) : ''),
+        nombrePeriodo(S.periodoTck), new Date().toISOString().slice(0, 10)].join('_'));
       estadoX.textContent = lista.length + ' tickets descargados';
     } catch (e) { estadoX.textContent = 'No se ha descargado: ' + mensajeError(e); }
     finally { excel.disabled = false; }
@@ -1052,10 +1095,11 @@ function vTickets(v, d) {
   v.appendChild(h('div', { class: 'herramientas' }, [pestanas,
     h('div', { class: 'fila-herramientas' }, [h('div', {}, [h('div', { class: 'sub' }, 'Total de ' + grupo[1].toLowerCase()),
       h('div', { class: 'total-grande' }, euros(sumaTotal(lista)) + ' · ' + lista.length + ' ticket' + (lista.length === 1 ? '' : 's'))]), h('div', { class: 'descarga-directa' }, [excel, estadoX])]),
-    h('div', { class: 'fila-herramientas' }, [h('label', { class: 'campo-corto' }, ['Fecha', periodo]), h('label', { class: 'campo-corto' }, ['Estado', estado])])]));
-  if (grupo[0] === 'gasolina') v.appendChild(h('p', { class: 'sub' }, ['Sin empresa = fondo común: cada ticket pasa solo a su empresa cuando llega la factura de la gasolinera. También se ven en ',
+    h('div', { class: 'fila-herramientas' }, [selectorGas, h('label', { class: 'campo-corto' }, ['Fecha', periodo]), h('label', { class: 'campo-corto' }, ['Estado', estado])])]));
+  if (grupo[0] === 'gasolina') v.appendChild(h('p', { class: 'sub' }, [S.gasTck === 'otras' ? 'Gasolineras que no son ' + NOMBRE_GASOLINERA_TABLA + ': no se comparan con la tabla de precios. ' : '',
+    'Sin empresa = fondo común: cada ticket pasa solo a su empresa cuando llega la factura de la gasolinera. También se ven en ',
     h('button', { type: 'button', class: 'boton enlace', onclick: function () { irA('combustible'); } }, 'Combustible'), ', comparados con la tabla de precios.']));
-  if (!lista.length) { v.appendChild(h('div', { class: 'tarjeta vacio' }, d.tickets.length ? 'No hay tickets de ' + grupo[1].toLowerCase() + ' en este periodo.' : 'Todavía no hay tickets en este periodo. Haz una foto para subir el primero.')); return; }
+  if (!lista.length) { v.appendChild(h('div', { class: 'tarjeta vacio' }, d.tickets.length ? 'No hay tickets de ' + (grupo[0] === 'gasolina' ? (S.gasTck === 'otras' ? 'otras gasolineras' : NOMBRE_GASOLINERA_TABLA) : grupo[1].toLowerCase()) + ' en este periodo.' : 'Todavía no hay tickets en este periodo. Haz una foto para subir el primero.')); return; }
 
   // Por AÑO y, dentro, por MES (lo más reciente primero; el último mes, abierto)
   var columnas = grupo[0] === 'gasolina'
@@ -1063,7 +1107,8 @@ function vTickets(v, d) {
     : ['Fecha', { t: 'Comercio', largo: 1 }].concat(grupo[0] === 'otros' ? ['Tipo'] : [], [{ t: 'Total', num: 1 }, { t: 'IVA', num: 1 }, 'Pago', 'Estado']);
   function fila(t) {
     var comunes = [t.fecha ? fecha(t.fecha) : '—'];
-    if (grupo[0] === 'gasolina') return { abrir: function () { fichaTicket(t); }, celdas: comunes.concat([t.estacion || t.comercio || '—', t.matricula || '—', { t: litros(t.litros), num: 1 },
+    if (grupo[0] === 'gasolina') return { abrir: function () { fichaTicket(t); }, celdas: comunes.concat([
+      (S.gasTck === 'otras' ? [t.comercio, t.estacion].filter(Boolean).join(' · ') : t.estacion || t.comercio) || '—', t.matricula || '—', { t: litros(t.litros), num: 1 },
       { t: t.total === null || t.total === undefined ? '—' : euros(t.total), num: 1 },
       t.empresa ? h('span', { class: 'pill ok' }, t.empresa) : h('span', { class: 'pill', title: 'Esperando la factura de la gasolinera' }, 'Fondo común'), pillEstado(t.estado)]) };
     return { abrir: function () { fichaTicket(t); }, celdas: comunes.concat([t.comercio || '—'], grupo[0] === 'otros' ? [t.categoria] : [],
