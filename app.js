@@ -1789,7 +1789,19 @@ function ficha(titulo, fila, contexto) {
       rpc('panel_descartar', { p_empresa: empresa, p_hoja: hoja, p_id: id }).then(function () { pendientes = 0; fichaSucia = null; guardandoFicha = false; cerrarModal(); avisoBreve(titulo + ' ' + id + ' descartado'); cargar(true); })
         .catch(function (e) { mensaje.textContent = mensajeError(e); mensaje.className = 'mensaje-ficha fallo'; ocupado(false); });
     } }, 'Descartar');
-    pie.appendChild(h('div', { class: 'acciones-revision' }, [descartar, guardar, marcar]));
+    // Revisión manual: volver a leer el documento tal como llegó (sin tacharlo a mano)
+    var releer = null;
+    if (hoja === 'revision' && base.estado === 'Reintentar') {
+      pie.appendChild(h('p', { class: 'ayuda-campo aviso-tachado' }, 'Ya se ha pedido volver a leerlo. En uno o dos minutos saldrá de esta lista y aparecerá como factura, albarán o ticket (o volverá aquí si sigue sin poder leerse).'));
+    } else if (hoja === 'revision') {
+      releer = h('button', { type: 'button', class: 'boton', title: 'El programa lo lee otra vez tal como llegó, con el mismo tachado automático', onclick: function () {
+        if (guardandoFicha || !confirm('¿Volver a leer este documento tal como llegó?\n\nÚsalo si crees que ahora el programa lo leerá bien (por ejemplo, tras una mejora o si falló por un corte). Tarda uno o dos minutos. Si lo que falta es tapar datos personales, usa «Tachar y enviar a la IA».')) return;
+        ocupado(true); releer.disabled = true; mensaje.className = 'mensaje-ficha'; mensaje.textContent = 'Pidiendo que se vuelva a leer…';
+        rpc('panel_reintentar_revision', { p_rev: id }).then(function () { pendientes = 0; fichaSucia = null; guardandoFicha = false; cerrarModal(); avisoBreve(titulo + ' ' + id + ': se volverá a leer en uno o dos minutos'); cargar(true); })
+          .catch(function (e) { mensaje.textContent = mensajeError(e); mensaje.className = 'mensaje-ficha fallo'; ocupado(false); releer.disabled = false; });
+      } }, 'Volver a leer');
+    }
+    pie.appendChild(h('div', { class: 'acciones-revision' }, (releer ? [releer] : []).concat([descartar, guardar, marcar])));
     formulario.addEventListener('submit', function (e) { e.preventDefault(); guardarCambios(false); });
   }
   var ampliar = h('button', { class: 'boton', 'aria-pressed': 'false', onclick: function () {
