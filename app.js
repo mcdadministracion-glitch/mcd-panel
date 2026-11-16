@@ -1242,18 +1242,28 @@ function fichaTicket(t) {
   // Foto: originales/AAAA-MM/<id>_<archivo> (el mes en que se leyó)
   var numero = secuenciaFicha, d0 = new Date(t.creado_en || Date.now());
   var meses = [0, -1].map(function (k) { var x = new Date(d0.getFullYear(), d0.getMonth() + k, 1); return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0'); });
-  (async function () {
+  async function buscarFoto() {
     for (var m of meses) {
       var l = await sb.storage.from('documentos').list('originales/' + m, { limit: 5, search: t.id_doc + '_' });
       var x = !l.error && (l.data || []).filter(function (o) { return o.id && o.name.indexOf(t.id_doc + '_') === 0; })[0];
-      if (x) {
-        await rpc('panel_registrar_acceso_archivo', { p_id: t.id_doc, p_tipo: 'original', p_accion: 'Ver documento' });
-        var url = await urlFirmada('originales/' + m + '/' + x.name);
-        if (numero !== secuenciaFicha) return;
-        visor.textContent = ''; visor.appendChild(visorPara(url, x.name)); return;
-      }
+      if (x) return { ruta: 'originales/' + m + '/' + x.name, nombre: x.name };
     }
-    if (numero === secuenciaFicha) { visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, 'No se encuentra la foto de este ticket.')); }
+    return null;
+  }
+  async function verFoto(foto) {
+    await rpc('panel_registrar_acceso_archivo', { p_id: t.id_doc, p_tipo: 'original', p_accion: 'Ver documento' });
+    var url = await urlFirmada(foto.ruta);
+    if (numero !== secuenciaFicha) return;
+    visor.textContent = ''; visor.appendChild(visorPara(url, foto.nombre));
+  }
+  (async function () {
+    var foto = await buscarFoto();
+    if (numero !== secuenciaFicha) return;
+    if (foto) return verFoto(foto);
+    // Ya no está en la web: se puede traer del ordenador
+    avisoEnElOrdenador(visor, { tipo: 'original', id_doc: t.id_doc, mes: meses[0] }, buscarFoto, function (traida) {
+      if (numero === secuenciaFicha) verFoto(traida).catch(function () {});
+    });
   })().catch(function () { if (numero === secuenciaFicha) { visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, 'La foto no está disponible ahora mismo.')); } });
 }
 
@@ -1320,12 +1330,59 @@ function vDocumentos(v, d) {
     miga.appendChild(i < d.camino.length - 1 ? h('button', { class: 'abrir-fila', type: 'button', onclick: function () { S.carpeta = ruta; cargar(true); } }, c) : h('b', {}, c));
   });
   v.appendChild(miga);
+  v.appendChild(h('p', { class: 'sub' }, 'Aquí están los originales de los últimos ' + DIAS_EN_LA_WEB + ' días. Los anteriores siguen guardados en el ordenador: ábrelos desde su factura, albarán o ticket con "Traer del ordenador".'));
   if (!d.elementos.length) { v.appendChild(h('div', { class: 'tarjeta vacio' }, 'Carpeta vacía. Los archivos aparecen aquí cuando el servicio termina de procesarlos.')); return; }
   tabla(v, [{ t: 'Nombre', largo: 1 }, 'Modificado', { t: 'Tamaño', num: 1 }], d.elementos.map(function (x) {
     var esCarpeta = x.tipo === 'carpeta';
     return { abrir: esCarpeta ? function () { S.carpeta = x.ruta; cargar(true); } : function () { vistaPreviaRuta(x.nombre, x.ruta); },
       celdas: [(esCarpeta ? '📁 ' : '📄 ') + x.nombre, x.fecha ? fecha(String(x.fecha).slice(0, 10)) + ' ' + hora(x.fecha) : '', { t: esCarpeta ? '' : tamano(x.tamano), num: 1 }] };
   }));
+}
+// ---------------------------------------------------------------------
+// ARCHIVOS QUE SOLO ESTÁN EN EL ORDENADOR (supabase/archivos_en_el_ordenador.sql, archivos_web.py)
+// En la web solo se quedan los originales de los últimos días; todos siguen en el ordenador.
+// ---------------------------------------------------------------------
+var DIAS_EN_LA_WEB = Number(CFG.DIAS_ARCHIVOS_EN_LA_WEB) || 15;
+var SEGUNDOS_MAX_TRAER = 120;
+function nombreSeguro(n) { return String(n || '').replace(/[\\\/:*?"<>|#%\[\]{}]/g, '_').replace(/^[. ]+|[. ]+$/g, '') || 'archivo'; }
+// Pide al ordenador el archivo y espera a que aparezca en la web. buscar() -> Promise(archivo o null)
+function traerDelOrdenador(pedido, buscar, aviso) {
+  return buscar().then(function (ya) {          // puede que alguien lo haya traído hace poco
+    if (ya) return ya;
+    aviso('Pidiendo el archivo al ordenador… suele tardar menos de un minuto.');
+    return pedirYEsperar(pedido, buscar);
+  });
+}
+function pedirYEsperar(pedido, buscar) {
+  return rpc('panel_pedir_archivo', { p_tipo: pedido.tipo, p_id_doc: pedido.id_doc, p_mes: pedido.mes || '', p_huella: pedido.huella || '' }).then(function (r) {
+    var inicio = Date.now();
+    return new Promise(function (ok, mal) {
+      (function mirar() {
+        buscar().then(function (archivo) {
+          if (archivo) { ok(archivo); return; }
+          return rpc('panel_archivo_pedido', { p_id: r && r.id }).then(function (e) {
+            if (e && e.atendido && e.resultado !== 'Subido') { mal(new Error(e.resultado === 'No está en el ordenador' ? 'Este archivo no está en el ordenador.' : (e.resultado || 'No se ha podido traer'))); return; }
+            if (Date.now() - inicio > SEGUNDOS_MAX_TRAER * 1000) { mal(new Error('El ordenador no ha respondido. ¿Está encendido y con el programa en marcha? Vuelve a intentarlo en un rato.')); return; }
+            setTimeout(mirar, 3000);
+          });
+        }).catch(mal);
+      })();
+    });
+  });
+}
+// Caja que se pinta en el visor cuando el archivo ya no está en la web
+function avisoEnElOrdenador(visor, pedido, buscar, alTraerlo) {
+  var estado = h('p', { class: 'sub', role: 'status' }, '');
+  var boton = h('button', { type: 'button', class: 'boton principal', onclick: function () {
+    boton.disabled = true;
+    traerDelOrdenador(pedido, buscar, function (t) { estado.textContent = t; }).then(alTraerlo, function (e) {
+      estado.textContent = mensajeError(e); boton.disabled = false;
+    });
+  } }, 'Traer del ordenador');
+  visor.textContent = '';
+  visor.appendChild(h('div', { class: 'vacio en-el-ordenador' }, [
+    h('p', {}, 'Este archivo está guardado en el ordenador. En la web solo se quedan los de los últimos ' + DIAS_EN_LA_WEB + ' días.'),
+    boton, estado]));
 }
 function urlFirmada(ruta) {
   return sb.storage.from('documentos').createSignedUrl(ruta, 600).then(function (r) { if (r.error) throw new Error(r.error.message); return r.data.signedUrl; });
@@ -1621,7 +1678,12 @@ function exportarOriginales(v) {
 function exportar(empresa, mes, estado) {
   if (!/^\d{4}-\d{2}$/.test(mes)) { estado.className = 'mensaje error'; estado.textContent = 'Selecciona el mes.'; return; }
   estado.className = 'mensaje'; estado.textContent = 'Preparando la exportación…';
-  var zip = new JSZip(), total = 0, faltan = [];
+  var zip = new JSZip(), total = 0, faltan = [], enElOrdenador = [];
+  function meter(f, d, blob) {
+    total += blob.size; if (total > 40 * 1024 * 1024) throw new Error('La exportación supera 40 MB; hazla por meses más cortos o descarga los archivos uno a uno.');
+    zip.file((f.id_doc + '_' + d.archivo_original).replace(/[\\/:*?"<>|]/g, '_'), blob);
+  }
+  function traerFaltan() { return traerParaExportar(enElOrdenador, meter, faltan, estado); }
   consulta(sb.from('facturas').select('id_doc,num_factura,fecha,estado').eq('empresa', empresa).gte('fecha', mes + '-01').lt('fecha', siguienteMes(mes)).neq('estado', 'Descartado')).then(function (r) {
     var facturas = r.data || [];
     if (!facturas.length) throw new Error('No hay facturas para esa empresa y mes');
@@ -1632,12 +1694,11 @@ function exportar(empresa, mes, estado) {
           var d = docs[f.id_doc]; if (!d || !d.archivo_original) { faltan.push(f.id_doc); return; }
           var ruta = 'originales/' + String(d.fecha_alta || '').slice(0, 7) + '/' + f.id_doc + '_' + String(d.archivo_original).replace(/[\\\/:*?"<>|#%\[\]{}]/g, '_').replace(/^[. ]+|[. ]+$/g, '');
           return sb.storage.from('documentos').download(ruta).then(function (rb) {
-            if (rb.error) { faltan.push(f.id_doc); return; }
-            total += rb.data.size; if (total > 40 * 1024 * 1024) throw new Error('La exportación supera 40 MB; hazla por meses más cortos o descarga los archivos uno a uno.');
-            zip.file((f.id_doc + '_' + d.archivo_original).replace(/[\\/:*?"<>|]/g, '_'), rb.data);
+            if (rb.error) { enElOrdenador.push({ f: f, d: d, ruta: ruta }); return; }     // ya no está en la web: se trae
+            meter(f, d, rb.data);
           });
         });
-      }, Promise.resolve()).then(function () { return facturas.length; });
+      }, Promise.resolve()).then(function () { return traerFaltan(); }).then(function () { return facturas.length; });
     });
   }).then(function (n) {
     if (faltan.length === n) throw new Error('No se ha encontrado ningún archivo original. Los archivos se guardan aquí cuando el servicio los procesa con el almacén nuevo.');
@@ -1646,6 +1707,36 @@ function exportar(empresa, mes, estado) {
       estado.className = 'mensaje ok'; estado.textContent = 'Exportadas ' + (n - faltan.length) + ' facturas' + (faltan.length ? '. Sin archivo: ' + faltan.join(', ') : '.');
     });
   }).catch(function (e) { estado.className = 'mensaje error'; estado.textContent = mensajeError(e); });
+}
+// Exportación: los originales que ya no están en la web se piden al ordenador y se espera a que lleguen
+function traerParaExportar(lista, meter, faltan, estado) {
+  if (!lista.length) return Promise.resolve();
+  estado.textContent = lista.length + ' archivo(s) están solo en el ordenador. Pidiéndolos… (suele tardar menos de un minuto)';
+  return Promise.all(lista.map(function (x) {
+    return rpc('panel_pedir_archivo', { p_tipo: 'original', p_id_doc: x.f.id_doc, p_mes: x.ruta.split('/')[1], p_huella: '' }).then(function (r) { x.peticion = r && r.id; }, function () { x.fallo = true; });
+  })).then(function () {
+    var inicio = Date.now(), pendientes = lista.filter(function (x) { return !x.fallo; });
+    lista.filter(function (x) { return x.fallo; }).forEach(function (x) { faltan.push(x.f.id_doc); });
+    return new Promise(function (ok, mal) {
+      (function mirar() {
+        Promise.all(pendientes.map(function (x) {
+          return sb.storage.from('documentos').download(x.ruta).then(function (rb) {
+            if (!rb.error) { meter(x.f, x.d, rb.data); x.hecho = true; return; }
+            return rpc('panel_archivo_pedido', { p_id: x.peticion }).then(function (e) { if (e && e.atendido && e.resultado !== 'Subido') { x.hecho = true; faltan.push(x.f.id_doc); } }, function () {});
+          });
+        })).then(function () {
+          pendientes = pendientes.filter(function (x) { return !x.hecho; });
+          if (!pendientes.length) return ok();
+          if (Date.now() - inicio > SEGUNDOS_MAX_TRAER * 1000) { pendientes.forEach(function (x) { faltan.push(x.f.id_doc); }); return ok(); }
+          estado.textContent = 'Esperando ' + pendientes.length + ' archivo(s) del ordenador…';
+          setTimeout(mirar, 4000);
+        }, function (e) {
+          if (e && /40 MB/.test(e.message)) { mal(e); return; }
+          pendientes.forEach(function (x) { faltan.push(x.f.id_doc); }); ok();
+        });
+      })();
+    });
+  });
 }
 function siguienteMes(m) { var a = Number(m.slice(0, 4)), n = Number(m.slice(5, 7)); return n === 12 ? (a + 1) + '-01-01' : a + '-' + String(n + 1).padStart(2, '0') + '-01'; }
 
@@ -1820,6 +1911,13 @@ function ficha(titulo, fila, contexto) {
     if (numero !== secuenciaFicha) return;
     opcionesDocumento.textContent = ''; estadoArchivo.textContent = '';
     function mostrar(tipo, archivo) {
+      if (!archivo.enWeb) {
+        avisoEnElOrdenador(visor, archivo.pedido, archivo.buscar, function (traido) {
+          if (numero !== secuenciaFicha) return;
+          d[tipo === 'original' ? 'original' : 'tachado'] = traido; mostrar(tipo, traido);
+        });
+        return;
+      }
       visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, 'Abriendo…'));
       rpc('panel_registrar_acceso_archivo', { p_id: id, p_tipo: tipo, p_accion: 'Ver documento' }).then(function () { return urlFirmada(archivo.ruta); }).then(function (url) {
         if (numero !== secuenciaFicha) return;
@@ -1830,7 +1928,7 @@ function ficha(titulo, fila, contexto) {
         if (S.rol === 'Administrador') estadoArchivo.appendChild(h('button', { class: 'boton', onclick: function () { descargar(archivo.ruta, archivo.nombre); } }, 'Descargar'));
       }).catch(function () { visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, 'La vista previa no está disponible. Puedes continuar revisando los datos.')); });
     }
-    [['Original', 'original', d.original], ['Copia tachada', 'tachado', d.tachado]].forEach(function (x) { if (x[2]) opcionesDocumento.appendChild(h('button', { class: 'boton', type: 'button', onclick: function () { mostrar(x[1], x[2]); } }, x[0])); });
+    [['Original', 'original', 'original'], ['Copia tachada', 'tachado', 'tachado']].forEach(function (x) { if (d[x[2]]) opcionesDocumento.appendChild(h('button', { class: 'boton', type: 'button', onclick: function () { mostrar(x[1], d[x[2]]); } }, x[0])); });
     // Revisión manual: tacharlo a mano y enviarlo a la IA (PDF o foto)
     if (hoja === 'revision' && editable && d.original && ENVIADOS_TACHADO[id]) {
       panelDocumento.appendChild(h('p', { class: 'ayuda-campo aviso-tachado' }, 'Ya se envió la copia tachada a la IA. En un minuto saldrá de esta lista y aparecerá como factura, albarán o ticket.'));
@@ -1839,12 +1937,14 @@ function ficha(titulo, fila, contexto) {
       panelDocumento.appendChild(h('div', { class: 'aviso-tachado' }, [      // fuera de estadoArchivo: la vista previa lo vacía al cargar
         h('button', { type: 'button', class: 'boton principal', disabled: tachable ? null : 'disabled', onclick: function () {
           if (fichaSucia && fichaSucia() && !confirm('Hay cambios sin guardar en la ficha. ¿Seguir sin guardarlos?')) return;
-          fichaSucia = null; abrirTachado(id, d.original);
+          fichaSucia = null;
+          if (d.original.enWeb) { abrirTachado(id, d.original); return; }
+          mostrar('original', d.original);           // primero hay que traerlo del ordenador
         } }, 'Tachar y enviar a la IA'),
         h('span', { class: 'sub' }, tachable ? 'Si no se leyó bien: tapa a mano los datos personales y envíalo.' : 'Este tipo de archivo no se puede tachar aquí (solo PDF o fotos).')]));
     }
     if (d.original) mostrar('original', d.original); else if (d.tachado) mostrar('tachado', d.tachado);
-    else { visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, 'No hay archivo guardado para este documento (los documentos anteriores al almacén nuevo siguen en la carpeta de Drive).')); }
+    else { visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, 'No hay archivo guardado para este documento.')); }
   }).catch(function () { if (numero === secuenciaFicha) { visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, 'La vista previa no está disponible. Puedes continuar revisando los datos.')); } });
 }
 // ---------------------------------------------------------------------
@@ -2012,12 +2112,22 @@ function localizarArchivos(empresa, hoja, id) {
                               : sb.from('documentos').select('archivo_original,hash_sha256,fecha_alta').eq('empresa', empresa).eq('id_doc', id).limit(1);
   return consulta(q.maybeSingle()).then(function (r) {
     var d = r.data || {}, mes = String(d.fecha_alta || '').slice(0, 7);
-    var buscarOriginal = mes ? sb.storage.from('documentos').list('originales/' + mes, { limit: 5, search: id + '_' }).then(function (l) {
-      var x = !l.error && (l.data || []).filter(function (o) { return o.id && o.name.indexOf(id + '_') === 0; })[0];
-      return x ? { ruta: 'originales/' + mes + '/' + x.name, nombre: x.name.slice(id.length + 1) } : null;
-    }) : Promise.resolve(null);
+    function buscarOriginal() {
+      if (!mes) return Promise.resolve(null);
+      return sb.storage.from('documentos').list('originales/' + mes, { limit: 5, search: id + '_' }).then(function (l) {
+        var x = !l.error && (l.data || []).filter(function (o) { return o.id && o.name.indexOf(id + '_') === 0; })[0];
+        return x ? { ruta: 'originales/' + mes + '/' + x.name, nombre: x.name.slice(id.length + 1), enWeb: true } : null;
+      });
+    }
     var tachado = d.hash_sha256 ? { ruta: 'tachados/' + d.hash_sha256 + '_tachado.pdf', nombre: id + '_tachado.pdf' } : null;
-    return Promise.all([buscarOriginal, existe(tachado)]).then(function (ok) { return { original: ok[0], tachado: ok[1] ? tachado : null }; });
+    function buscarTachado() { return existe(tachado).then(function (si) { return si ? Object.assign({}, tachado, { enWeb: true }) : null; }); }
+    return Promise.all([buscarOriginal(), buscarTachado()]).then(function (ok) {
+      // Lo que ya no está en la web sigue en el ordenador: se ofrece traerlo
+      var original = ok[0] || (mes && d.archivo_original ? { ruta: 'originales/' + mes + '/' + id + '_' + nombreSeguro(d.archivo_original), nombre: String(d.archivo_original),
+        enWeb: false, pedido: { tipo: 'original', id_doc: id, mes: mes }, buscar: buscarOriginal } : null);
+      var copia = ok[1] || (tachado ? Object.assign({}, tachado, { enWeb: false, pedido: { tipo: 'tachado', id_doc: id, huella: d.hash_sha256 }, buscar: buscarTachado }) : null);
+      return { original: original, tachado: copia };
+    });
   });
 }
 function existe(archivo) {
