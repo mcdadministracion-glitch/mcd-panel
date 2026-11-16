@@ -49,10 +49,14 @@ function pillEsperaFactura(a) {
   if (dias !== null && dias !== undefined && dias > DIAS_AVISO_ALBARAN) return h('span', { class: 'pill error', title: 'Lo normal es menos de ' + DIAS_AVISO_ALBARAN + ' días' }, 'Sin factura · ' + dias + ' días');
   return h('span', { class: 'pill', title: 'Es normal: la factura suele llegar después del albarán' }, 'Esperando factura' + (dias !== null && dias !== undefined ? ' · ' + dias + ' días' : ''));
 }
-// La tabla de precios es de Petronieves (EESS Nieves / Nieves Mobility): solo sus repostajes se comparan
-var NOMBRE_GASOLINERA_TABLA = 'Petronieves';
-function esNieves() {
-  return Array.prototype.some.call(arguments, function (x) { return /NIEVES/.test(String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase()); });
+// Gasolinera que manda la tabla de precios: solo sus repostajes se comparan. Se pone en config.js
+// (GASOLINERA_TABLA_NOMBRE y GASOLINERA_TABLA_TEXTO, el mismo texto que COMBUSTIBLE_GASOLINERA_CON_TABLA).
+var NOMBRE_GASOLINERA_TABLA = CFG.GASOLINERA_TABLA_NOMBRE || 'la gasolinera de la tabla';
+var TEXTO_GASOLINERA_TABLA = null;
+try { TEXTO_GASOLINERA_TABLA = CFG.GASOLINERA_TABLA_TEXTO ? new RegExp(CFG.GASOLINERA_TABLA_TEXTO) : null; } catch (e) { TEXTO_GASOLINERA_TABLA = null; }
+function esNieves() {          // (el nombre es histórico: "¿es de la gasolinera de la tabla?")
+  if (!TEXTO_GASOLINERA_TABLA) return false;
+  return Array.prototype.some.call(arguments, function (x) { return TEXTO_GASOLINERA_TABLA.test(String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase()); });
 }
 function pillEstado(t) {
   t = texto(t);
@@ -520,7 +524,7 @@ function pintar() {
   var ayudas = { inicio: 'Esto es lo que hay hoy en el sistema.', facturas: 'Emitidas: las que hace la empresa a sus clientes. Recibidas: las de proveedores. Pulsa una para verla y corregirla; el botón Excel descarga lo que ves filtrado.',
     albaranes: 'Emitidos: los que hace la empresa. Recibidos: los de proveedores. Pulsa un albarán para verlo; el botón Excel descarga lo que ves filtrado.', revision: 'Documentos que necesitan que alguien los mire.',
     combustible: 'Cada repostaje de las facturas de gasolinera comparado con el precio de ese día en la tabla que llega por correo.',
-    tickets: 'Comidas, peajes, gasolina y otros gastos, por año y mes. Sube la foto y se lee sola. La gasolina de Petronieves y la de otras gasolineras van por separado.',
+    tickets: 'Comidas, peajes, gasolina y otros gastos, por año y mes. Sube la foto y se lee sola. La gasolina de ' + NOMBRE_GASOLINERA_TABLA + ' y la de otras gasolineras van por separado.',
     documentos: 'Los originales y las copias tachadas que se enviaron a la IA.', negocio: 'Pagos y cobros vencidos, coste por camión y movimientos del mes.',
     usuarios: 'Quién puede entrar al panel. El acceso es solo por invitación.',
     historial: 'Quién ha cambiado qué y cuándo: lo que hacen las personas en el panel y lo que hace el programa solo. Nadie puede borrarlo ni modificarlo; se guarda 2 años (protección de datos).' };
@@ -925,7 +929,7 @@ function vCombustible(v, d) {
     metrica('documentos', sinPrecio.length ? 'naranja' : 'cian', String(sinPrecio.length), 'Sin comparar', sinPrecio.length ? 'Sin precio de ese día o estación (ver la nota)' : 'Todos tienen precio')]));
 
   v.appendChild(h('p', { class: 'sub' }, 'Solo se comparan con la tabla de precios los repostajes de ' + NOMBRE_GASOLINERA_TABLA +
-    ' (EESS Nieves). Los de otras gasolineras (bonÀrea, Fuel Iberia…) van aparte y no se comparan.'));
+    '. Los de otras gasolineras van aparte y no se comparan.'));
   v.appendChild(h('h3', {}, 'Repostajes más caros que la tabla (' + NOMBRE_GASOLINERA_TABLA + ')'));
   if (!caros.length) v.appendChild(h('div', { class: 'tarjeta vacio' }, reps.length ? 'Ningún repostaje supera el precio del día.' : 'Todavía no hay repostajes de ' + NOMBRE_GASOLINERA_TABLA + ' en este periodo.'));
   else tabla(v, ['Fecha', { t: 'Estación', largo: 1 }, 'Empresa', 'Matrícula', 'Combustible', { t: 'Litros', num: 1 }, { t: 'Facturado', num: 1 }, { t: 'Tabla', num: 1 },
