@@ -95,7 +95,7 @@ async function consultaTodo(crear, maximo) {
 var EMPRESAS = [];
 var S = { vista: 'inicio', empresa: null, todasEmpresas: true, buscar: '', filtro: 'Activos', periodo: '', periodoComb: 'mes', periodoTck: '', estadoTck: '', catTck: 'comidas', gasTck: 'nieves', tablaComb: '', sentido: 'recibidos', pagina: 1, carpeta: '', mes: mesActual(), datos: null, pendientes: 0, rol: null, usuario: null, denegado: false,
   periodoHis: 'mes', tipoHis: 'cambios', usuarioHis: '', empresaHis: '' };
-var VISTAS = [['inicio', 'Inicio'], ['facturas', 'Facturas'], ['albaranes', 'Albaranes'], ['revision', 'Pendientes'], ['combustible', 'Combustible'], ['tickets', 'Tickets'], ['documentos', 'Archivos'], ['negocio', 'Vencimientos']];
+var VISTAS = [['inicio', 'Inicio'], ['facturas', 'Facturas'], ['albaranes', 'Albaranes'], ['revision', 'Por revisar'], ['combustible', 'Combustible'], ['tickets', 'Tickets'], ['documentos', 'Archivos'], ['negocio', 'Vencimientos']];
 var temporizadorBusqueda = null, secuenciaCarga = 0;
 
 // ---------------------------------------------------------------------
@@ -332,9 +332,8 @@ function tarjetaExcelGestoria() {
     } catch (err) { estado.textContent = 'No se ha descargado: ' + mensajeError(err); }
     finally { boton.disabled = false; }
   } }, [iconoPanel('excel'), 'Descargar Excel']);
-  return h('section', { class: 'tarjeta tarjeta-excel', 'aria-label': 'Excel para la gestoría' }, [
-    h('div', { class: 'tarjeta-titulo' }, [h('span', { class: 'icono-redondo verde' }, iconoPanel('excel')), h('div', {}, [h('h2', {}, 'Excel para la gestoría'),
-      h('p', { class: 'sub' }, 'Un archivo con el resumen por empresa, todas las facturas y todos los albaranes del periodo.')])]),
+  return h('section', { class: 'bloque tarjeta-excel', 'aria-label': 'Excel para la gestoría' }, [
+    h('h2', {}, 'Excel para la gestoría'), h('p', { class: 'sub hueco-abajo' }, 'Resumen por empresa, facturas y albaranes del periodo, en un solo archivo.'),
     h('div', { class: 'excel-campos' }, [h('label', {}, ['Empresa', empresa]), h('label', {}, ['Periodo', periodo, mes]), boton]), estado]);
 }
 
@@ -349,7 +348,7 @@ function iconoPanel(vista) {
     tickets:'M6 2h12v20l-2-1.5-2 1.5-2-1.5-2 1.5-2-1.5L6 22z M9 7h6 M9 11h6 M9 15h4',
     historial:'M12 21a9 9 0 1 0 0-18 9 9 0 1 0 0 18 M12 7v5l3 2',
     camara:'M3 8h4l2-3h6l2 3h4v11H3z M12 17a4 4 0 1 0 0-8 4 4 0 1 0 0 8',
-    excel:'M4 3h11l5 5v13H4z M14 3v6h6 M8 12l5 6 M13 12l-5 6', subir:'M12 16V4 M7 9l5-5 5 5 M4 15v5h16v-5', usuarios:'M8 11a4 4 0 1 0 0-8 4 4 0 1 0 0 8 M2 21v-3a6 6 0 0 1 12 0v3 M16 7a3 3 0 0 1 0 6 M17 16a5 5 0 0 1 5 5'
+    excel:'M4 3h11l5 5v13H4z M14 3v6h6 M8 12l5 6 M13 12l-5 6', mas:'M4 6h16 M4 12h16 M4 18h16', subir:'M12 16V4 M7 9l5-5 5 5 M4 15v5h16v-5', usuarios:'M8 11a4 4 0 1 0 0-8 4 4 0 1 0 0 8 M2 21v-3a6 6 0 0 1 12 0v3 M16 7a3 3 0 0 1 0 6 M17 16a5 5 0 0 1 5 5'
   };
   var ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg'), path = document.createElementNS(ns, 'path');
   svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('aria-hidden','true'); svg.setAttribute('class','icono-panel');
@@ -366,8 +365,10 @@ function pintarMenu() {
   }));
   movil.value = S.vista; movil.addEventListener('change', function () { irA(movil.value); });
   if (puedeSubir()) nav.appendChild(h('button', { type: 'button', class: 'nav-subir', title: 'Facturas, albaranes, tickets o tablas de precios',
-    onclick: function () { var e = document.getElementById('subidaGlobal'); if (e) e.click(); } }, [iconoPanel('subir'), 'Subir documentos']));
-  nav.appendChild(movil);
+    onclick: function () { var e = document.getElementById('subidaGlobal'); if (e) e.click(); } }, [iconoPanel('subir'), h('span', {}, ['Subir', h('span', { class: 'solo-escritorio' }, ' documentos')])]));
+  // En el móvil, "Más" es un desplegable de verdad (todas las secciones) tapado por el botón: se lee bien con lector de pantalla
+  var otra = S.vista !== 'inicio' && S.vista !== 'revision', actual = secciones.filter(function (v) { return v[0] === S.vista; })[0];
+  nav.appendChild(h('label', { class: 'nav-mas' + (otra ? ' activo' : '') }, [iconoPanel('mas'), h('span', {}, otra && actual ? actual[1] : 'Más'), movil]));
   secciones.forEach(function (v) {
     nav.appendChild(h('button', { class: 'nav-' + v[0] + (S.vista === v[0] ? ' activo' : ''), 'aria-current': S.vista === v[0] ? 'page' : null, onclick: function () { irA(v[0]); } },
       [iconoPanel(v[0]), v[1], v[0] === 'revision' && S.pendientes ? h('span', { class: 'num' }, S.pendientes) : null]));
@@ -385,7 +386,7 @@ function pintarCabecera(ini) {
   if (EMPRESAS.indexOf(S.empresa) < 0) S.empresa = EMPRESAS[0] || null;
   S.rol = u.rol; S.usuario = u;
   var cont = document.getElementById('usuario'); cont.textContent = '';
-  cont.appendChild(document.createTextNode(u.nombre || u.email || ''));
+  cont.appendChild(h('span', { class: 'nombre-usuario' }, u.nombre || u.email || ''));
   cont.appendChild(h('span', { class: 'pill marca' }, u.rol || ''));
   cont.appendChild(h('button', { class: 'boton', onclick: salir }, 'Salir'));
   var p = document.getElementById('estadoServicio'); p.hidden = false;
@@ -407,7 +408,7 @@ function pantallaAcceso(modo, aviso) {
   var clave = h('input', { type: 'password', autocomplete: modo === 'nueva' ? 'new-password' : 'current-password', minlength: '8', placeholder: 'Mínimo 8 caracteres' });
   var mensaje = h('div', { class: 'mensaje' + (aviso ? ' ' + aviso.tipo : '') }, aviso ? aviso.texto : '');
   var titulos = { entrar: 'Entrar', olvido: 'Recuperar contraseña', nueva: 'Guardar contraseña' };
-  var ayuda = { entrar: 'El acceso es solo por invitación. Si aún no la tienes, pídesela al administrador.',
+  var ayuda = { entrar: 'Facturas, albaranes y tickets del grupo, en un solo sitio. Entra con tu correo; si aún no tienes acceso, pídeselo al administrador.',
     olvido: 'Te enviaremos un correo con un enlace para poner una contraseña nueva.',
     nueva: 'Elige la contraseña con la que entrarás al panel (mínimo 8 caracteres).' };
   var boton = h('button', { class: 'boton principal', type: 'submit' }, titulos[modo]);
@@ -520,15 +521,15 @@ function pintar() {
   var cursor = busqueda ? busqueda.selectionStart : null;
   var vista = document.getElementById('vista'); vista.textContent = '';
   var titulos = { inicio: 'Hola' + (S.usuario && S.usuario.nombre ? ', ' + S.usuario.nombre.split(' ')[0] : ''), facturas: 'Facturas', albaranes: 'Albaranes',
-    revision: 'Pendientes de revisar', combustible: 'Combustible', tickets: 'Tickets', documentos: 'Archivos', negocio: 'Vencimientos y costes', usuarios: 'Usuarios del panel', historial: 'Historial de cambios' };
-  var ayudas = { inicio: 'Esto es lo que hay hoy en el sistema.', facturas: 'Emitidas: las que hace la empresa a sus clientes. Recibidas: las de proveedores. Pulsa una para verla y corregirla; el botón Excel descarga lo que ves filtrado.',
-    albaranes: 'Emitidos: los que hace la empresa. Recibidos: los de proveedores. Pulsa un albarán para verlo; el botón Excel descarga lo que ves filtrado.', revision: 'Documentos que necesitan que alguien los mire.',
+    revision: 'Por revisar', combustible: 'Combustible', tickets: 'Tickets', documentos: 'Archivos', negocio: 'Vencimientos y costes', usuarios: 'Usuarios del panel', historial: 'Historial de cambios' };
+  var ayudas = { inicio: 'Esto es lo que hay hoy en el sistema.', facturas: 'Recibidas: las de proveedores. Emitidas: las que hacéis a vuestros clientes. Pulsa una para verla o corregirla.',
+    albaranes: 'Recibidos: los de proveedores. Emitidos: los que hacéis vosotros. Pulsa uno para verlo.', revision: 'Lo que el programa no ha podido dar por bueno. Ábrelo, corrige lo que haga falta y márcalo como revisado.',
     combustible: 'Cada repostaje de las facturas de gasolinera comparado con el precio de ese día en la tabla que llega por correo.',
     tickets: 'Comidas, peajes, gasolina y otros gastos, por año y mes. Sube la foto y se lee sola. La gasolina de ' + NOMBRE_GASOLINERA_TABLA + ' y la de otras gasolineras van por separado.',
     documentos: 'Los originales y las copias tachadas que se enviaron a la IA.', negocio: 'Pagos y cobros vencidos, coste por camión y movimientos del mes.',
     usuarios: 'Quién puede entrar al panel. El acceso es solo por invitación.',
     historial: 'Quién ha cambiado qué y cuándo: lo que hacen las personas en el panel y lo que hace el programa solo. Nadie puede borrarlo ni modificarlo; se guarda 2 años (protección de datos).' };
-  vista.appendChild(h('div', { class: 'cab-vista' }, [h('div', {}, [h('h1', {}, titulos[S.vista]), h('p', { class: 'sub' }, ayudas[S.vista])])]));
+  if (S.vista !== 'inicio') vista.appendChild(h('div', { class: 'cab-vista' }, [h('div', {}, [h('h1', {}, titulos[S.vista]), h('p', { class: 'sub' }, ayudas[S.vista])])]));
   ({ inicio: vInicio, facturas: vFacturas, albaranes: vAlbaranes, revision: vRevision, combustible: vCombustible, tickets: vTickets, documentos: vDocumentos, usuarios: vUsuarios, negocio: vNegocio, historial: vHistorial })[S.vista](vista, S.datos);
   if (busqueda && document.getElementById('busquedaTabla')) { var n = document.getElementById('busquedaTabla'); n.focus(); n.setSelectionRange(cursor, cursor); }
 }
@@ -539,26 +540,43 @@ function pintar() {
 function vInicio(v, d) {
   var s = d.servicio || {};
   function sumar(campo) { return d.empresas.reduce(function (n, e) { return n + Number(e[campo] || 0); }, 0); }
-  function tarjeta(clave, nombre, valor, ayuda, color) {
-    return h('button', { type: 'button', class: 'metrica ' + color, onclick: function () { S.todasEmpresas = true; irA(clave); } }, [
-      h('span', { class: 'icono-redondo ' + color }, iconoPanel(clave)),
-      h('span', { class: 'metrica-texto' }, [h('strong', {}, String(valor)), h('span', { class: 'metrica-nombre' }, nombre), h('span', { class: 'metrica-ayuda' }, ayuda)])]);
+  function cuantos(n, uno, varios) { return n + ' ' + (n === 1 ? uno : varios); }
+  // 1) Lo único importante al entrar: lo que hay por revisar
+  var pendientes = contarPendientes(d), conAvisos = sumar('documentosConAvisos'), manual = Number(d.enRevisionManual || 0), tickets = Number(d.ticketsRevisar || 0);
+  var partes = [];
+  if (conAvisos) partes.push(cuantos(conAvisos, 'factura o albarán con algún aviso', 'facturas o albaranes con algún aviso'));
+  if (manual) partes.push(cuantos(manual, 'documento que no se pudo leer solo', 'documentos que no se pudieron leer solos'));
+  if (tickets) partes.push(cuantos(tickets, 'ticket', 'tickets'));
+  var lead = partes.length > 1 ? partes.slice(0, -1).join(', ') + ' y ' + partes[partes.length - 1] + '.' : partes.length ? partes[0] + '.' : '';
+  var hoy = new Date().toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
+  v.appendChild(h('section', { class: 'foco', 'aria-labelledby': 'tituloInicio' }, [
+    h('div', {}, [
+      h('p', { class: 'dia' }, hoy),
+      h('h1', { id: 'tituloInicio' }, pendientes ? 'Hay ' + cuantos(pendientes, 'documento', 'documentos') + ' por revisar' : 'Todo revisado'),
+      h('p', { class: 'lead' }, pendientes ? lead : 'No hay nada pendiente. Lo que llegue por correo o subáis aquí se lee solo.'),
+      pendientes ? h('div', { class: 'acciones' }, [h('button', { type: 'button', class: 'boton principal', onclick: function () { irA('revision'); } }, 'Empezar a revisar')]) : null]),
+    h('div', { class: 'senal' + (pendientes ? '' : ' al-dia'), 'aria-hidden': 'true' }, [h('b', {}, String(pendientes)), h('span', {}, pendientes ? 'Por revisar' : 'Al día')])]));
+
+  // 2) Subir documentos
+  if (puedeSubir()) v.appendChild(tarjetaSubir());
+
+  // 3) Las cifras en una línea (Facturas y Albaranes se pueden pulsar)
+  function cifra(clave, nombre, valor, ayuda) {
+    var hijos = [h('span', { class: 'metrica-texto' }, [h('span', { class: 'metrica-nombre' }, nombre), h('strong', {}, String(valor)), h('span', { class: 'metrica-ayuda' }, ayuda)])];
+    return clave ? h('button', { type: 'button', class: 'metrica', onclick: function () { S.todasEmpresas = true; irA(clave); } }, hijos)
+      : h('div', { class: 'metrica', style: 'cursor:default' }, hijos);
   }
-  var pendientes = contarPendientes(d);
-  v.appendChild(h('div', { class: 'metricas' }, [
-    tarjeta('revision', 'Pendientes de revisar', pendientes, pendientes ? 'Pulsa para verlos' : 'Todo al día', pendientes ? 'naranja' : 'verde'),
-    tarjeta('facturas', 'Facturas', sumar('facturas'), sumar('emitidas') + ' emitidas · ' + sumar('recibidas') + ' recibidas', 'azul'),
-    tarjeta('albaranes', 'Albaranes', sumar('albaranes'), sumar('pendientes') + ' esperando factura' + (sumar('tardanFactura') ? ' · ' + sumar('tardanFactura') + ' con retraso' : ''), 'cian')]));
+  v.appendChild(h('div', { class: 'metricas', role: 'group', 'aria-label': 'Resumen' }, [
+    cifra('facturas', 'Facturas', sumar('facturas'), sumar('recibidas') + ' recibidas · ' + sumar('emitidas') + ' emitidas'),
+    cifra('albaranes', 'Albaranes', sumar('albaranes'), sumar('pendientes') + ' esperando factura' + (sumar('tardanFactura') ? ' · ' + sumar('tardanFactura') + ' con retraso' : '')),
+    cifra(null, 'Coste de la IA', costeEuros(d.costeMes), 'este mes')]));
 
   var columnas = h('div', { class: 'inicio-columnas' });
   var izquierda = h('div', { class: 'columna' }), derecha = h('div', { class: 'columna' });
   columnas.appendChild(izquierda); columnas.appendChild(derecha); v.appendChild(columnas);
 
-  izquierda.appendChild(tarjetaExcelGestoria());
-  if (S.rol === 'Revisor' || S.rol === 'Administrador') izquierda.appendChild(tarjetaSubir());
-
-  // Empresas: lo esencial a la vista, sin desplegables
-  derecha.appendChild(h('section', { class: 'tarjeta' }, [h('h2', {}, 'Empresas'), h('div', { class: 'lista-empresas' }, d.empresas.map(function (e) {
+  // 4a) Empresas: lo esencial a la vista
+  izquierda.appendChild(h('section', { class: 'bloque' }, [h('h2', {}, 'Empresas'), h('div', { class: 'lista-empresas' }, d.empresas.map(function (e) {
     return h('div', { class: 'empresa-fila' }, [
       h('div', { class: 'empresa-nombre' }, [h('b', {}, e.nombre), e.cif ? h('span', { class: 'sub' }, 'CIF ' + e.cif) : null]),
       h('div', { class: 'empresa-datos' }, [
@@ -566,18 +584,19 @@ function vInicio(v, d) {
         h('button', { type: 'button', class: 'dato', onclick: function () { S.empresa = e.nombre; S.todasEmpresas = false; irA('albaranes'); } }, [h('b', {}, String(e.albaranes || 0)), ' albaranes']),
         Number(e.documentosConAvisos) ? h('button', { type: 'button', class: 'dato aviso', onclick: function () { irA('revision'); } }, [h('b', {}, String(e.documentosConAvisos)), ' por revisar']) : null])]);
   }))]));
+  izquierda.appendChild(tarjetaExcelGestoria());
 
-  // Últimos documentos (pulsables)
-  derecha.appendChild(h('section', { class: 'tarjeta' }, [h('h2', {}, 'Últimos documentos'), d.ultimos.length ? h('ul', { class: 'ultimos' }, d.ultimos.map(function (x) {
+  // 4b) Lo último que ha llegado
+  derecha.appendChild(h('section', { class: 'bloque' }, [h('h2', {}, 'Lo último que ha llegado'), d.ultimos.length ? h('ul', { class: 'ultimos' }, d.ultimos.map(function (x) {
     return h('li', {}, [h('span', { class: 'ultimo-id' }, x.id), h('span', { class: 'ultimo-archivo' }, x.archivo || ''), h('span', { class: 'ultimo-empresa' }, x.empresa), pillEstado(x.estado), h('span', { class: 'ultimo-fecha' }, fecha(x.fecha))]);
   })) : h('p', { class: 'vacio' }, 'Aún no ha llegado ningún documento.')]));
 
-  // Estado del servicio en una línea
+  // 5) Estado del servicio en una línea
   var vivo = s.conocido && (Date.now() - new Date(s.latido).getTime()) < 3 * 60 * 1000;
   v.appendChild(h('p', { class: 'linea-servicio' }, s.conocido ? [
     h('span', { class: 'punto ' + (vivo ? 'ok' : 'error') }), vivo ? 'Servicio en marcha' : 'Servicio parado (¿está encendido el ordenador?)',
     ' · última señal ' + hora(s.latido), ' · Gmail ' + (s.gmail_conectado ? 'conectado' : 'desconectado'),
-    s.ultima_vuelta ? ' · última vuelta ' + hora(s.ultima_vuelta.hora) : '', ' · coste de la IA este mes ' + costeEuros(d.costeMes)
+    s.ultima_vuelta ? ' · última vuelta ' + hora(s.ultima_vuelta.hora) : ''
   ] : 'El servicio aún no ha enviado su estado.'));
   if (S.rol === 'Administrador') lineaCopias(v);
 }
@@ -737,17 +756,18 @@ function tarjetaSubir() {
   var estado = h('span', { class: 'mensaje-ficha', role: 'status' });
   var lista = h('ul', { class: 'lista-subidas', id: 'listaSubidas', 'aria-live': 'polite', hidden: 'hidden' });
   var botones = h('div', { class: 'tickets-subir' }, [
-    h('label', { class: 'boton-grande principal', for: 'camaraSubir' }, [iconoPanel('camara'), h('span', {}, [h('b', {}, 'Hacer foto'), h('small', {}, 'Ticket, factura o albarán en papel')])]),
-    h('label', { class: 'boton-grande', for: 'archivoSubir' }, [iconoPanel('subir'), h('span', {}, [h('b', {}, 'Elegir archivos'), h('small', {}, 'O arrástralos a cualquier parte de la página')])])]);
+    h('label', { class: 'boton-grande principal', for: 'camaraSubir' }, [iconoPanel('camara'), h('b', {}, 'Hacer foto')]),
+    h('label', { class: 'boton-grande', for: 'archivoSubir' }, [iconoPanel('subir'), h('b', {}, 'Elegir archivos')])]);
   [archivo, camara].forEach(function (inp) { inp.addEventListener('change', function () { if (inp.files.length) { var fs = Array.from(inp.files); inp.value = ''; subirArchivos(fs); } }); });
   var procesar = h('button', { type: 'button', class: 'boton', onclick: function () {
     rpc('panel_procesar_ahora').then(function (r) { estado.className = 'mensaje-ficha exito'; estado.textContent = r && r.repetida ? 'Ya había una orden pendiente; el servicio la atenderá.' : 'Orden enviada: el servicio revisará el correo ahora.'; })
       .catch(function (e) { estado.className = 'mensaje-ficha fallo'; estado.textContent = mensajeError(e); });
   } }, 'Revisar el correo ahora');
-  var tarjeta = h('section', { class: 'tarjeta' }, [h('div', { class: 'tarjeta-titulo' }, [h('span', { class: 'icono-redondo azul' }, iconoPanel('subir')), h('div', {}, [h('h2', {}, 'Subir documentos y tickets'),
-    h('p', { class: 'sub' }, 'Todo aquí: facturas, albaranes, tickets o tablas de precios. El sistema los separa solo y cada uno va a su sección.')])]),
-    archivo, camara, botones, h('p', { class: 'sub' }, 'PDF, fotos, Word, Excel, XML o ZIP · máximo 15 MB cada uno. En las fotos: de frente, con buena luz y el papel entero.'),
-    lista, h('div', { class: 'en-linea' }, [procesar, estado])]);
+  var tarjeta = h('section', { class: 'banda-subir', 'aria-labelledby': 'tituloSubir' }, [
+    h('div', { class: 'fila-subir' }, [h('div', {}, [h('h2', { id: 'tituloSubir' }, 'Subir documentos'),
+      h('p', { class: 'sub' }, 'Facturas, albaranes, tickets o tablas de precios. Arrástralos a la página o elige cómo; cada uno va solo a su sección.')]), botones]),
+    archivo, camara, lista,
+    h('div', { class: 'pie-subir' }, [h('span', {}, 'PDF, fotos, Word, Excel, XML o ZIP, hasta 15 MB. Fotos de frente, con luz y el papel entero.'), procesar, estado])]);
   setTimeout(pintarSubidas, 0);
   return tarjeta;
 }
