@@ -1508,7 +1508,7 @@ function vUsuarios(v, usuarios) {
       .catch(function (e) { msg.className = 'mensaje error'; msg.textContent = mensajeError(e); });
   } }, 'Reenviar invitación');
   v.appendChild(h('div', { class: 'tarjeta' }, [h('h2', {}, 'Añadir o cambiar un usuario'),
-    h('p', { class: 'sub' }, 'Al guardar un correo nuevo le llega en menos de un minuto un correo para elegir su contraseña. Para cambiar a alguien, pulsa su correo en la lista.'),
+    h('p', { class: 'sub' }, 'Al guardar un correo nuevo le llega en menos de un minuto un correo para elegir su contraseña. Si no le llega, que mire en el correo no deseado; mientras no haya entrado nunca, «Reenviar invitación» se lo manda otra vez. Para cambiar a alguien, pulsa su correo en la lista.'),
     h('ul', { class: 'roles' }, [h('li', {}, [h('b', {}, 'Lector: '), 've facturas, albaranes y archivos, y descarga Excel (por ejemplo, la gestoría).']),
       h('li', {}, [h('b', {}, 'Revisor: '), 'además corrige fichas, sube documentos y marca revisado.']),
       h('li', {}, [h('b', {}, 'Administrador: '), 'además gestiona usuarios y reglas.'])]),
@@ -1524,13 +1524,20 @@ function vUsuarios(v, usuarios) {
       clearTimeout(temporizadorBusqueda); S.vista = 'historial'; S.buscar = ''; S.tipoHis = 'accesos'; S.periodoHis = 'mes'; S.usuarioHis = ''; S.empresaHis = ''; S.pagina = 1;
       pintarMenu(); cargar(true); window.scrollTo(0, 0);
     } }, 'Historial → Entradas al panel'), '.']));
+  // El servicio anota "Ya tiene cuenta activa..." cuando la persona ya ha entrado alguna vez (no se le manda invitación)
+  function yaTieneCuenta(u) { return String(u.invitacion_error || '').indexOf('Ya tiene cuenta') === 0; }
   function estadoInvitacion(u) {
     if (!u.activo) return 'Desactivado';
+    if (yaTieneCuenta(u)) return 'Ya tiene cuenta';
     if (u.invitacion_error) return 'Error al invitar';
     return u.invitado_en ? 'Enviada ' + fecha(String(u.invitado_en).slice(0, 10)) : 'Pendiente de enviar';
   }
   tabla(v, ['Correo', 'Nombre', 'Rol', 'Activo', 'Invitación', 'Último acceso'], usuarios.map(function (u) {
-    return { celdas: [u.email, u.nombre, u.rol, u.activo ? 'Sí' : 'No', estadoInvitacion(u), u.ultimo_acceso ? fechaHora(u.ultimo_acceso) : 'Nunca'], abrir: function () { email.value = u.email; nombre.value = u.nombre || ''; rol.value = u.rol; activo.checked = !!u.activo; email.focus(); } };
+    return { celdas: [u.email, u.nombre, u.rol, u.activo ? 'Sí' : 'No', estadoInvitacion(u), u.ultimo_acceso ? fechaHora(u.ultimo_acceso) : 'Nunca'], abrir: function () { email.value = u.email; nombre.value = u.nombre || ''; rol.value = u.rol; activo.checked = !!u.activo; email.focus();
+      // Al elegir a alguien se dice por qué no le llegó la invitación (si es el caso)
+      var motivo = u.activo ? String(u.invitacion_error || '') : '';
+      msg.className = motivo && !yaTieneCuenta(u) ? 'mensaje error' : 'mensaje';
+      msg.textContent = !motivo ? '' : (yaTieneCuenta(u) ? motivo : 'No se pudo enviar la invitación: ' + motivo); } };
   }));
 }
 // ---------------------------------------------------------------------
