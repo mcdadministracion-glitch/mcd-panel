@@ -564,7 +564,7 @@ function cargar(mostrarCargando, conservarBarra) {
     var tablaAnterior = !mostrarCargando && vista.querySelector('.tabla');
     var desplazamiento = tablaAnterior && [tablaAnterior.scrollLeft, tablaAnterior.scrollTop];
     S.datos = d;
-    if (solicitud.vista === 'inicio') { if (d.diasAvisoAlbaran) DIAS_AVISO_ALBARAN = d.diasAvisoAlbaran; pintarCabecera(d); S.pendientes = contarPendientes(d); pintarMenu(); }
+    if (solicitud.vista === 'inicio') { if (d.diasAvisoAlbaran) DIAS_AVISO_ALBARAN = d.diasAvisoAlbaran; MINIATURAS = !!(d.servicio && d.servicio.miniaturas); pintarCabecera(d); S.pendientes = contarPendientes(d); pintarMenu(); }
     if (solicitud.vista === 'revision') { S.pendientes = contarDocumentosRevision(d); pintarMenu(); }
     pintar();
     var tablaActual = desplazamiento && vista.querySelector('.tabla');
@@ -684,7 +684,7 @@ function vInicio(v, d) {
   // Primero el nombre del archivo; en cuanto se sabe qué es, lo que se reconoce ("Almacenes Ejemplo · albarán 12345 · 16/11"). El ID, en pequeño.
   var listaUltimos = h('ul', { class: 'ultimos' }, d.ultimos.map(function (x) {
     var visto = DOCUMENTOS_VISTOS[x.id];
-    return h('li', { 'data-id': x.id }, [h('span', { class: 'ultimo-nombre' }, [
+    return h('li', { 'data-id': x.id }, [h('span', { class: 'ultimo-nombre' }, [cajaMiniatura(/^REV-/.test(x.id) ? 'revision' : 'documentos', x.id),
       h('span', { class: 'ultimo-archivo' + (visto ? ' con-nombre' : '') }, visto ? nombreDocumento(visto.hoja, visto.fila) : x.archivo || ''), h('small', { class: 'id-doc' }, x.id)]),
       h('span', { class: 'ultimo-empresa' }, x.empresa), pillEstado(x.estado), h('span', { class: 'ultimo-fecha' }, fecha(x.fecha))]);
   }));
@@ -695,6 +695,7 @@ function vInicio(v, d) {
     });
   });
   derecha.appendChild(h('section', { class: 'bloque' }, [h('h2', {}, 'Lo último que ha llegado'), d.ultimos.length ? listaUltimos : h('p', { class: 'vacio' }, 'Aún no ha llegado ningún documento.')]));
+  ponerMiniaturas(listaUltimos);
 
   // 5) Estado del servicio en una línea
   var vivo = s.conocido && (Date.now() - new Date(s.latido).getTime()) < 3 * 60 * 1000;
@@ -935,7 +936,7 @@ function vFacturas(v, d) {
   var c = document.getElementById('cuerpo'), conTipo = !S.sentido;
   var quien = S.sentido === 'emitidos' ? 'Cliente' : S.sentido === 'recibidos' ? 'Proveedor' : 'Cliente / proveedor';
   tabla(c, ['Nº factura', 'Fecha', { t: quien, largo: 1 }, 'Empresa'].concat(conTipo ? ['Tipo'] : [], [{ t: 'Total', num: 1 }, 'Vence', 'Estado']), d.filas.map(function (f) {
-    return { abrir: function () { ficha('Factura', f, { empresa: f.empresa, hoja: 'facturas' }); },
+    return { mini: { hoja: 'facturas', id: f.id_doc }, abrir: function () { ficha('Factura', f, { empresa: f.empresa, hoja: 'facturas' }); },
       celdas: [numeroOSinNumero(f.num_factura, f.id_doc), fecha(f.fecha), f.nombre, f.empresa].concat(conTipo ? [f.tipo_factura || 'Sin indicar'] : [],
         [{ t: euros(f.total), num: 1 }, vence(f.fecha_vencimiento), pillEstado(f.estado)]) };
   }), 'Factura');
@@ -965,7 +966,7 @@ function vAlbaranes(v, d) {
     return pill;
   }
   tabla(c, ['Nº albarán', 'Fecha', { t: quien, largo: 1 }, 'Empresa'].concat(conTipo ? ['Tipo'] : [], ['Ruta', { t: 'Importe', num: 1 }, 'Factura']), d.filas.map(function (f) {
-    return { abrir: function () { ficha('Albarán', f, { empresa: f.empresa, hoja: 'albaranes' }); },
+    return { mini: { hoja: 'albaranes', id: f.id_doc }, abrir: function () { ficha('Albarán', f, { empresa: f.empresa, hoja: 'albaranes' }); },
       celdas: [numeroConPack(f, (d.anexos || {})[f.empresa + '|' + f.id_doc]), fecha(f.fecha), f.nombre, f.empresa].concat(conTipo ? [f.tipo_albaran || 'Sin indicar'] : [],
         [[f.origen, f.destino].filter(Boolean).join(' → '), { t: euros(f.importe), num: 1 },
         f.factura_vinculada ? h('span', { class: 'pill ok' }, f.factura_vinculada) : f.estado_factura === 'PENDIENTE DE FACTURA' ? pillEsperaFactura(f) : pillVaCon(f)]) };
@@ -1322,11 +1323,12 @@ function vTickets(v, d) {
     : ['Fecha', { t: 'Comercio', largo: 1 }].concat(grupo[0] === 'otros' ? ['Tipo'] : [], [{ t: 'Total', num: 1 }, { t: 'IVA', num: 1 }, 'Pago', 'Estado']);
   function fila(t) {
     var comunes = [t.fecha ? fecha(t.fecha) : '—'];
-    if (grupo[0] === 'gasolina') return { abrir: function () { fichaTicket(t); }, celdas: comunes.concat([
+    var mini = { hoja: 'tickets', id: t.id_doc, huella: t.hash_sha256 };
+    if (grupo[0] === 'gasolina') return { mini: mini, abrir: function () { fichaTicket(t); }, celdas: comunes.concat([
       (S.gasTck === 'otras' ? [t.comercio, t.estacion].filter(Boolean).join(' · ') : t.estacion || t.comercio) || '—', t.matricula || '—', { t: litros(t.litros), num: 1 },
       { t: t.total === null || t.total === undefined ? '—' : euros(t.total), num: 1 },
       t.empresa ? h('span', { class: 'pill ok' }, t.empresa) : h('span', { class: 'pill', title: 'Esperando la factura de la gasolinera' }, 'Fondo común'), pillEstado(t.estado)]) };
-    return { abrir: function () { fichaTicket(t); }, celdas: comunes.concat([t.comercio || '—'], grupo[0] === 'otros' ? [t.categoria] : [],
+    return { mini: mini, abrir: function () { fichaTicket(t); }, celdas: comunes.concat([t.comercio || '—'], grupo[0] === 'otros' ? [t.categoria] : [],
       [{ t: t.total === null || t.total === undefined ? '—' : euros(t.total), num: 1 }, { t: t.cuota_iva === null || t.cuota_iva === undefined ? '—' : euros(t.cuota_iva), num: 1 },
        t.forma_pago || '—', pillEstado(t.estado)]) };
   }
@@ -1455,7 +1457,7 @@ function vRevision(v, lista) {
     return hueco;
   }
   tabla(v, ['Documento', 'Qué pasa', 'Empresa', 'Fecha', 'Cliente / proveedor', { t: 'Importe', num: 1 }, { t: 'Motivo', largo: 1 }], filas.map(function (x) {
-    return { abrir: function () { if (x.hoja === 'tickets') { abrirDesdeHistorial({ hoja: 'tickets', id_doc: x.id }); return; }
+    return { mini: { hoja: x.hoja, id: x.id }, abrir: function () { if (x.hoja === 'tickets') { abrirDesdeHistorial({ hoja: 'tickets', id_doc: x.id }); return; }
         abrirFichaPorId(x.hoja === 'facturas' ? 'Factura' : x.hoja === 'albaranes' ? 'Albarán' : 'Revisión manual', x.empresa, x.hoja, x.id); },
       celdas: [celdaDocumento(x), ENVIADOS_TACHADO[x.id] && x.tipo === 'Revisión manual' ? h('span', { class: 'pill ok' }, 'Enviado a la IA') : pillEstado(x.tipo === 'Albarán sin factura' ? 'Sin factura' : x.tipo),
         x.empresa === '_revision' || !x.empresa ? '—' : x.empresa, fecha(x.fecha), x.nombre, { t: x.total === null || x.total === undefined ? '' : euros(x.total), num: 1 },
@@ -1487,7 +1489,7 @@ function abrirFichaPorId(titulo, empresa, hoja, id) {
 function cargarCarpeta(prefijo) {
   return sb.storage.from('documentos').list(prefijo || '', { limit: 500, sortBy: { column: 'name', order: 'asc' } }).then(function (r) {
     if (r.error) throw new Error(r.error.message);
-    var elementos = (r.data || []).filter(function (x) { return x.name !== '.emptyFolderPlaceholder'; }).map(function (x) {
+    var elementos = (r.data || []).filter(function (x) { return x.name !== '.emptyFolderPlaceholder' && !(!prefijo && x.name === 'miniaturas'); }).map(function (x) {
       var esCarpeta = x.id === null || x.id === undefined;
       return { tipo: esCarpeta ? 'carpeta' : 'archivo', nombre: x.name, ruta: (prefijo ? prefijo + '/' : '') + x.name,
         fecha: x.updated_at || x.created_at || '', tamano: x.metadata && x.metadata.size };
@@ -1561,6 +1563,79 @@ function avisoEnElOrdenador(visor, pedido, buscar, alTraerlo) {
 function urlFirmada(ruta) {
   return sb.storage.from('documentos').createSignedUrl(ruta, 600).then(function (r) { if (r.error) throw new Error(r.error.message); return r.data.signedUrl; });
 }
+// ---------------------------------------------------------------------
+// MINIATURAS (18-nov-2026): una imagen pequeña de cada documento para reconocerlo en las listas. Las hace el
+// servicio a partir de la COPIA TACHADA (miniaturas.py), nunca del original, y son tan pequeñas que el texto no
+// se lee. El panel solo las pide si el servicio dice que las hace. Para no pedir de más (el panel se repinta
+// solo cada 30 segundos): una consulta de huellas y una sola firma por pantalla, y se recuerda lo ya pedido.
+// ---------------------------------------------------------------------
+var MINIATURAS = false;                     // lo dice el servicio (panel_inicio.servicio.miniaturas)
+var HUELLAS_VISTAS = {};                    // id del documento -> su huella ('' = no tiene)
+var MINIS = {};                             // huella -> { url, hasta } o { no: true, hasta }
+var SIGLAS_MINI = { facturas: 'FAC', albaranes: 'ALB', tickets: 'TCK', revision: 'REV', documentos: 'DOC' };
+var HUELLA_MINI = /^[A-Za-z0-9]{1,64}$/;    // va dentro de una ruta: nunca con barras ni puntos
+// El hueco de la miniatura (con las siglas del tipo mientras no hay imagen, o si el documento no tiene)
+function cajaMiniatura(hoja, id, huella) {
+  if (!MINIATURAS || !id) return null;
+  var caja = h('span', { class: 'mini', 'aria-hidden': 'true', 'data-hoja': hoja, 'data-id': id, 'data-siglas': SIGLAS_MINI[hoja] || '' });
+  if (huella) caja.setAttribute('data-huella', huella);
+  return caja;
+}
+function ponerMiniaturas(raiz) {
+  if (!MINIATURAS || !raiz) return;
+  var cajas = [].slice.call(raiz.querySelectorAll('.mini:not(.pedida)'));
+  if (!cajas.length) return;
+  cajas.forEach(function (c) { c.classList.add('pedida'); var propia = c.getAttribute('data-huella'); if (propia) HUELLAS_VISTAS[c.getAttribute('data-id')] = propia; });
+  function sinHuella(hojas) {
+    var ids = [];
+    cajas.forEach(function (c) { var id = c.getAttribute('data-id'); if (hojas.indexOf(c.getAttribute('data-hoja')) >= 0 && HUELLAS_VISTAS[id] === undefined && ids.indexOf(id) < 0) ids.push(id); });
+    return ids;
+  }
+  function leer(tabla, ids) {
+    if (!ids.length) return Promise.resolve();
+    return consulta(sb.from(tabla).select('id_doc,hash_sha256').in('id_doc', ids)).then(function (r) {
+      ids.forEach(function (id) { HUELLAS_VISTAS[id] = ''; });
+      (r.data || []).forEach(function (f) { if (f.hash_sha256) HUELLAS_VISTAS[f.id_doc] = f.hash_sha256; });
+    });
+  }
+  Promise.all([leer('documentos', sinHuella(['facturas', 'albaranes', 'documentos'])), leer('revision', sinHuella(['revision'])), leer('tickets', sinHuella(['tickets']))]).then(function () {
+    var ahora = Date.now(), pedir = [];
+    cajas.forEach(function (c) {
+      var huella = HUELLAS_VISTAS[c.getAttribute('data-id')];
+      if (huella && HUELLA_MINI.test(huella) && !(MINIS[huella] && MINIS[huella].hasta > ahora) && pedir.indexOf(huella) < 0) pedir.push(huella);
+    });
+    if (!pedir.length) return;
+    return sb.storage.from('documentos').createSignedUrls(pedir.map(function (x) { return 'miniaturas/' + x + '.webp'; }), 3600).then(function (r) {
+      if (r.error) throw new Error(r.error.message);
+      pedir.forEach(function (x) { MINIS[x] = { no: true, hasta: ahora + 5 * 60000 }; });          // las que no existan no se vuelven a pedir en 5 minutos
+      (r.data || []).forEach(function (x) {
+        var m = /^miniaturas\/([A-Za-z0-9]+)\.webp$/.exec(x.path || '');
+        if (m && x.signedUrl && !x.error) MINIS[m[1]] = { url: x.signedUrl, hasta: ahora + 50 * 60000 };
+      });
+    });
+  }).then(function () {
+    cajas.forEach(function (c) {
+      var m = MINIS[HUELLAS_VISTAS[c.getAttribute('data-id')]];
+      if (!m || !m.url || c.firstChild) return;
+      var img = h('img', { src: m.url, alt: '', loading: 'lazy', draggable: 'false' });
+      img.addEventListener('error', function () { img.remove(); });          // se queda el hueco con las siglas
+      c.appendChild(img);
+    });
+  }).catch(function () { /* sin miniaturas el panel funciona igual */ });
+}
+// Al pasar el ratón por una miniatura se ve a su tamaño (160 puntos como mucho)
+var miniGrande = null;
+document.addEventListener('mouseover', function (e) {
+  var caja = e.target && e.target.closest ? e.target.closest('.mini') : null, img = caja && caja.querySelector('img');
+  if (!img) return;
+  if (!miniGrande) { miniGrande = h('img', { id: 'miniGrande', alt: '', 'aria-hidden': 'true' }); document.body.appendChild(miniGrande); }
+  var r = caja.getBoundingClientRect();
+  miniGrande.src = img.src; miniGrande.hidden = false;
+  miniGrande.style.left = Math.max(8, Math.min(window.innerWidth - 176, r.right + 8)) + 'px';
+  miniGrande.style.top = Math.max(8, Math.min(window.innerHeight - 176, r.top - 56)) + 'px';
+});
+document.addEventListener('mouseout', function (e) { if (miniGrande && e.target && e.target.closest && e.target.closest('.mini')) miniGrande.hidden = true; });
+
 // ---------------------------------------------------------------------
 // VISOR CON ZOOM (18-nov-2026)
 // Antes la foto se encajaba entera en su caja y, al acercar con el zoom del navegador, la caja menguaba y el
@@ -2082,16 +2157,19 @@ function tabla(contenedor, columnas, filas, tituloFicha) {
       var col = columnas[i] || {};
       return h('td', { class: clases(col), 'data-etiqueta': col.t !== undefined ? col.t : String(col) }, obj ? c.t : c);
     }));
+    var mini = f.mini ? cajaMiniatura(f.mini.hoja, f.mini.id, f.mini.huella) : null;      // la miniatura va delante, en la primera celda
     if (f.abrir) {
       tr.addEventListener('click', f.abrir);
       var celda = tr.cells[0], contenido = celda.textContent.trim();
       var boton = h('button', { type: 'button', class: 'abrir-fila', 'aria-label': 'Abrir ' + (tituloFicha || 'elemento') + (contenido ? ': ' + contenido : ''), onclick: function (e) { e.stopPropagation(); f.abrir(); } });
+      if (mini) boton.appendChild(mini);
       while (celda.firstChild) boton.appendChild(celda.firstChild);
       celda.appendChild(boton);
-    }
+    } else if (mini) tr.cells[0].insertBefore(mini, tr.cells[0].firstChild);
     return tr;
   }));
-  contenedor.appendChild(h('div', { class: 'tabla' }, h('table', {}, [h('thead', {}, cab), cuerpo])));
+  var envoltura = h('div', { class: 'tabla' }, h('table', {}, [h('thead', {}, cab), cuerpo]));
+  contenedor.appendChild(envoltura); ponerMiniaturas(envoltura);
 }
 
 var CAMPOS_FICHA = {
@@ -2127,14 +2205,16 @@ function seccionPack(empresa, id, fila, editable) {
   // Enlace a otro albarán: se ve su nombre ("Almacenes Ejemplo · albarán 12345 · 16/11 · → Zaragoza") y el ID en pequeño
   function abrir(otro, datos) {
     if (datos) conocidos[otro] = datos;
+    var nombre = h('span', {}, etiquetaDocumento('albaranes', conocidos[otro], otro));
     var boton = h('button', { type: 'button', class: 'boton enlace', onclick: function () {
       if (fichaSucia && fichaSucia() && !confirm('Hay cambios sin guardar en esta ficha. ¿Abrir el otro albarán sin guardarlos?')) return;
       fichaSucia = null; abrirFichaPorId('Albarán', empresa, 'albaranes', otro);
-    } }, etiquetaDocumento('albaranes', conocidos[otro], otro));
+    } }, [cajaMiniatura('albaranes', otro), nombre]);
     if (!conocidos[otro]) buscarDocumentos([otro], ['albaranes']).then(function (vistos) {
       if (!vistos[otro]) return;
-      conocidos[otro] = vistos[otro].fila; boton.textContent = ''; boton.appendChild(etiquetaDocumento('albaranes', conocidos[otro], otro));
+      conocidos[otro] = vistos[otro].fila; nombre.textContent = ''; nombre.appendChild(etiquetaDocumento('albaranes', conocidos[otro], otro));
     });
+    setTimeout(function () { ponerMiniaturas(caja); }, 0);          // cuando el enlace ya está colocado en la ficha
     return boton;
   }
   function fallo(e) { aviso.className = 'mensaje-ficha fallo'; aviso.textContent = mensajeError(e); }
@@ -2240,8 +2320,9 @@ function seccionPack(empresa, id, fila, editable) {
           if (!varios) { elegido = x.id_doc; return; }
           if (entrada.checked) marcados[x.id_doc] = true; else delete marcados[x.id_doc];
         });
-        ul.appendChild(h('li', {}, h('label', { class: 'casilla' }, [entrada, etiquetaDocumento('albaranes', x, x.id_doc)])));
+        ul.appendChild(h('li', {}, h('label', { class: 'casilla' }, [entrada, cajaMiniatura('albaranes', x.id_doc), etiquetaDocumento('albaranes', x, x.id_doc)])));
       });
+      ponerMiniaturas(ul);
       if (todas.length > filas.length) ul.appendChild(h('li', { class: 'sub' }, 'Hay ' + (todas.length - filas.length) + ' más: escribe su número, el nombre o el destino para encontrarlo.'));
     }
     function conLista(campo, ul, varios) {
