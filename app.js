@@ -684,7 +684,8 @@ function vInicio(v, d) {
   // Primero el nombre del archivo; en cuanto se sabe qué es, lo que se reconoce ("Almacenes Ejemplo · albarán 12345 · 16/11"). El ID, en pequeño.
   var listaUltimos = h('ul', { class: 'ultimos' }, d.ultimos.map(function (x) {
     var visto = DOCUMENTOS_VISTOS[x.id];
-    return h('li', { 'data-id': x.id }, [h('span', { class: 'ultimo-nombre' }, [cajaMiniatura(/^REV-/.test(x.id) ? 'revision' : 'documentos', x.id),
+    return h('li', { 'data-id': x.id }, [h('button', { type: 'button', class: 'ultimo-nombre', title: 'Abrir este documento', onclick: function () { abrirDocumento(x.id); } }, [
+      cajaMiniatura(/^REV-/.test(x.id) ? 'revision' : 'documentos', x.id),
       h('span', { class: 'ultimo-archivo' + (visto ? ' con-nombre' : '') }, visto ? nombreDocumento(visto.hoja, visto.fila) : x.archivo || ''), h('small', { class: 'id-doc' }, x.id)]),
       h('span', { class: 'ultimo-empresa' }, x.empresa), pillEstado(x.estado), h('span', { class: 'ultimo-fecha' }, fecha(x.fecha))]);
   }));
@@ -961,21 +962,32 @@ function vAlbaranes(v, d) {
   // Un anexo dice con quién va por su número ("Va con nº 67890"), no por el ID del principal
   var vanCon = [];
   function pillVaCon(f) {
-    var pill = pillEstado(f.estado_factura);
-    if (pill && f.va_con && /^Va con /.test(texto(f.estado_factura))) vanCon.push([pill, f.va_con]);
+    if (!f.va_con || !/^Va con /.test(texto(f.estado_factura))) return pillEstado(f.estado_factura);
+    var pill = pildoraEnlace('marca', f.estado_factura, 'Abrir el albarán con el que va', function () { abrirDocumento(f.va_con, 'albaranes', f.empresa); });
+    vanCon.push([pill, f.va_con]);
     return pill;
+  }
+  // La factura vinculada: se abre al pulsar su número
+  function pillFactura(f) {
+    return h('span', {}, numerosCitados(f.factura_vinculada).map(function (numero) {
+      return pildoraEnlace('ok', numero, 'Abrir la factura ' + numero, function () {
+        facturaPorNumero(numero, f.nif, f.empresa).then(function (fac) {
+          if (fac) abrirDocumento(fac.id_doc, 'facturas', fac.empresa); else avisoBreve('No se encuentra la factura ' + numero);
+        }).catch(function (e) { avisoBreve(mensajeError(e)); });
+      });
+    }));
   }
   tabla(c, ['Nº albarán', 'Fecha', { t: quien, largo: 1 }, 'Empresa'].concat(conTipo ? ['Tipo'] : [], ['Ruta', { t: 'Importe', num: 1 }, 'Factura']), d.filas.map(function (f) {
     return { mini: { hoja: 'albaranes', id: f.id_doc }, abrir: function () { ficha('Albarán', f, { empresa: f.empresa, hoja: 'albaranes' }); },
       celdas: [numeroConPack(f, (d.anexos || {})[f.empresa + '|' + f.id_doc]), fecha(f.fecha), f.nombre, f.empresa].concat(conTipo ? [f.tipo_albaran || 'Sin indicar'] : [],
         [[f.origen, f.destino].filter(Boolean).join(' → '), { t: euros(f.importe), num: 1 },
-        f.factura_vinculada ? h('span', { class: 'pill ok' }, f.factura_vinculada) : f.estado_factura === 'PENDIENTE DE FACTURA' ? pillEsperaFactura(f) : pillVaCon(f)]) };
+        f.factura_vinculada ? pillFactura(f) : f.estado_factura === 'PENDIENTE DE FACTURA' ? pillEsperaFactura(f) : pillVaCon(f)]) };
   }), 'Albarán');
   if (vanCon.length) buscarDocumentos(vanCon.map(function (x) { return x[1]; }), ['albaranes']).then(function (vistos) {
     vanCon.forEach(function (x) {
       var p = vistos[x[1]]; if (!p) return;
       x[0].textContent = 'Va con ' + (p.fila.num_albaran ? 'nº ' + p.fila.num_albaran : 'otro albarán');
-      x[0].title = nombreDocumento('albaranes', p.fila) + ' (' + x[1] + ')';
+      x[0].title = 'Abrir: ' + nombreDocumento('albaranes', p.fila) + ' (' + x[1] + ')';
     });
   });
   paginacion(c, d);
@@ -1126,7 +1138,8 @@ function vCombustible(v, d) {
       return { abrir: function () { fichaTicket(t); },
         celdas: [t.fecha ? fecha(t.fecha) : '—', t.id_doc, t.estacion || t.comercio || '—', t.matricula || '—', { t: litros(t.litros), num: 1 },
           { t: t.total === null || t.total === undefined ? '—' : euros(t.total), num: 1 },
-          t.empresa ? h('span', { class: 'pill ok', title: 'Enlazado con la factura ' + (t.factura_id_doc || '') }, t.empresa + (t.factura_id_doc ? ' · ' + t.factura_id_doc : ''))
+          t.empresa && t.factura_id_doc ? pildoraEnlace('ok', t.empresa + ' · ' + t.factura_id_doc, 'Abrir la factura con la que está enlazado', function () { abrirDocumento(t.factura_id_doc, 'facturas', t.empresa); })
+            : t.empresa ? h('span', { class: 'pill ok' }, t.empresa)
                     : h('span', { class: 'pill', title: 'Esperando la factura de la gasolinera' }, 'Fondo común'),
           pillEstado(t.estado)] };
     }), 'Ticket');
@@ -1368,8 +1381,10 @@ function fichaTicket(t) {
     h('section', { class: 'vista-documento' }, [h('div', { class: 'cab-documento' }, [h('h3', {}, 'Foto del ticket')]), visor]),
     h('section', { class: 'editor-documento' }, [h('div', { class: 'resumen-ficha' }, [h('span', { class: 'pill marca' }, t.categoria), pillEstado(t.estado)]),
       t.observaciones ? h('p', { class: 'ayuda-campo' }, t.observaciones) : null,
-      t.categoria === 'Combustible' ? h('p', { class: 'ayuda-campo' }, (t.estacion ? 'Estación: ' + t.estacion + ' · ' : '') +
-        (t.empresa ? 'Empresa: ' + t.empresa + (t.factura_id_doc ? ' (factura ' + t.factura_id_doc + ')' : '') : 'Fondo común: esperando la factura de la gasolinera')) : null,
+      /Posible repetido de (TCK-\d+)/.test(t.observaciones || '') ? h('p', { class: 'ayuda-campo' }, ['El otro ticket: ', enlaceDocumento(/Posible repetido de (TCK-\d+)/.exec(t.observaciones)[1], 'tickets')]) : null,
+      t.categoria === 'Combustible' ? h('p', { class: 'ayuda-campo' }, [(t.estacion ? 'Estación: ' + t.estacion + ' · ' : '') +
+        (t.empresa ? 'Empresa: ' + t.empresa : 'Fondo común: esperando la factura de la gasolinera'),
+        t.empresa && t.factura_id_doc ? ' · Su factura: ' : null, t.empresa && t.factura_id_doc ? enlaceDocumento(t.factura_id_doc, 'facturas') : null]) : null,
       h('fieldset', { class: 'seccion-ficha' }, [h('legend', {}, 'Datos del ticket'), rejilla]), historialDocumento('', t.id_doc)])])]);
   function cambios() { var c = {}; Object.keys(entradas).forEach(function (k) { var antes = t[k] === null || t[k] === undefined ? '' : String(t[k]).slice(0, k === 'fecha' ? 10 : 300); if (entradas[k].value !== antes) c[k] = entradas[k].value; }); return c; }
   function guardar(revisado) {
@@ -1453,7 +1468,7 @@ function vRevision(v, lista) {
   function celdaMotivo(x) {
     var m = x.tipo === 'Pack por confirmar' && /^¿Va con (\S+)(?: · ([\s\S]*?))?\?$/.exec(texto(x.motivo));
     if (!m) return x.motivo;
-    var hueco = h('span', {}, x.motivo); packs.push([hueco, m[1], m[2] || '']);
+    var hueco = h('span', {}, x.motivo); packs.push([hueco, m[1], m[2] || '', x.empresa]);
     return hueco;
   }
   tabla(v, ['Documento', 'Qué pasa', 'Empresa', 'Fecha', 'Cliente / proveedor', { t: 'Importe', num: 1 }, { t: 'Motivo', largo: 1 }], filas.map(function (x) {
@@ -1467,8 +1482,10 @@ function vRevision(v, lista) {
     packs.forEach(function (x) {
       var p = vistos[x[1]]; if (!p) return;
       var razon = x[2].split(x[1]).join('ese albarán');
-      x[0].textContent = '¿Va con ' + nombreDocumento('albaranes', p.fila) + '?' + (razon ? ' Motivo: ' + razon + '.' : '');
-      x[0].appendChild(h('small', { class: 'id-doc' }, x[1]));
+      x[0].textContent = '¿Va con ';
+      x[0].appendChild(h('button', { type: 'button', class: 'boton enlace', title: 'Abrir ese albarán', onclick: function (e) { e.stopPropagation(); abrirDocumento(x[1], 'albaranes', x[3]); } },
+        [nombreDocumento('albaranes', p.fila), h('small', { class: 'id-doc' }, x[1])]));
+      x[0].appendChild(document.createTextNode('?' + (razon ? ' Motivo: ' + razon + '.' : '')));
     });
   });
 }
@@ -1563,6 +1580,77 @@ function avisoEnElOrdenador(visor, pedido, buscar, alTraerlo) {
 function urlFirmada(ruta) {
   return sb.storage.from('documentos').createSignedUrl(ruta, 600).then(function (r) { if (r.error) throw new Error(r.error.message); return r.data.signedUrl; });
 }
+// ---------------------------------------------------------------------
+// ENLACES ENTRE DOCUMENTOS (18-nov-2026): donde un documento nombra a otro (su factura, sus albaranes, el
+// principal de su pack, un repetido...), al pulsarlo se abre ese otro directamente.
+// ---------------------------------------------------------------------
+var VIVO = function (x) { return ['Descartado', 'Duplicado'].indexOf(x.estado || '') < 0; };
+function abrirDocumento(id, hoja, empresa) {
+  if (fichaSucia && fichaSucia() && !confirm('Hay cambios sin guardar en esta ficha. ¿Abrir el otro documento sin guardarlos?')) return;
+  fichaSucia = null;
+  function abrir(queHoja, queEmpresa) {
+    if (queHoja === 'tickets') { abrirDesdeHistorial({ hoja: 'tickets', id_doc: id }); return; }
+    abrirFichaPorId(queHoja === 'facturas' ? 'Factura' : queHoja === 'albaranes' ? 'Albarán' : 'Revisión manual', queHoja === 'revision' ? '_revision' : queEmpresa, queHoja, id);
+  }
+  if (hoja && (empresa || hoja === 'tickets' || hoja === 'revision')) { abrir(hoja, empresa); return; }
+  buscarDocumentos([id]).then(function (vistos) {
+    var v = vistos[id];
+    if (!v) { avisoBreve('No se encuentra el documento ' + id + ' (puede que ya no exista)'); return; }
+    abrir(v.hoja, v.fila.empresa);
+  });
+}
+// Un enlace a otro documento: su miniatura, su nombre y su ID en pequeño. Si solo se sabe el ID, el nombre llega enseguida.
+function enlaceDocumento(id, hoja, fila) {
+  var nombre = h('span', {}, etiquetaDocumento(hoja, fila, id));
+  var boton = h('button', { type: 'button', class: 'boton enlace enlace-doc', onclick: function (e) { e.stopPropagation(); abrirDocumento(id, hoja, fila && fila.empresa); } },
+    [cajaMiniatura(hoja || (/^REV-/.test(id) ? 'revision' : /^TCK-/.test(id) ? 'tickets' : 'documentos'), id), nombre]);
+  if (!fila) buscarDocumentos([id]).then(function (vistos) {
+    var v = vistos[id]; if (!v) return;
+    hoja = v.hoja; fila = v.fila; nombre.textContent = ''; nombre.appendChild(etiquetaDocumento(v.hoja, v.fila, id));
+  });
+  return boton;
+}
+// La factura que tiene ese número (la del mismo NIF si hay varias; si no, la de la misma empresa)
+function facturaPorNumero(numero, nif, empresa) {
+  return consulta(sb.from('facturas').select('id_doc,empresa,tipo_factura,num_factura,fecha,nombre,nif,total,estado').eq('num_factura', numero)).then(function (r) {
+    var c = (r.data || []).filter(VIVO);
+    return c.filter(function (f) { return f.nif && f.nif === nif; })[0] || c.filter(function (f) { return f.empresa === empresa; })[0] || c[0] || null;
+  });
+}
+function numerosCitados(v) { return texto(v).split(/[;,]/).map(function (x) { return x.trim(); }).filter(Boolean); }
+// Píldora que se puede pulsar (dentro de una fila que ya se abre al pulsarla: no se abren las dos cosas)
+function pildoraEnlace(clase, textoPildora, titulo, accion) {
+  return h('button', { type: 'button', class: 'pill ' + clase + ' pill-enlace', title: titulo, onclick: function (e) { e.stopPropagation(); accion(); } }, textoPildora);
+}
+// En la ficha: los otros documentos con los que este tiene que ver, para ir a ellos con un clic
+function seccionRelacionados(empresa, hoja, fila) {
+  var lista = h('ul', { class: 'lista-relacionados' }), puestos = {};          // (clase propia: «lista-pack» es solo de los packs)
+  var caja = h('fieldset', { class: 'seccion-ficha seccion-relacionados', hidden: 'hidden' }, [h('legend', {}, 'Documentos relacionados'),
+    h('p', { class: 'ayuda-campo' }, 'Pulsa uno para abrirlo.'), lista]);
+  function poner(que, id, suHoja, suFila) {
+    if (!id || id === fila.id_doc || puestos[id]) return;
+    puestos[id] = true; caja.hidden = false;
+    lista.appendChild(h('li', {}, [h('span', { class: 'sub' }, que), enlaceDocumento(id, suHoja, suFila)])); ponerMiniaturas(lista);
+  }
+  if (hoja === 'albaranes') numerosCitados(fila.factura_vinculada).forEach(function (numero) {
+    facturaPorNumero(numero, fila.nif, empresa).then(function (f) { if (f) poner('Su factura:', f.id_doc, 'facturas', f); }).catch(function () {});
+  });
+  if (hoja === 'facturas' && fila.num_factura) {
+    consulta(sb.from('albaranes').select(COLUMNAS_NOMBRE_ALBARAN + ',empresa,nif,factura_vinculada').ilike('factura_vinculada', '%' + fila.num_factura + '%').order('id_doc')).then(function (r) {
+      (r.data || []).filter(function (a) {
+        return VIVO(a) && numerosCitados(a.factura_vinculada).indexOf(fila.num_factura) >= 0 && (!a.nif || !fila.nif || a.nif === fila.nif || a.empresa === empresa);
+      }).forEach(function (a) { poner(a.estado === 'Anexo' ? 'Papel de un pack de esta factura:' : 'Albarán de esta factura:', a.id_doc, 'albaranes', a); });
+    }).catch(function () {});
+  }
+  // Otros documentos nombrados en las notas ("Mismo número que VTX-0012", "ahora es VTX-0050"...)
+  var citados = (texto(fila.observaciones) + ' ' + texto(fila.motivo)).match(/\b[A-Z]{2,5}-[A-Z]?\d{2,5}\b/g) || [];
+  citados = citados.filter(function (x, i) { return citados.indexOf(x) === i && x !== fila.id_doc && x !== fila.va_con; });
+  if (citados.length) buscarDocumentos(citados).then(function (vistos) {
+    citados.forEach(function (x) { if (vistos[x]) poner('Nombrado en las notas:', x, vistos[x].hoja, vistos[x].fila); });
+  });
+  return caja;
+}
+
 // ---------------------------------------------------------------------
 // MINIATURAS (18-nov-2026): una imagen pequeña de cada documento para reconocerlo en las listas. Las hace el
 // servicio a partir de la COPIA TACHADA (miniaturas.py), nunca del original, y son tan pequeñas que el texto no
@@ -2429,6 +2517,7 @@ function ficha(titulo, fila, contexto) {
     formulario.appendChild(seccion);
   });
   if (hoja === 'albaranes' && id) formulario.appendChild(seccionPack(empresa, id, fila, editable));
+  if (id) formulario.appendChild(seccionRelacionados(empresa, hoja, fila));
   var otros = h('div', { class: 'otros-datos' });
   Object.keys(fila).filter(function (c) { return conocidos.indexOf(c) < 0 && c !== 'hash_sha256'; }).forEach(function (c) {
     var v = fila[c]; if (/^fecha|_en$/.test(c)) v = c.slice(-3) === '_en' ? fecha(v) + ' ' + hora(v) : fecha(v);
