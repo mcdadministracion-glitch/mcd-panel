@@ -60,7 +60,7 @@ function esNieves() {          // (el nombre es histórico: "¿es de la gasoline
 }
 function pillEstado(t) {
   t = texto(t);
-  var c = /PENDIENTE|Sin factura|Faltan|≠|ERROR/.test(t) ? 'error' : /Revisar|revisar|Duplicado|revisión|Revisión/.test(t) ? 'aviso' : /Procesado|Facturado|recibidos/.test(t) ? 'ok' : '';
+  var c = /PENDIENTE|Sin factura|Faltan|≠|ERROR/.test(t) ? 'error' : /Revisar|revisar|Duplicado|revisión|Revisión/.test(t) ? 'aviso' : /Procesado|Facturado|recibidos/.test(t) ? 'ok' : /^(Anexo|Va con)/.test(t) ? 'marca' : '';
   return t ? h('span', { class: 'pill ' + c }, t) : '';
 }
 function mensajeError(e) {
@@ -180,7 +180,7 @@ function consultaLista(f) {
   if (f.empresa) q = q.eq('empresa', f.empresa);
   if (f.sentido) q = q.eq(tabla === 'facturas' ? 'tipo_factura' : 'tipo_albaran', valorSentido(tabla, f.sentido));
   if (f.filtro === 'Activos') q = q.not('estado', 'in', '("Descartado","Duplicado")');
-  else if (f.filtro === 'Descartado' || f.filtro === 'Duplicado') q = q.eq('estado', f.filtro);
+  else if (f.filtro === 'Descartado' || f.filtro === 'Duplicado' || f.filtro === 'Anexo') q = q.eq('estado', f.filtro);
   else if (f.filtro) q = q.eq(campo, f.filtro);
   var rango = rangoPeriodo(f.periodo);
   if (rango) q = q.gte('fecha', rango[0]).lt('fecha', rango[1]);
@@ -834,7 +834,7 @@ function vFacturas(v, d) {
   paginacion(c, d);
 }
 function vAlbaranes(v, d) {
-  barraFiltros(v, d, [['Activos', 'Todos los válidos'], ['PENDIENTE DE FACTURA', 'Esperando factura'], ['Facturado', 'Facturados'], ['Descartado', 'Descartados'], ['Duplicado', 'Duplicados'], ['', 'Todo el historial']]);
+  barraFiltros(v, d, [['Activos', 'Todos los válidos'], ['PENDIENTE DE FACTURA', 'Esperando factura'], ['Facturado', 'Facturados'], ['Anexo', 'Anexos de un pack'], ['Descartado', 'Descartados'], ['Duplicado', 'Duplicados'], ['', 'Todo el historial']]);
   document.getElementById('contador').textContent = contadorTabla(d, S.sentido ? 'albaranes ' + nombreSentido('albaranes', S.sentido).toLowerCase() : 'albaranes');
   var c = document.getElementById('cuerpo'), conTipo = !S.sentido;
   var quien = S.sentido === 'emitidos' ? 'Cliente' : S.sentido === 'recibidos' ? 'Proveedor' : 'Cliente / proveedor';
@@ -1802,8 +1802,82 @@ var ETIQUETAS = { num_factura: 'Número de factura', num_albaran: 'Número de al
   observaciones: 'Observaciones', motivo: 'Motivo de revisión', id_doc: 'ID', empresa: 'Empresa', tipo_factura: 'Tipo (emitida o recibida)', tipo_albaran: 'Tipo (emitido o recibido)', estado: 'Estado', albaranes: 'Albaranes citados',
   comprobacion_albaranes: 'Comprobación de albaranes', estado_factura: 'Estado de facturación', factura_vinculada: 'Factura vinculada', dias_sin_factura: 'Días sin factura',
   posible_factura: 'Posible factura', categoria_gasto: 'Categoría de gasto', creado_en: 'Registrado', actualizado_en: 'Última modificación', fecha_alta: 'Fecha de alta',
-  archivo_original: 'Archivo original', hash_sha256: 'Huella del archivo', tokens_entrada: 'Tokens de entrada', tokens_salida: 'Tokens de salida', coste_eur: 'Coste IA (€)' };
+  va_con: 'Va con (pack)', archivo_original: 'Archivo original', hash_sha256: 'Huella del archivo', tokens_entrada: 'Tokens de entrada', tokens_salida: 'Tokens de salida', coste_eur: 'Coste IA (€)' };
 var fichaSucia = null, guardandoFicha = false, focoAntesModal = null, secuenciaFicha = 0;
+
+// ---------------------------------------------------------------------
+// PACKS: un albarán principal (el que se factura) y sus anexos (papeles que lo acompañan:
+// notas de entrega, CMR, PTR...). Un anexo no cuenta como albarán aparte ni espera factura.
+// ---------------------------------------------------------------------
+function seccionPack(empresa, id, fila, editable) {
+  var caja = h('fieldset', { class: 'seccion-ficha seccion-pack' }, [h('legend', {}, 'Pack: papeles que van juntos')]);
+  var aviso = h('div', { class: 'mensaje-ficha', role: 'status', 'aria-live': 'polite' });
+  function abrir(otro) {
+    return h('button', { type: 'button', class: 'boton enlace', onclick: function () {
+      if (fichaSucia && fichaSucia() && !confirm('Hay cambios sin guardar en esta ficha. ¿Abrir el otro albarán sin guardarlos?')) return;
+      fichaSucia = null; abrirFichaPorId('Albarán', empresa, 'albaranes', otro);
+    } }, otro);
+  }
+  function fallo(e) { aviso.className = 'mensaje-ficha fallo'; aviso.textContent = mensajeError(e); }
+  function terminar(texto) { fichaSucia = null; guardandoFicha = false; cerrarModal(); avisoBreve(texto); cargar(false); }
+  function conEnter(campo, boton) { campo.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); boton.click(); } }); }
+  if (fila.estado === 'Anexo' && fila.va_con) {
+    caja.appendChild(h('p', { class: 'ayuda-campo' }, ['Este papel va con el albarán ', abrir(fila.va_con), ', que es el que se factura. No cuenta como albarán aparte ni espera su propia factura.']));
+    if (editable) {
+      var soltar = h('button', { type: 'button', class: 'boton', onclick: function () {
+        if (!confirm('¿Soltar ' + id + ' del pack de ' + fila.va_con + '?\n\nVolverá a contar como un albarán aparte y a esperar su propia factura.')) return;
+        soltar.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Soltando…';
+        rpc('panel_soltar_albaran', { p_empresa: empresa, p_id: id }).then(function () { terminar('Albarán ' + id + ' suelto del pack'); })
+          .catch(function (e) { soltar.disabled = false; fallo(e); });
+      } }, 'Soltar del pack');
+      caja.appendChild(h('div', { class: 'en-linea' }, [soltar]));
+    }
+    caja.appendChild(aviso);
+    return caja;
+  }
+  var lista = h('ul', { class: 'lista-pack', 'aria-label': 'Anexos de este albarán' }, h('li', { class: 'sub' }, 'Buscando sus anexos…'));
+  function pintarAnexos() {
+    return consulta(sb.from('albaranes').select('id_doc,num_albaran,nombre,estado').eq('empresa', empresa).eq('va_con', id).order('id_doc')).then(function (r) {
+      var filas = r.data || []; lista.textContent = '';
+      if (!filas.length) lista.appendChild(h('li', { class: 'sub' }, 'Va solo: no tiene anexos.'));
+      filas.forEach(function (x) { lista.appendChild(h('li', {}, [abrir(x.id_doc), h('span', { class: 'sub' }, (x.num_albaran || 'sin número') + (x.nombre ? ' · ' + x.nombre : ''))])); });
+      return filas.length;
+    }).catch(function () { lista.textContent = ''; lista.appendChild(h('li', { class: 'sub' }, 'No se han podido cargar los anexos.')); return 0; });
+  }
+  caja.appendChild(lista); pintarAnexos();
+  if (editable && ['Descartado', 'Duplicado'].indexOf(fila.estado || '') < 0) {
+    // 1) Añadir anexos a este albarán (se pueden escribir varios: VTX-0040, VTX-0049)
+    var nuevos = h('input', { type: 'text', id: 'campoAnexos', autocomplete: 'off', spellcheck: 'false', placeholder: 'Ej. VTX-0040, VTX-0049' });
+    var anadir = h('button', { type: 'button', class: 'boton', onclick: function () {
+      var ids = nuevos.value.split(/[\s,;]+/).map(function (x) { return x.trim().toUpperCase(); }).filter(Boolean);
+      if (!ids.length) { fallo(new Error('Escribe el ID del papel que va con este albarán (por ejemplo VTX-0040).')); nuevos.focus(); return; }
+      anadir.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Añadiendo…';
+      var hechos = [];
+      ids.reduce(function (cadena, otro) {
+        return cadena.then(function () { return rpc('panel_juntar_albaran', { p_empresa: empresa, p_id: otro, p_principal: id }).then(function () { hechos.push(otro); }); });
+      }, Promise.resolve()).then(function () {
+        aviso.className = 'mensaje-ficha exito'; aviso.textContent = 'Añadido al pack: ' + hechos.join(', ') + '.'; nuevos.value = '';
+      }).catch(function (e) {
+        aviso.className = 'mensaje-ficha fallo'; aviso.textContent = (hechos.length ? 'Añadido: ' + hechos.join(', ') + '. ' : '') + mensajeError(e);
+      }).then(function () { anadir.disabled = false; pintarAnexos(); cargar(false); });
+    } }, 'Añadir al pack');
+    conEnter(nuevos, anadir);
+    caja.appendChild(h('div', { class: 'campo-ficha fila-pack' }, [h('label', { for: 'campoAnexos' }, 'Añadir papeles que van con este albarán (sus ID)'), h('div', { class: 'en-linea' }, [nuevos, anadir])]));
+    // 2) O al revés: este papel acompaña a otro albarán
+    var principal = h('input', { type: 'text', id: 'campoPrincipal', autocomplete: 'off', spellcheck: 'false', placeholder: 'Ej. VTX-0059' });
+    var vaCon = h('button', { type: 'button', class: 'boton', onclick: function () {
+      var otro = principal.value.trim().toUpperCase();
+      if (!otro) { fallo(new Error('Escribe el ID del albarán principal (el que se factura).')); principal.focus(); return; }
+      vaCon.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Juntando…';
+      rpc('panel_juntar_albaran', { p_empresa: empresa, p_id: id, p_principal: otro }).then(function (r) { terminar('Albarán ' + id + ' va ahora con ' + ((r && r.principal) || otro)); })
+        .catch(function (e) { vaCon.disabled = false; fallo(e); });
+    } }, 'Va con ese albarán');
+    conEnter(principal, vaCon);
+    caja.appendChild(h('div', { class: 'campo-ficha fila-pack' }, [h('label', { for: 'campoPrincipal' }, '¿Este papel acompaña a otro albarán? Escribe el ID del principal'), h('div', { class: 'en-linea' }, [principal, vaCon])]));
+  }
+  caja.appendChild(aviso);
+  return caja;
+}
 
 function ficha(titulo, fila, contexto) {
   var empresa = contexto.empresa, hoja = contexto.hoja, id = fila.id_doc || '';
@@ -1858,6 +1932,7 @@ function ficha(titulo, fila, contexto) {
     if (grupo[0] === 'Cobro o pago') seccion.appendChild(h('p', { class: 'ayuda-campo' }, 'Puedes guardar juntos el estado, el importe y la fecha real del cobro o pago.'));
     formulario.appendChild(seccion);
   });
+  if (hoja === 'albaranes' && id) formulario.appendChild(seccionPack(empresa, id, fila, editable));
   var otros = h('div', { class: 'otros-datos' });
   Object.keys(fila).filter(function (c) { return conocidos.indexOf(c) < 0 && c !== 'hash_sha256'; }).forEach(function (c) {
     var v = fila[c]; if (/^fecha|_en$/.test(c)) v = c.slice(-3) === '_en' ? fecha(v) + ' ' + hora(v) : fecha(v);
