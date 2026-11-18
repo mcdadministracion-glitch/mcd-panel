@@ -1291,7 +1291,7 @@ function fichaTicket(t) {
 // REVISIÓN
 // ---------------------------------------------------------------------
 function vRevision(v, lista) {
-  var tipos = ['', 'Factura a revisar', 'Albarán a revisar', 'Albarán sin factura', 'Ticket a revisar', 'Revisión manual'];
+  var tipos = ['', 'Factura a revisar', 'Albarán a revisar', 'Albarán sin factura', 'Pack por confirmar', 'Ticket a revisar', 'Revisión manual'];
   if (S.filtro && !lista.some(function (x) { return x.tipo === S.filtro; })) S.filtro = '';   // se vació ese grupo: volver a "Todo"
   v.appendChild(h('div', { class: 'barra' }, h('div', { class: 'chips' }, tipos.map(function (t) {
     var n = lista.filter(function (x) { return !t || x.tipo === t; }).length;
@@ -1802,7 +1802,7 @@ var ETIQUETAS = { num_factura: 'Número de factura', num_albaran: 'Número de al
   observaciones: 'Observaciones', motivo: 'Motivo de revisión', id_doc: 'ID', empresa: 'Empresa', tipo_factura: 'Tipo (emitida o recibida)', tipo_albaran: 'Tipo (emitido o recibido)', estado: 'Estado', albaranes: 'Albaranes citados',
   comprobacion_albaranes: 'Comprobación de albaranes', estado_factura: 'Estado de facturación', factura_vinculada: 'Factura vinculada', dias_sin_factura: 'Días sin factura',
   posible_factura: 'Posible factura', categoria_gasto: 'Categoría de gasto', creado_en: 'Registrado', actualizado_en: 'Última modificación', fecha_alta: 'Fecha de alta',
-  va_con: 'Va con (pack)', archivo_original: 'Archivo original', hash_sha256: 'Huella del archivo', tokens_entrada: 'Tokens de entrada', tokens_salida: 'Tokens de salida', coste_eur: 'Coste IA (€)' };
+  va_con: 'Va con (pack)', propuesta_pack: 'Pack propuesto por el programa', pack_rechazado: 'Packs rechazados', archivo_original: 'Archivo original', hash_sha256: 'Huella del archivo', tokens_entrada: 'Tokens de entrada', tokens_salida: 'Tokens de salida', coste_eur: 'Coste IA (€)' };
 var fichaSucia = null, guardandoFicha = false, focoAntesModal = null, secuenciaFicha = 0;
 
 // ---------------------------------------------------------------------
@@ -1835,7 +1835,50 @@ function seccionPack(empresa, id, fila, editable) {
     caja.appendChild(aviso);
     return caja;
   }
+  // Propuesta del programa (packs.py): este papel podría ir con otro albarán
+  var propuesta = String(fila.propuesta_pack || ''), principalPropuesto = propuesta.split(' · ')[0].trim();
+  if (propuesta && principalPropuesto) {
+    var motivo = propuesta.slice(principalPropuesto.length).replace(/^\s*·\s*/, '');
+    var bloque = h('div', { class: 'propuesta-pack' }, [h('p', {}, [h('b', {}, 'Propuesta del programa: '), '¿este papel va con el albarán ', abrir(principalPropuesto), '?',
+      motivo ? h('span', { class: 'sub' }, ' Motivo: ' + motivo + '.') : null])]);
+    if (editable) {
+      var si = h('button', { type: 'button', class: 'boton principal', onclick: function () {
+        si.disabled = no.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Juntando…';
+        rpc('panel_juntar_albaran', { p_empresa: empresa, p_id: id, p_principal: principalPropuesto }).then(function () { terminar('Albarán ' + id + ' va ahora con ' + principalPropuesto); })
+          .catch(function (e) { si.disabled = no.disabled = false; fallo(e); });
+      } }, 'Sí, va con ' + principalPropuesto);
+      var no = h('button', { type: 'button', class: 'boton', onclick: function () {
+        si.disabled = no.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Guardando…';
+        rpc('panel_rechazar_pack', { p_empresa: empresa, p_id: id }).then(function () { terminar('Anotado: ' + id + ' no va con ' + principalPropuesto + ' (no se volverá a proponer)'); })
+          .catch(function (e) { si.disabled = no.disabled = false; fallo(e); });
+      } }, 'No va con ese');
+      bloque.appendChild(h('div', { class: 'en-linea' }, [si, no]));
+    }
+    caja.appendChild(bloque);
+  }
   var lista = h('ul', { class: 'lista-pack', 'aria-label': 'Anexos de este albarán' }, h('li', { class: 'sub' }, 'Buscando sus anexos…'));
+  var propuestos = h('div', { class: 'propuesta-pack', hidden: 'hidden' });
+  function pintarPropuestos() {
+    consulta(sb.from('albaranes').select('id_doc,num_albaran,nombre,propuesta_pack,estado').eq('empresa', empresa).ilike('propuesta_pack', id + ' ·%').order('id_doc')).then(function (r) {
+      var filas = (r.data || []).filter(function (x) { return ['Descartado', 'Duplicado', 'Anexo'].indexOf(x.estado || '') < 0; });
+      propuestos.textContent = ''; propuestos.hidden = !filas.length;
+      if (!filas.length) return;
+      propuestos.appendChild(h('p', {}, [h('b', {}, 'El programa propone que vayan con este albarán: '), h('span', {}, filas.map(function (x) { return x.id_doc; }).join(', ') + '.')]));
+      var lista2 = h('ul', { class: 'lista-pack' }, filas.map(function (x) { return h('li', {}, [abrir(x.id_doc), h('span', { class: 'sub' }, (x.num_albaran || 'sin número') + (x.nombre ? ' · ' + x.nombre : ''))]); }));
+      propuestos.appendChild(lista2);
+      if (!editable) return;
+      var todos = h('button', { type: 'button', class: 'boton principal', onclick: function () {
+        todos.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Juntando…';
+        var hechos = [];
+        filas.reduce(function (cadena, x) {
+          return cadena.then(function () { return rpc('panel_juntar_albaran', { p_empresa: empresa, p_id: x.id_doc, p_principal: id }).then(function () { hechos.push(x.id_doc); }); });
+        }, Promise.resolve()).then(function () { aviso.className = 'mensaje-ficha exito'; aviso.textContent = 'Añadido al pack: ' + hechos.join(', ') + '.'; })
+          .catch(function (e) { aviso.className = 'mensaje-ficha fallo'; aviso.textContent = (hechos.length ? 'Añadido: ' + hechos.join(', ') + '. ' : '') + mensajeError(e); })
+          .then(function () { pintarAnexos(); pintarPropuestos(); cargar(false); });
+      } }, 'Juntarlos todos');
+      propuestos.appendChild(h('div', { class: 'en-linea' }, [todos, h('span', { class: 'sub' }, 'Si alguno no va, ábrelo y pulsa «No va con ese».')]));
+    }).catch(function () { propuestos.hidden = true; });
+  }
   function pintarAnexos() {
     return consulta(sb.from('albaranes').select('id_doc,num_albaran,nombre,estado').eq('empresa', empresa).eq('va_con', id).order('id_doc')).then(function (r) {
       var filas = r.data || []; lista.textContent = '';
@@ -1844,7 +1887,7 @@ function seccionPack(empresa, id, fila, editable) {
       return filas.length;
     }).catch(function () { lista.textContent = ''; lista.appendChild(h('li', { class: 'sub' }, 'No se han podido cargar los anexos.')); return 0; });
   }
-  caja.appendChild(lista); pintarAnexos();
+  caja.appendChild(lista); caja.appendChild(propuestos); pintarAnexos(); pintarPropuestos();
   if (editable && ['Descartado', 'Duplicado'].indexOf(fila.estado || '') < 0) {
     // 1) Añadir anexos a este albarán (se pueden escribir varios: VTX-0040, VTX-0049)
     var nuevos = h('input', { type: 'text', id: 'campoAnexos', autocomplete: 'off', spellcheck: 'false', placeholder: 'Ej. VTX-0040, VTX-0049' });
