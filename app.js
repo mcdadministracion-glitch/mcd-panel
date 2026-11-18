@@ -132,7 +132,7 @@ var COLUMNAS_EXCEL = {
   albaranes: [['empresa', 'Empresa'], ['tipo_albaran', 'Tipo'], ['num_albaran', 'Número de albarán'], ['fecha', 'Fecha', FECHA], ['nif', 'NIF'], ['nombre', 'Cliente / proveedor'],
     ['matricula', 'Matrícula'], ['origen', 'Origen'], ['destino', 'Destino'], ['concepto', 'Concepto'], ['importe', 'Importe (€)', EUR],
     ['estado_factura', 'Facturación'], ['factura_vinculada', 'Factura vinculada'], ['dias_sin_factura', 'Días sin factura'], ['estado', 'Estado'],
-    ['observaciones', 'Observaciones'], ['id_doc', 'ID interno']]
+    ['va_con', 'Va con (pack)'], ['referencias', 'Otras referencias'], ['observaciones', 'Observaciones'], ['id_doc', 'ID interno']]
 };
 var TITULO_EXCEL = { facturas: 'Facturas', albaranes: 'Albaranes' };
 var bibliotecaExcel;
@@ -179,7 +179,10 @@ function consultaLista(f) {
   var q = sb.from(tabla).select('*', { count: 'exact' });
   if (f.empresa) q = q.eq('empresa', f.empresa);
   if (f.sentido) q = q.eq(tabla === 'facturas' ? 'tipo_factura' : 'tipo_albaran', valorSentido(tabla, f.sentido));
-  if (f.filtro === 'Activos') q = q.not('estado', 'in', '("Descartado","Duplicado")');
+  // Albaranes: los anexos de un pack van dentro de su principal, no como filas sueltas. Al buscar sí salen,
+  // para que el número de un anexo encuentre su pack.
+  var sinAnexos = tabla === 'albaranes' && !f.conAnexos && !limpiarBusqueda(f.buscar || '');
+  if (f.filtro === 'Activos') q = q.not('estado', 'in', sinAnexos ? '("Descartado","Duplicado","Anexo")' : '("Descartado","Duplicado")');
   else if (f.filtro === 'Descartado' || f.filtro === 'Duplicado' || f.filtro === 'Anexo') q = q.eq('estado', f.filtro);
   else if (f.filtro) q = q.eq(campo, f.filtro);
   var rango = rangoPeriodo(f.periodo);
@@ -187,7 +190,7 @@ function consultaLista(f) {
   var b = limpiarBusqueda(f.buscar || '');
   if (b) {
     var cols = tabla === 'facturas' ? ['id_doc', 'num_factura', 'nombre', 'nif', 'matricula', 'concepto', 'observaciones', 'albaranes']
-                                    : ['id_doc', 'num_albaran', 'nombre', 'nif', 'matricula', 'concepto', 'observaciones', 'num_factura', 'origen', 'destino'];
+                                    : ['id_doc', 'num_albaran', 'nombre', 'nif', 'matricula', 'concepto', 'observaciones', 'num_factura', 'origen', 'destino', 'referencias'];
     q = q.or(cols.map(function (c) { return c + '.ilike.%' + b + '%'; }).join(','));
   }
   return q.order('fecha', { ascending: false, nullsFirst: false }).order('empresa').order('id_doc', { ascending: false });
@@ -210,7 +213,26 @@ async function leerTodo(f, progreso) {
     if (progreso) progreso(filas.length, total);
     if (!r.data.length) break;
   } while (desde < total);
+  if (f.tabla === 'albaranes' && f.filtro === 'Activos') filas = await conAnexosDebajo(filas);
   return filas;
+}
+// PACKS: anexos de los albaranes dados, agrupados por su principal ({ 'empresa|id': [anexos] })
+async function anexosDe(filas) {
+  var ids = filas.filter(function (x) { return x.estado !== 'Anexo'; }).map(function (x) { return x.id_doc; }), mapa = {};
+  for (var i = 0; i < ids.length; i += 150) {
+    var r = await consulta(sb.from('albaranes').select('*').eq('estado', 'Anexo').in('va_con', ids.slice(i, i + 150)).order('id_doc'));
+    (r.data || []).forEach(function (a) { var k = a.empresa + '|' + a.va_con; (mapa[k] = mapa[k] || []).push(a); });
+  }
+  return mapa;
+}
+// Para el Excel: cada pack junto, con sus anexos justo debajo del albarán principal
+async function conAnexosDebajo(filas) {
+  var mapa = await anexosDe(filas), ya = new Set(filas.map(function (x) { return x.empresa + '|' + x.id_doc; })), salida = [];
+  filas.forEach(function (x) {
+    salida.push(x);
+    (mapa[x.empresa + '|' + x.id_doc] || []).forEach(function (a) { if (!ya.has(a.empresa + '|' + a.id_doc)) salida.push(a); });
+  });
+  return salida;
 }
 
 function hojaExcel(libro, tabla, filas) {
@@ -238,7 +260,8 @@ function hojaExcel(libro, tabla, filas) {
   if (filas.length) {
     hoja.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: cols.length } };
     var totales = {}, ultima = filas.length + 1;
-    totales[cols[0][0]] = 'TOTAL (' + filas.length + ')';
+    var anexosEnLaHoja = tabla === 'albaranes' ? filas.filter(function (x) { return x.estado === 'Anexo'; }).length : 0;   // no cuentan como albaranes
+    totales[cols[0][0]] = 'TOTAL (' + (filas.length - anexosEnLaHoja) + ')' + (anexosEnLaHoja ? ' + ' + anexosEnLaHoja + ' anexos' : '');
     cols.forEach(function (c, i) {
       if (c[2] === EUR) {
         var letra = hoja.getColumn(i + 1).letter;
@@ -328,7 +351,7 @@ function tarjetaExcelGestoria() {
       hojaResumen(libro, facturas, albaranes, (e || 'Todas las empresas') + ' · ' + nombrePeriodo(p));
       hojaExcel(libro, 'facturas', facturas); hojaExcel(libro, 'albaranes', albaranes);
       await guardarLibro(libro, ['MCD', e || 'todas', nombrePeriodo(p), new Date().toISOString().slice(0, 10)].join('_'));
-      estado.textContent = 'Descargado: ' + facturas.length + ' facturas y ' + albaranes.length + ' albaranes';
+      estado.textContent = 'Descargado: ' + facturas.length + ' facturas y ' + albaranes.filter(function (a) { return a.estado !== 'Anexo'; }).length + ' albaranes';
     } catch (err) { estado.textContent = 'No se ha descargado: ' + mensajeError(err); }
     finally { boton.disabled = false; }
   } }, [iconoPanel('excel'), 'Descargar Excel']);
@@ -492,8 +515,10 @@ function cargarTabla(s) {
   }
   return Promise.all([consulta(consultaLista(f).range(desde, desde + 49)), cuenta('recibidos'), cuenta('emitidos'), cuenta('')]).then(function (rs) {
     var r = rs[0];
-    return { filtros: f, paginada: true, pagina: s.pagina, tamano: 50, total: r.count || 0, filas: r.data || [],
-      cuentas: { recibidos: rs[1], emitidos: rs[2], '': rs[3] } };
+    var d = { filtros: f, paginada: true, pagina: s.pagina, tamano: 50, total: r.count || 0, filas: r.data || [],
+      cuentas: { recibidos: rs[1], emitidos: rs[2], '': rs[3] }, anexos: {} };
+    if (s.vista !== 'albaranes') return d;
+    return anexosDe(d.filas).then(function (m) { d.anexos = m; return d; }, function () { return d; });   // si falla, la lista sale igual
   });
 }
 function contarPendientes(ini) { return ini.empresas.reduce(function (t, e) { return t + Number(e.documentosConAvisos || 0); }, 0) + Number(ini.enRevisionManual || 0) + Number(ini.ticketsRevisar || 0); }
@@ -833,6 +858,13 @@ function vFacturas(v, d) {
   }), 'Factura');
   paginacion(c, d);
 }
+// Número del albarán y, si es el principal de un pack, cuántos papeles lleva dentro ("+ 3 papeles")
+function numeroConPack(f, anexos) {
+  var numero = f.num_albaran || f.id_doc;
+  if (!anexos || !anexos.length) return numero;
+  return h('span', { class: 'numero-pack' }, [numero, ' ', h('span', { class: 'pill marca', title: 'Papeles que van con este albarán: ' + anexos.map(function (a) { return a.num_albaran || a.id_doc; }).join(', ') },
+    '+ ' + anexos.length + (anexos.length === 1 ? ' papel' : ' papeles'))]);
+}
 function vAlbaranes(v, d) {
   barraFiltros(v, d, [['Activos', 'Todos los válidos'], ['PENDIENTE DE FACTURA', 'Esperando factura'], ['Facturado', 'Facturados'], ['Anexo', 'Anexos de un pack'], ['Descartado', 'Descartados'], ['Duplicado', 'Duplicados'], ['', 'Todo el historial']]);
   document.getElementById('contador').textContent = contadorTabla(d, S.sentido ? 'albaranes ' + nombreSentido('albaranes', S.sentido).toLowerCase() : 'albaranes');
@@ -840,7 +872,7 @@ function vAlbaranes(v, d) {
   var quien = S.sentido === 'emitidos' ? 'Cliente' : S.sentido === 'recibidos' ? 'Proveedor' : 'Cliente / proveedor';
   tabla(c, ['Nº albarán', 'Fecha', { t: quien, largo: 1 }, 'Empresa'].concat(conTipo ? ['Tipo'] : [], ['Ruta', { t: 'Importe', num: 1 }, 'Factura']), d.filas.map(function (f) {
     return { abrir: function () { ficha('Albarán', f, { empresa: f.empresa, hoja: 'albaranes' }); },
-      celdas: [f.num_albaran || f.id_doc, fecha(f.fecha), f.nombre, f.empresa].concat(conTipo ? [f.tipo_albaran || 'Sin indicar'] : [],
+      celdas: [numeroConPack(f, (d.anexos || {})[f.empresa + '|' + f.id_doc]), fecha(f.fecha), f.nombre, f.empresa].concat(conTipo ? [f.tipo_albaran || 'Sin indicar'] : [],
         [[f.origen, f.destino].filter(Boolean).join(' → '), { t: euros(f.importe), num: 1 },
         f.factura_vinculada ? h('span', { class: 'pill ok' }, f.factura_vinculada) : f.estado_factura === 'PENDIENTE DE FACTURA' ? pillEsperaFactura(f) : pillEstado(f.estado_factura)]) };
   }), 'Albarán');
@@ -1802,7 +1834,7 @@ var ETIQUETAS = { num_factura: 'Número de factura', num_albaran: 'Número de al
   observaciones: 'Observaciones', motivo: 'Motivo de revisión', id_doc: 'ID', empresa: 'Empresa', tipo_factura: 'Tipo (emitida o recibida)', tipo_albaran: 'Tipo (emitido o recibido)', estado: 'Estado', albaranes: 'Albaranes citados',
   comprobacion_albaranes: 'Comprobación de albaranes', estado_factura: 'Estado de facturación', factura_vinculada: 'Factura vinculada', dias_sin_factura: 'Días sin factura',
   posible_factura: 'Posible factura', categoria_gasto: 'Categoría de gasto', creado_en: 'Registrado', actualizado_en: 'Última modificación', fecha_alta: 'Fecha de alta',
-  va_con: 'Va con (pack)', propuesta_pack: 'Pack propuesto por el programa', pack_rechazado: 'Packs rechazados', archivo_original: 'Archivo original', hash_sha256: 'Huella del archivo', tokens_entrada: 'Tokens de entrada', tokens_salida: 'Tokens de salida', coste_eur: 'Coste IA (€)' };
+  va_con: 'Va con (pack)', referencias: 'Otras referencias (pedido, CMR…)', propuesta_pack: 'Pack propuesto por el programa', pack_rechazado: 'Packs rechazados', archivo_original: 'Archivo original', hash_sha256: 'Huella del archivo', tokens_entrada: 'Tokens de entrada', tokens_salida: 'Tokens de salida', coste_eur: 'Coste IA (€)' };
 var fichaSucia = null, guardandoFicha = false, focoAntesModal = null, secuenciaFicha = 0;
 
 // ---------------------------------------------------------------------
@@ -2019,7 +2051,11 @@ function ficha(titulo, fila, contexto) {
     descartar = h('button', { type: 'button', class: 'boton peligro', onclick: function () {
       if (guardandoFicha || !confirm('¿Quieres descartar este documento? Los cambios sin guardar no se aplicarán.')) return;
       ocupado(true); mensaje.textContent = 'Descartando documento…';
-      rpc('panel_descartar', { p_empresa: empresa, p_hoja: hoja, p_id: id }).then(function () { pendientes = 0; fichaSucia = null; guardandoFicha = false; cerrarModal(); avisoBreve(titulo + ' ' + id + ' descartado'); cargar(true); })
+      rpc('panel_descartar', { p_empresa: empresa, p_hoja: hoja, p_id: id }).then(function (r) {
+        var sueltos = r && Number(r.anexos_sueltos) || 0;      // era el principal de un pack: sus papeles vuelven a estar sueltos
+        pendientes = 0; fichaSucia = null; guardandoFicha = false; cerrarModal();
+        avisoBreve(titulo + ' ' + id + ' descartado' + (sueltos ? '. Sus ' + sueltos + ' papel' + (sueltos === 1 ? '' : 'es') + ' del pack vuelve' + (sueltos === 1 ? '' : 'n') + ' a estar suelto' + (sueltos === 1 ? '' : 's') : ''));
+        cargar(true); })
         .catch(function (e) { mensaje.textContent = mensajeError(e); mensaje.className = 'mensaje-ficha fallo'; ocupado(false); });
     } }, 'Descartar');
     // Revisión manual: volver a leer el documento tal como llegó (sin tacharlo a mano)
