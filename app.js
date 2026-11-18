@@ -74,9 +74,78 @@ function mensajeError(e) {
 }
 // Peticiones a las funciones del servidor: devuelven el dato o lanzan un error con texto claro
 function rpc(fn, args) {
+  if (/^panel_(guardar|descartar|juntar|soltar|rechazar|reintentar)/.test(fn)) DOCUMENTOS_VISTOS = {};   // van a cambiar datos: los nombres se vuelven a pedir
   return sb.rpc(fn, args || {}).then(function (r) { if (r.error) throw new Error(r.error.message); return r.data; });
 }
 function consulta(q) { return q.then(function (r) { if (r.error) throw new Error(r.error.message); return r; }); }
+
+// ---------------------------------------------------------------------
+// NOMBRE LEGIBLE DE UN DOCUMENTO (18-nov-2026)
+// "VTX-0049" no le dice nada a quien revisa. En pantalla se enseña lo que la persona reconoce
+// ("Almacenes Ejemplo · albarán 12345 · 16/11 · → Zaragoza") y el ID interno al lado, en pequeño.
+// El nombre NUNCA sale del panel: ni a las funciones del servidor, ni al historial, ni a nombres de archivo.
+// ---------------------------------------------------------------------
+// sinTipo: no dice "albarán"/"factura" (para cuando ya lo dice el título): "Almacenes Ejemplo · nº 12345 · 16/11 · → Zaragoza"
+function nombreDocumento(hoja, f, sinTipo) {
+  if (!f) return '';                                            // sin datos: quien llama enseña el ID, como siempre
+  function corto(v, n) { v = texto(v).replace(/\s+/g, ' ').trim(); return v.length > n ? v.slice(0, n - 1) + '…' : v; }
+  function dia(v) { var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(texto(v)); return !m ? '' : m[3] + '/' + m[2] + (m[1] === String(new Date().getFullYear()) ? '' : '/' + m[1].slice(2)); }
+  function hay(v) { return v !== null && v !== undefined && v !== ''; }
+  var p = [];
+  if (hoja === 'facturas' || hoja === 'albaranes') {
+    var fac = hoja === 'facturas', tipo = texto(fac ? f.tipo_factura : f.tipo_albaran), numero = corto(fac ? f.num_factura : f.num_albaran, 20);
+    p.push(corto(f.nombre, 28) || (/^Emitid/.test(tipo) ? 'Cliente sin nombre' : /^Recibid/.test(tipo) ? 'Proveedor sin nombre' : 'Sin nombre'));
+    p.push(sinTipo ? (numero ? 'nº ' + numero : 'sin número') : (fac ? 'factura ' : 'albarán ') + (numero || 'sin número'));
+    p.push(dia(f.fecha) || 'sin fecha');
+    if (fac) { if (hay(f.total)) p.push(euros(f.total)); }
+    else if (f.destino) p.push('→ ' + corto(f.destino, 24));
+    else if (f.origen) p.push('desde ' + corto(f.origen, 24));
+    else if (hay(f.importe)) p.push(euros(f.importe));
+  } else if (hoja === 'tickets') {
+    var gas = f.categoria === 'Combustible', de = f.categoria && f.categoria !== 'Otros' ? (gas ? 'gasolina' : String(f.categoria).toLowerCase()) : '';
+    p.push(corto(gas ? f.estacion || f.comercio : f.comercio, 28) || 'Comercio sin nombre');
+    p.push(sinTipo ? de : 'ticket' + (de ? ' de ' + de : ''));
+    p.push(dia(f.fecha) || 'sin fecha');
+    if (hay(f.total)) p.push(euros(f.total));
+  } else if (hoja === 'revision') {
+    p.push('Sin leer');
+    if (f.archivo_original) p.push(corto(f.archivo_original, 36));
+    if (dia(f.fecha_alta)) p.push('llegó ' + dia(f.fecha_alta));
+  }
+  return p.filter(Boolean).join(' · ');
+}
+// Nombre + ID en pequeño, como elemento (para títulos, celdas y enlaces). Sin datos, solo el ID.
+function etiquetaDocumento(hoja, f, id, sinTipo) {
+  var n = nombreDocumento(hoja, f, sinTipo); id = id || (f && f.id_doc) || '';
+  return h('span', { class: 'nombre-doc' }, n ? [n, id ? h('small', { class: 'id-doc' }, id) : null] : (id || '—'));
+}
+// "VTX-0049 (Almacenes Ejemplo · albarán 12345 · 16/11)" para preguntas y avisos, que solo admiten texto
+function idConNombre(hoja, f, id) { var n = nombreDocumento(hoja, f); return n ? id + ' (' + n + ')' : id; }
+function tituloFicha(titulo, hoja, f) {
+  var n = nombreDocumento(hoja, f, true), id = (f && f.id_doc) || '';
+  return h('span', { class: 'nombre-doc' }, [titulo + (n ? ' · ' + n : ''), id ? h('small', { class: 'id-doc' }, id) : null]);
+}
+function numeroId(id) { var m = /(\d+)\D*$/.exec(texto(id)); return m ? Number(m[1]) : 0; }
+var COLUMNAS_NOMBRE_ALBARAN = 'id_doc,num_albaran,nombre,fecha,origen,destino,importe,tipo_albaran,estado';   // lo que hace falta para nombrar un albarán
+// Datos mínimos de otros documentos de los que solo se tiene el ID (el principal de un pack, lo último que ha
+// llegado...). Se guardan mientras no cambie nada. Si la consulta falla, se enseña el ID y ya está.
+var DOCUMENTOS_VISTOS = {};                  // id -> { hoja, fila }
+function buscarDocumentos(ids, hojas) {
+  var faltan = [];
+  (ids || []).forEach(function (i) { i = texto(i).trim(); if (i && !DOCUMENTOS_VISTOS[i] && faltan.indexOf(i) < 0) faltan.push(i); });
+  function leer(hoja, columnas, lista) {
+    if (!lista.length || (hojas && hojas.indexOf(hoja) < 0)) return Promise.resolve();
+    return consulta(sb.from(hoja).select(columnas).in('id_doc', lista)).then(function (r) { (r.data || []).forEach(function (f) { DOCUMENTOS_VISTOS[f.id_doc] = { hoja: hoja, fila: f }; }); });
+  }
+  var tck = faltan.filter(function (i) { return /^TCK-/.test(i); }), rev = faltan.filter(function (i) { return /^REV-/.test(i); });
+  var resto = faltan.filter(function (i) { return tck.indexOf(i) < 0 && rev.indexOf(i) < 0; });
+  return Promise.all([
+    leer('tickets', 'id_doc,fecha,comercio,estacion,categoria,total', tck),
+    leer('revision', 'id_doc,archivo_original,fecha_alta', rev),
+    leer('facturas', 'id_doc,empresa,tipo_factura,num_factura,fecha,nombre,total', resto),
+    leer('albaranes', 'id_doc,empresa,tipo_albaran,num_albaran,fecha,nombre,origen,destino,importe,estado', resto)
+  ]).then(function () { return DOCUMENTOS_VISTOS; }, function () { return DOCUMENTOS_VISTOS; });
+}
 // Supabase devuelve como máximo 1000 filas por consulta: se piden por páginas hasta tenerlas todas.
 // "crear" es una función que devuelve la consulta nueva cada vez (con su order para que las páginas no se mezclen).
 async function consultaTodo(crear, maximo) {
@@ -612,9 +681,20 @@ function vInicio(v, d) {
   izquierda.appendChild(tarjetaExcelGestoria());
 
   // 4b) Lo último que ha llegado
-  derecha.appendChild(h('section', { class: 'bloque' }, [h('h2', {}, 'Lo último que ha llegado'), d.ultimos.length ? h('ul', { class: 'ultimos' }, d.ultimos.map(function (x) {
-    return h('li', {}, [h('span', { class: 'ultimo-id' }, x.id), h('span', { class: 'ultimo-archivo' }, x.archivo || ''), h('span', { class: 'ultimo-empresa' }, x.empresa), pillEstado(x.estado), h('span', { class: 'ultimo-fecha' }, fecha(x.fecha))]);
-  })) : h('p', { class: 'vacio' }, 'Aún no ha llegado ningún documento.')]));
+  // Primero el nombre del archivo; en cuanto se sabe qué es, lo que se reconoce ("Almacenes Ejemplo · albarán 12345 · 16/11"). El ID, en pequeño.
+  var listaUltimos = h('ul', { class: 'ultimos' }, d.ultimos.map(function (x) {
+    var visto = DOCUMENTOS_VISTOS[x.id];
+    return h('li', { 'data-id': x.id }, [h('span', { class: 'ultimo-nombre' }, [
+      h('span', { class: 'ultimo-archivo' + (visto ? ' con-nombre' : '') }, visto ? nombreDocumento(visto.hoja, visto.fila) : x.archivo || ''), h('small', { class: 'id-doc' }, x.id)]),
+      h('span', { class: 'ultimo-empresa' }, x.empresa), pillEstado(x.estado), h('span', { class: 'ultimo-fecha' }, fecha(x.fecha))]);
+  }));
+  buscarDocumentos(d.ultimos.map(function (x) { return x.id; })).then(function (vistos) {
+    [].forEach.call(listaUltimos.children, function (li) {
+      var v = vistos[li.getAttribute('data-id')], hueco = li.querySelector('.ultimo-archivo');
+      if (v && hueco) { hueco.textContent = nombreDocumento(v.hoja, v.fila); hueco.classList.add('con-nombre'); }
+    });
+  });
+  derecha.appendChild(h('section', { class: 'bloque' }, [h('h2', {}, 'Lo último que ha llegado'), d.ultimos.length ? listaUltimos : h('p', { class: 'vacio' }, 'Aún no ha llegado ningún documento.')]));
 
   // 5) Estado del servicio en una línea
   var vivo = s.conocido && (Date.now() - new Date(s.latido).getTime()) < 3 * 60 * 1000;
@@ -673,10 +753,10 @@ async function buscarRegistro(huella) {
       }
       return rep;
     }
-    var f = await consulta(sb.from('facturas').select('id_doc,estado,tipo_factura').eq('empresa', x.empresa).eq('id_doc', x.id_doc).limit(1));
-    if (f.data && f.data[0]) return { hoja: 'facturas', titulo: 'Factura', empresa: x.empresa, id: x.id_doc, estado: f.data[0].estado };
-    var a = await consulta(sb.from('albaranes').select('id_doc,estado').eq('empresa', x.empresa).eq('id_doc', x.id_doc).limit(1));
-    if (a.data && a.data[0]) return { hoja: 'albaranes', titulo: 'Albarán', empresa: x.empresa, id: x.id_doc, estado: a.data[0].estado };
+    var f = await consulta(sb.from('facturas').select('id_doc,estado,tipo_factura,num_factura,nombre,fecha,total').eq('empresa', x.empresa).eq('id_doc', x.id_doc).limit(1));
+    if (f.data && f.data[0]) return { hoja: 'facturas', titulo: 'Factura', empresa: x.empresa, id: x.id_doc, estado: f.data[0].estado, fila: f.data[0] };
+    var a = await consulta(sb.from('albaranes').select('id_doc,estado,tipo_albaran,num_albaran,nombre,fecha,origen,destino,importe').eq('empresa', x.empresa).eq('id_doc', x.id_doc).limit(1));
+    if (a.data && a.data[0]) return { hoja: 'albaranes', titulo: 'Albarán', empresa: x.empresa, id: x.id_doc, estado: a.data[0].estado, fila: a.data[0] };
     return { hoja: null, titulo: 'Documento', empresa: x.empresa, id: x.id_doc, estado: '' };
   }
   var t = await consulta(sb.from('tickets').select('*').eq('hash_sha256', huella).limit(1));
@@ -696,7 +776,9 @@ function pintarSubidas() {
       h('span', { class: 'subida-nombre' }, s.nombre), abrir, h('span', { class: 'subida-estado' }, s.texto)]));
   });
 }
-function textoRegistro(x) {
+// breve: solo "Factura VTX-0050 de Vertex" (para el aviso de abajo)
+function textoRegistro(x, breve) {
+  if (breve && !x.repetido && x.hoja !== 'revision') return x.titulo + ' ' + x.id + (x.empresa && x.empresa !== '_revision' ? ' de ' + x.empresa : '');
   if (x.hoja === 'revision') return 'necesita revisión manual (' + (x.motivo || 'no se pudo leer') + ')';
   if (x.repetido) return 'REPETIDO: este documento ya estaba registrado' + (x.original ? ' como ' + x.original + ' de ' + x.empresa : ' en ' + x.empresa) + '. No se ha añadido otra vez.';
   if (x.hoja === 'tickets') {
@@ -704,7 +786,8 @@ function textoRegistro(x) {
     return 'Ticket ' + x.id + ' · ' + x.ticket.categoria + (x.ticket.total !== null && x.ticket.total !== undefined ? ' · ' + euros(x.ticket.total) : '') +
       (rep ? ' · ¿REPETIDO? Se parece a ' + rep[1] + ': revísalo' : x.estado === 'Revisar' ? ' · revisar' : '');
   }
-  return x.titulo + ' ' + x.id + (x.empresa && x.empresa !== '_revision' ? ' de ' + x.empresa : '') + (x.estado ? ' · ' + x.estado : '');
+  var nombre = x.fila ? nombreDocumento(x.hoja, x.fila, true) : '';          // "Almacenes Ejemplo · nº 12345 · 16/11 · → Zaragoza"
+  return x.titulo + ' ' + x.id + (nombre ? ' (' + nombre + ')' : '') + (x.empresa && x.empresa !== '_revision' ? ' de ' + x.empresa : '') + (x.estado ? ' · ' + x.estado : '');
 }
 async function seguirSubida(s) {
   var inicio = Date.now();
@@ -717,7 +800,7 @@ async function seguirSubida(s) {
         s.texto = x.repetido ? textoRegistro(x) : 'Registrado: ' + textoRegistro(x); pintarSubidas();
         if (x.repetido || /Posible repetido/.test((x.ticket && x.ticket.observaciones) || '')) avisoBreve('Ojo: ' + s.nombre + ' parece repetido');
         if (S.vista === 'inicio' || S.vista === 'revision' || (S.vista === 'tickets' && x.hoja === 'tickets')) cargar(false);
-        if (/^tachado_/.test(s.nombre) && x.hoja && x.hoja !== 'revision') avisoBreve(s.nombre.replace(/^tachado_|\.pdf$/g, '') + ' ya está leído: ' + textoRegistro(x).split(' · ')[0] + '. Pulsa "Abrir" para revisar sus datos.');
+        if (/^tachado_/.test(s.nombre) && x.hoja && x.hoja !== 'revision') avisoBreve(s.nombre.replace(/^tachado_|\.pdf$/g, '') + ' ya está leído: ' + textoRegistro(x, true) + '. Pulsa "Abrir" para revisar sus datos.');
         return;
       }
       var segundos = Math.round((Date.now() - inicio) / 1000);
@@ -853,14 +936,18 @@ function vFacturas(v, d) {
   var quien = S.sentido === 'emitidos' ? 'Cliente' : S.sentido === 'recibidos' ? 'Proveedor' : 'Cliente / proveedor';
   tabla(c, ['Nº factura', 'Fecha', { t: quien, largo: 1 }, 'Empresa'].concat(conTipo ? ['Tipo'] : [], [{ t: 'Total', num: 1 }, 'Vence', 'Estado']), d.filas.map(function (f) {
     return { abrir: function () { ficha('Factura', f, { empresa: f.empresa, hoja: 'facturas' }); },
-      celdas: [f.num_factura || f.id_doc, fecha(f.fecha), f.nombre, f.empresa].concat(conTipo ? [f.tipo_factura || 'Sin indicar'] : [],
+      celdas: [numeroOSinNumero(f.num_factura, f.id_doc), fecha(f.fecha), f.nombre, f.empresa].concat(conTipo ? [f.tipo_factura || 'Sin indicar'] : [],
         [{ t: euros(f.total), num: 1 }, vence(f.fecha_vencimiento), pillEstado(f.estado)]) };
   }), 'Factura');
   paginacion(c, d);
 }
 // Número del albarán y, si es el principal de un pack, cuántos papeles lleva dentro ("+ 3 papeles")
+// Sin número ya no se enseña el ID a secas: "sin número" y el ID en pequeño
+function numeroOSinNumero(numero, id) {
+  return numero ? numero : h('span', { class: 'nombre-doc' }, ['sin número', h('small', { class: 'id-doc' }, id)]);
+}
 function numeroConPack(f, anexos) {
-  var numero = f.num_albaran || f.id_doc;
+  var numero = numeroOSinNumero(f.num_albaran, f.id_doc);
   if (!anexos || !anexos.length) return numero;
   return h('span', { class: 'numero-pack' }, [numero, ' ', h('span', { class: 'pill marca', title: 'Papeles que van con este albarán: ' + anexos.map(function (a) { return a.num_albaran || a.id_doc; }).join(', ') },
     '+ ' + anexos.length + (anexos.length === 1 ? ' papel' : ' papeles'))]);
@@ -870,12 +957,26 @@ function vAlbaranes(v, d) {
   document.getElementById('contador').textContent = contadorTabla(d, S.sentido ? 'albaranes ' + nombreSentido('albaranes', S.sentido).toLowerCase() : 'albaranes');
   var c = document.getElementById('cuerpo'), conTipo = !S.sentido;
   var quien = S.sentido === 'emitidos' ? 'Cliente' : S.sentido === 'recibidos' ? 'Proveedor' : 'Cliente / proveedor';
+  // Un anexo dice con quién va por su número ("Va con nº 67890"), no por el ID del principal
+  var vanCon = [];
+  function pillVaCon(f) {
+    var pill = pillEstado(f.estado_factura);
+    if (pill && f.va_con && /^Va con /.test(texto(f.estado_factura))) vanCon.push([pill, f.va_con]);
+    return pill;
+  }
   tabla(c, ['Nº albarán', 'Fecha', { t: quien, largo: 1 }, 'Empresa'].concat(conTipo ? ['Tipo'] : [], ['Ruta', { t: 'Importe', num: 1 }, 'Factura']), d.filas.map(function (f) {
     return { abrir: function () { ficha('Albarán', f, { empresa: f.empresa, hoja: 'albaranes' }); },
       celdas: [numeroConPack(f, (d.anexos || {})[f.empresa + '|' + f.id_doc]), fecha(f.fecha), f.nombre, f.empresa].concat(conTipo ? [f.tipo_albaran || 'Sin indicar'] : [],
         [[f.origen, f.destino].filter(Boolean).join(' → '), { t: euros(f.importe), num: 1 },
-        f.factura_vinculada ? h('span', { class: 'pill ok' }, f.factura_vinculada) : f.estado_factura === 'PENDIENTE DE FACTURA' ? pillEsperaFactura(f) : pillEstado(f.estado_factura)]) };
+        f.factura_vinculada ? h('span', { class: 'pill ok' }, f.factura_vinculada) : f.estado_factura === 'PENDIENTE DE FACTURA' ? pillEsperaFactura(f) : pillVaCon(f)]) };
   }), 'Albarán');
+  if (vanCon.length) buscarDocumentos(vanCon.map(function (x) { return x[1]; }), ['albaranes']).then(function (vistos) {
+    vanCon.forEach(function (x) {
+      var p = vistos[x[1]]; if (!p) return;
+      x[0].textContent = 'Va con ' + (p.fila.num_albaran ? 'nº ' + p.fila.num_albaran : 'otro albarán');
+      x[0].title = nombreDocumento('albaranes', p.fila) + ' (' + x[1] + ')';
+    });
+  });
   paginacion(c, d);
 }
 
@@ -1288,7 +1389,7 @@ function fichaTicket(t) {
     h('button', { type: 'button', class: 'boton principal', onclick: function () { guardar(false); } }, 'Guardar cambios'),
     h('button', { type: 'button', class: 'boton revisar', onclick: function () { guardar(true); } }, 'Guardar y marcar revisado')]));
   cuerpo.appendChild(pie);
-  abrirModal('Ticket ' + t.id_doc, cuerpo);
+  abrirModal(tituloFicha('Ticket', 'tickets', t), cuerpo);
   document.getElementById('caja').classList.add('revision-amplia');
   fichaSucia = function () { return editable && Object.keys(cambios()).length > 0; };
   // Foto: originales/AAAA-MM/<id>_<archivo> (el mes en que se leyó)
@@ -1306,7 +1407,7 @@ function fichaTicket(t) {
     await rpc('panel_registrar_acceso_archivo', { p_id: t.id_doc, p_tipo: 'original', p_accion: 'Ver documento' });
     var url = await urlFirmada(foto.ruta);
     if (numero !== secuenciaFicha) return;
-    visor.textContent = ''; visor.appendChild(visorPara(url, foto.nombre));
+    crearVisor(visor, url, foto.nombre);
   }
   (async function () {
     var foto = await buscarFoto();
@@ -1340,13 +1441,34 @@ function vRevision(v, lista) {
   v.appendChild(h('p', { class: 'sub' }, 'Un albarán solo aparece aquí si lleva más de ' + DIAS_AVISO_ALBARAN + ' días sin su factura: es normal que el albarán llegue antes. ' +
     'Para quitar un documento de esta lista pulsa "Guardar y marcar revisado" o "Descartar".'));
   if (!filas.length) { v.appendChild(h('div', { class: 'tarjeta vacio' }, 'No hay nada pendiente de revisar.')); return; }
+  // Primera columna: lo que se reconoce (número, "Ticket" o el nombre del archivo) y el ID en pequeño
+  function celdaDocumento(x) {
+    var que = x.hoja === 'tickets' ? 'Ticket' : x.hoja === 'revision' ? (x.numero || 'Sin leer') : (x.numero || 'sin número');
+    return h('span', { class: 'nombre-doc' }, [que, h('small', { class: 'id-doc' }, x.id)]);
+  }
+  // "Pack por confirmar": el programa escribe "¿Va con VTX-0069 · motivo?". Se enseña con el nombre de ese albarán.
+  var packs = [];
+  function celdaMotivo(x) {
+    var m = x.tipo === 'Pack por confirmar' && /^¿Va con (\S+)(?: · ([\s\S]*?))?\?$/.exec(texto(x.motivo));
+    if (!m) return x.motivo;
+    var hueco = h('span', {}, x.motivo); packs.push([hueco, m[1], m[2] || '']);
+    return hueco;
+  }
   tabla(v, ['Documento', 'Qué pasa', 'Empresa', 'Fecha', 'Cliente / proveedor', { t: 'Importe', num: 1 }, { t: 'Motivo', largo: 1 }], filas.map(function (x) {
     return { abrir: function () { if (x.hoja === 'tickets') { abrirDesdeHistorial({ hoja: 'tickets', id_doc: x.id }); return; }
         abrirFichaPorId(x.hoja === 'facturas' ? 'Factura' : x.hoja === 'albaranes' ? 'Albarán' : 'Revisión manual', x.empresa, x.hoja, x.id); },
-      celdas: [x.numero || x.id, ENVIADOS_TACHADO[x.id] && x.tipo === 'Revisión manual' ? h('span', { class: 'pill ok' }, 'Enviado a la IA') : pillEstado(x.tipo === 'Albarán sin factura' ? 'Sin factura' : x.tipo),
+      celdas: [celdaDocumento(x), ENVIADOS_TACHADO[x.id] && x.tipo === 'Revisión manual' ? h('span', { class: 'pill ok' }, 'Enviado a la IA') : pillEstado(x.tipo === 'Albarán sin factura' ? 'Sin factura' : x.tipo),
         x.empresa === '_revision' || !x.empresa ? '—' : x.empresa, fecha(x.fecha), x.nombre, { t: x.total === null || x.total === undefined ? '' : euros(x.total), num: 1 },
-        ENVIADOS_TACHADO[x.id] && x.tipo === 'Revisión manual' ? 'Copia tachada enviada: se está leyendo (tarda un minuto)' : x.motivo] };
+        ENVIADOS_TACHADO[x.id] && x.tipo === 'Revisión manual' ? 'Copia tachada enviada: se está leyendo (tarda un minuto)' : celdaMotivo(x)] };
   }), 'Revisión');
+  if (packs.length) buscarDocumentos(packs.map(function (x) { return x[1]; }), ['albaranes']).then(function (vistos) {
+    packs.forEach(function (x) {
+      var p = vistos[x[1]]; if (!p) return;
+      var razon = x[2].split(x[1]).join('ese albarán');
+      x[0].textContent = '¿Va con ' + nombreDocumento('albaranes', p.fila) + '?' + (razon ? ' Motivo: ' + razon + '.' : '');
+      x[0].appendChild(h('small', { class: 'id-doc' }, x[1]));
+    });
+  });
 }
 function abrirFichaPorId(titulo, empresa, hoja, id) {
   abrirModal(titulo + ' · ' + id, h('div', { class: 'cargando', role: 'status' }, 'Cargando documento…'));
@@ -1439,16 +1561,164 @@ function avisoEnElOrdenador(visor, pedido, buscar, alTraerlo) {
 function urlFirmada(ruta) {
   return sb.storage.from('documentos').createSignedUrl(ruta, 600).then(function (r) { if (r.error) throw new Error(r.error.message); return r.data.signedUrl; });
 }
-function visorPara(url, nombre) {
-  return /\.(jpe?g|png|webp|gif|bmp)$/i.test(nombre) ? h('img', { src: url, alt: 'Vista previa de ' + nombre }) : h('iframe', { src: url, title: 'Vista previa de ' + nombre, loading: 'lazy' });
+// ---------------------------------------------------------------------
+// VISOR CON ZOOM (18-nov-2026)
+// Antes la foto se encajaba entera en su caja y, al acercar con el zoom del navegador, la caja menguaba y el
+// documento con ella: no había forma de leerlo. Ahora el documento tiene tamaño propio (el ancho del visor × el
+// zoom elegido) dentro de una zona con desplazamiento: botones − y +, Ctrl + rueda, pellizco en el móvil y
+// arrastrar con el ratón para moverse. Los PDF se pintan con pdf.js (la misma librería del tachado), página a
+// página y solo las que se ven. El documento se pinta en este navegador: no sale a ningún otro sitio.
+// ---------------------------------------------------------------------
+var ZOOM_MINIMO = 0.5, ZOOM_MAXIMO = 6, ZOOM_PASO = 1.25, PIXELES_MAXIMOS_HOJA = 12e6;
+var visorAbierto = null;                    // para soltar la memoria del anterior al abrir otro o al cerrar la ficha
+function cerrarVisor() { if (visorAbierto) { var v = visorAbierto; visorAbierto = null; v.cerrar(); } }
+function crearVisor(visor, url, nombre) {
+  cerrarVisor();
+  var esImagen = /\.(jpe?g|png|webp|gif|bmp)$/i.test(nombre), esPdf = /\.pdf$/i.test(nombre);
+  function marco() { return h('iframe', { src: url, title: 'Vista previa de ' + nombre, loading: 'lazy' }); }
+  visor.textContent = '';
+  if (!esImagen && !esPdf) { visor.appendChild(marco()); return; }          // otros formatos: como siempre, en un marco del navegador
+  var zoom = 1, vivo = true, hojas = [], pdf = null, turno = 0, temporizador = null, arrastre = null, pellizco = null;
+  var etiqueta = h('span', { class: 'visor-zoom', role: 'status', 'aria-live': 'polite' }, '100 %');
+  function boton(letra, titulo, accion) { return h('button', { type: 'button', class: 'boton', title: titulo, 'aria-label': titulo, onclick: accion }, letra); }
+  var ayuda = h('span', { class: 'visor-ayuda' }, 'Ctrl + rueda para acercar · arrastra para moverte');
+  var barra = h('div', { class: 'visor-barra', role: 'toolbar', 'aria-label': 'Tamaño del documento' }, [
+    boton('−', 'Alejar', function () { cambiarZoom(zoom / ZOOM_PASO); }), etiqueta, boton('+', 'Acercar', function () { cambiarZoom(zoom * ZOOM_PASO); }),
+    boton('Ajustar', 'Ajustar al ancho', function () { cambiarZoom(1); }), ayuda]);
+  var lista = h('div', { class: 'visor-hojas' }, h('p', { class: 'vacio', role: 'status' }, 'Abriendo…'));
+  var zona = h('div', { class: 'visor-zona', tabindex: '0', role: 'group', 'aria-label': 'Vista previa de ' + nombre }, lista);
+  visor.appendChild(h('div', { class: 'visor-caja' }, [barra, zona]));
+  function noDisponible() { lista.textContent = ''; lista.appendChild(h('p', { class: 'vacio' }, 'La vista previa no está disponible. Puedes continuar revisando los datos.')); }
+  // Tamaño en pantalla de cada hoja: el ancho del visor × el zoom (100 % = ajustado al ancho)
+  function colocar() {
+    var ancho = Math.round(Math.max(160, zona.clientWidth - 24) * zoom);
+    hojas.forEach(function (p) { p.el.style.width = ancho + 'px'; if (p.proporcion && p.el.tagName === 'CANVAS') p.el.style.height = Math.round(ancho * p.proporcion) + 'px'; });
+    etiqueta.textContent = Math.round(zoom * 100) + ' %';
+  }
+  // (px, py): el punto del visor que no debe moverse al cambiar el tamaño (el cursor o el centro)
+  function cambiarZoom(nuevo, px, py) {
+    nuevo = Math.min(ZOOM_MAXIMO, Math.max(ZOOM_MINIMO, nuevo));
+    if (nuevo === zoom || !hojas.length) return;
+    if (px === undefined) { px = zona.clientWidth / 2; py = zona.clientHeight / 2; }
+    var fx = (zona.scrollLeft + px) / Math.max(1, zona.scrollWidth), fy = (zona.scrollTop + py) / Math.max(1, zona.scrollHeight);
+    zoom = nuevo; colocar();
+    zona.scrollLeft = fx * zona.scrollWidth - px; zona.scrollTop = fy * zona.scrollHeight - py;
+    pintarLuego();
+  }
+  // PDF: se pintan las páginas que se ven (y las de alrededor) a la resolución del tamaño actual
+  function seVe(p) { var arriba = p.el.offsetTop, margen = zona.clientHeight; return arriba + p.el.offsetHeight > zona.scrollTop - margen && arriba < zona.scrollTop + zona.clientHeight + margen; }
+  function pintarLuego() { if (!pdf || !vivo) return; clearTimeout(temporizador); temporizador = setTimeout(pintar, 120); }
+  async function pintar() {
+    var mio = ++turno;
+    try {
+      if (!zona.isConnected) { este.cerrar(); return; }
+      for (var i = 0; i < hojas.length; i++) {
+        var p = hojas[i], ancho = p.el.clientWidth;
+        if (!vivo || mio !== turno || !pdf) return;
+        if (!ancho) continue;
+        if (!seVe(p)) { if (p.ancho && p.ancho !== ancho) { p.el.width = p.el.height = 1; p.ancho = 0; } continue; }   // lejos y con otro tamaño: se suelta su memoria
+        if (p.ancho === ancho) continue;
+        var pagina = await pdf.getPage(i + 1);
+        if (!vivo || mio !== turno) return;
+        var v1 = pagina.getViewport({ scale: 1 });
+        var escala = Math.min(ancho * (window.devicePixelRatio || 1) / v1.width, Math.sqrt(PIXELES_MAXIMOS_HOJA / (v1.width * v1.height)));
+        var vp = pagina.getViewport({ scale: escala }), borrador = lienzo(vp.width, vp.height), cx = borrador.getContext('2d');
+        cx.fillStyle = '#fff'; cx.fillRect(0, 0, borrador.width, borrador.height);
+        await pagina.render({ canvasContext: cx, viewport: vp }).promise;
+        if (!vivo || mio !== turno) return;
+        p.el.width = borrador.width; p.el.height = borrador.height; p.el.getContext('2d').drawImage(borrador, 0, 0); p.ancho = ancho;
+      }
+    } catch (e) { /* una página que no se deja pintar no rompe el resto del panel */ }
+  }
+  var observador = window.ResizeObserver ? new ResizeObserver(function () { if (vivo && hojas.length) { colocar(); pintarLuego(); } }) : null;
+  var este = { cerrar: function () {
+    vivo = false; clearTimeout(temporizador); if (observador) observador.disconnect();
+    if (pdf) { try { var fin = pdf.destroy(); if (fin && fin.catch) fin.catch(function () {}); } catch (e) { /* ya estaba cerrado */ } pdf = null; }
+  } };
+  visorAbierto = este;
+  if (observador) observador.observe(zona);
+  zona.addEventListener('scroll', pintarLuego);
+  // Ctrl + rueda (o el gesto de pellizco del panel táctil del portátil): acerca y aleja donde está el cursor
+  zona.addEventListener('wheel', function (e) {
+    if (!e.ctrlKey && !e.metaKey) return;                         // la rueda sola desplaza, como siempre
+    e.preventDefault();
+    var r = zona.getBoundingClientRect();
+    cambiarZoom(zoom * Math.min(ZOOM_PASO, Math.max(1 / ZOOM_PASO, Math.exp(-e.deltaY * 0.0025))), e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+  // Arrastrar con el ratón para moverse por el documento (en el móvil se desplaza con el dedo, como siempre)
+  zona.addEventListener('pointerdown', function (e) {
+    if (e.pointerType !== 'mouse' || e.button !== 0) return;
+    if (e.target === zona && (e.offsetX >= zona.clientWidth || e.offsetY >= zona.clientHeight)) return;      // es la barra de desplazamiento
+    arrastre = { x: e.clientX, y: e.clientY, izquierda: zona.scrollLeft, arriba: zona.scrollTop };
+    try { zona.setPointerCapture(e.pointerId); } catch (err) { /* sin captura también funciona */ }
+    zona.classList.add('arrastrando');
+  });
+  zona.addEventListener('pointermove', function (e) {
+    if (!arrastre) return;
+    zona.scrollLeft = arrastre.izquierda - (e.clientX - arrastre.x); zona.scrollTop = arrastre.arriba - (e.clientY - arrastre.y);
+  });
+  function soltar() { arrastre = null; zona.classList.remove('arrastrando'); }
+  zona.addEventListener('pointerup', soltar); zona.addEventListener('pointercancel', soltar);
+  // Pellizco con dos dedos (móvil y tableta)
+  function separacion(t) { return Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY); }
+  zona.addEventListener('touchstart', function (e) { if (e.touches.length === 2) pellizco = { d: separacion(e.touches), zoom: zoom }; }, { passive: true });
+  zona.addEventListener('touchmove', function (e) {
+    if (!pellizco || e.touches.length !== 2) return;
+    e.preventDefault();
+    var r = zona.getBoundingClientRect();
+    cambiarZoom(pellizco.zoom * separacion(e.touches) / Math.max(1, pellizco.d),
+      (e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left, (e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top);
+  }, { passive: false });
+  zona.addEventListener('touchend', function (e) { if (e.touches.length < 2) pellizco = null; });
+  zona.addEventListener('touchcancel', function () { pellizco = null; });
+  // Con el foco en el documento: + y − cambian el tamaño, 0 lo ajusta al ancho (las flechas desplazan, como siempre)
+  zona.addEventListener('keydown', function (e) {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === '+' || e.key === '=') { e.preventDefault(); cambiarZoom(zoom * ZOOM_PASO); }
+    else if (e.key === '-') { e.preventDefault(); cambiarZoom(zoom / ZOOM_PASO); }
+    else if (e.key === '0') { e.preventDefault(); cambiarZoom(1); }
+  });
+  (async function () {
+    try {
+      if (esImagen) {
+        var foto = h('img', { class: 'visor-hoja', src: url, alt: 'Vista previa de ' + nombre, draggable: 'false' });
+        foto.addEventListener('error', function () { if (vivo && zona.isConnected) { hojas = []; noDisponible(); } });
+        lista.textContent = ''; lista.appendChild(foto); hojas = [{ el: foto }]; colocar();
+        return;
+      }
+      var datos = await fetch(url).then(function (r) { if (!r.ok) throw new Error('No se pudo descargar el documento'); return r.arrayBuffer(); });
+      var pdfjs = await prepararPdf();
+      if (!vivo) return;
+      var abierto = await pdfjs.getDocument({ data: new Uint8Array(datos), isEvalSupported: false }).promise;
+      if (!vivo) { try { abierto.destroy(); } catch (e) { /* nada */ } return; }
+      pdf = abierto;
+      var nuevas = [];
+      for (var i = 1; i <= pdf.numPages; i++) {
+        var medida = (await pdf.getPage(i)).getViewport({ scale: 1 });
+        if (!vivo) return;
+        var hoja = h('canvas', { class: 'visor-hoja', role: 'img', 'aria-label': 'Página ' + i + ' de ' + pdf.numPages + ' de ' + nombre });
+        hoja.width = hoja.height = 1;
+        nuevas.push({ el: hoja, proporcion: medida.height / medida.width, ancho: 0 });
+      }
+      lista.textContent = ''; nuevas.forEach(function (p) { lista.appendChild(p.el); });
+      hojas = nuevas;
+      if (pdf.numPages > 1) ayuda.textContent = pdf.numPages + ' páginas · Ctrl + rueda para acercar';
+      colocar(); pintar();
+    } catch (e) {
+      if (!vivo || !zona.isConnected) return;
+      // Sin el lector de PDF (no se pudo bajar la librería) o con un PDF que no se deja abrir: como antes, en un marco del navegador
+      este.cerrar(); if (visorAbierto === este) visorAbierto = null;
+      visor.textContent = ''; visor.appendChild(marco());
+    }
+  })();
 }
 function vistaPreviaRuta(nombre, ruta) {
   abrirModal(nombre, h('div', { class: 'cargando' }, 'Preparando la vista previa…'));
   var numero = secuenciaFicha;
   rpc('panel_registrar_acceso_archivo', { p_id: ruta.slice(0, 160), p_tipo: 'archivo', p_accion: 'Ver documento' }).then(function () { return urlFirmada(ruta); }).then(function (url) {
     if (numero !== secuenciaFicha) return;
-    var caja = document.getElementById('caja'); var visor = h('div', { class: 'visor-documento', style: 'height:72vh' }, visorPara(url, nombre));
-    caja.replaceChild(visor, caja.lastChild);
+    var caja = document.getElementById('caja'); var visor = h('div', { class: 'visor-documento', style: 'height:72vh' });
+    caja.replaceChild(visor, caja.lastChild); crearVisor(visor, url, nombre);
     if (S.rol === 'Administrador') caja.querySelector('.cab').insertBefore(h('button', { class: 'boton', onclick: function () { descargar(ruta, nombre); } }, 'Descargar'), caja.querySelector('.cab .boton'));
   }).catch(function (e) { if (numero === secuenciaFicha) abrirModal('No se puede mostrar', h('p', {}, mensajeError(e))); });
 }
@@ -1851,11 +2121,21 @@ var fichaSucia = null, guardandoFicha = false, focoAntesModal = null, secuenciaF
 function seccionPack(empresa, id, fila, editable) {
   var caja = h('fieldset', { class: 'seccion-ficha seccion-pack' }, [h('legend', {}, 'Pack: papeles que van juntos')]);
   var aviso = h('div', { class: 'mensaje-ficha', role: 'status', 'aria-live': 'polite' });
-  function abrir(otro) {
-    return h('button', { type: 'button', class: 'boton enlace', onclick: function () {
+  var propio = nombreDocumento('albaranes', fila);                 // el nombre de ESTE papel, para preguntas y avisos
+  var conocidos = {};                                              // otros albaranes de los que ya se tienen los datos: id -> fila
+  function conNombre(otro) { return idConNombre('albaranes', conocidos[otro], otro); }       // "VTX-0059 (Cliente Ejemplo · albarán 67890 · 16/11)"
+  // Enlace a otro albarán: se ve su nombre ("Almacenes Ejemplo · albarán 12345 · 16/11 · → Zaragoza") y el ID en pequeño
+  function abrir(otro, datos) {
+    if (datos) conocidos[otro] = datos;
+    var boton = h('button', { type: 'button', class: 'boton enlace', onclick: function () {
       if (fichaSucia && fichaSucia() && !confirm('Hay cambios sin guardar en esta ficha. ¿Abrir el otro albarán sin guardarlos?')) return;
       fichaSucia = null; abrirFichaPorId('Albarán', empresa, 'albaranes', otro);
-    } }, otro);
+    } }, etiquetaDocumento('albaranes', conocidos[otro], otro));
+    if (!conocidos[otro]) buscarDocumentos([otro], ['albaranes']).then(function (vistos) {
+      if (!vistos[otro]) return;
+      conocidos[otro] = vistos[otro].fila; boton.textContent = ''; boton.appendChild(etiquetaDocumento('albaranes', conocidos[otro], otro));
+    });
+    return boton;
   }
   function fallo(e) { aviso.className = 'mensaje-ficha fallo'; aviso.textContent = mensajeError(e); }
   function terminar(texto) { fichaSucia = null; guardandoFicha = false; cerrarModal(); avisoBreve(texto); cargar(false); }
@@ -1864,7 +2144,7 @@ function seccionPack(empresa, id, fila, editable) {
     caja.appendChild(h('p', { class: 'ayuda-campo' }, ['Este papel va con el albarán ', abrir(fila.va_con), ', que es el que se factura. No cuenta como albarán aparte ni espera su propia factura.']));
     if (editable) {
       var soltar = h('button', { type: 'button', class: 'boton', onclick: function () {
-        if (!confirm('¿Soltar ' + id + ' del pack de ' + fila.va_con + '?\n\nVolverá a contar como un albarán aparte y a esperar su propia factura.')) return;
+        if (!confirm('¿Soltar ' + id + (propio ? ' (' + propio + ')' : '') + ' del pack de ' + conNombre(fila.va_con) + '?\n\nVolverá a contar como un albarán aparte y a esperar su propia factura.')) return;
         soltar.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Soltando…';
         rpc('panel_soltar_albaran', { p_empresa: empresa, p_id: id }).then(function () { terminar('Albarán ' + id + ' suelto del pack'); })
           .catch(function (e) { soltar.disabled = false; fallo(e); });
@@ -1877,18 +2157,20 @@ function seccionPack(empresa, id, fila, editable) {
   // Propuesta del programa (packs.py): este papel podría ir con otro albarán
   var propuesta = String(fila.propuesta_pack || ''), principalPropuesto = propuesta.split(' · ')[0].trim();
   if (propuesta && principalPropuesto) {
-    var motivo = propuesta.slice(principalPropuesto.length).replace(/^\s*·\s*/, '');
+    var motivo = propuesta.slice(principalPropuesto.length).replace(/^\s*·\s*/, '').split(principalPropuesto).join('ese albarán');
     var bloque = h('div', { class: 'propuesta-pack' }, [h('p', {}, [h('b', {}, 'Propuesta del programa: '), '¿este papel va con el albarán ', abrir(principalPropuesto), '?',
       motivo ? h('span', { class: 'sub' }, ' Motivo: ' + motivo + '.') : null])]);
     if (editable) {
       var si = h('button', { type: 'button', class: 'boton principal', onclick: function () {
         si.disabled = no.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Juntando…';
-        rpc('panel_juntar_albaran', { p_empresa: empresa, p_id: id, p_principal: principalPropuesto }).then(function () { terminar('Albarán ' + id + ' va ahora con ' + principalPropuesto); })
+        var destino = conNombre(principalPropuesto);
+        rpc('panel_juntar_albaran', { p_empresa: empresa, p_id: id, p_principal: principalPropuesto }).then(function () { terminar('Albarán ' + id + ' va ahora con ' + destino); })
           .catch(function (e) { si.disabled = no.disabled = false; fallo(e); });
-      } }, 'Sí, va con ' + principalPropuesto);
+      } }, 'Sí, va con ese');
       var no = h('button', { type: 'button', class: 'boton', onclick: function () {
         si.disabled = no.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Guardando…';
-        rpc('panel_rechazar_pack', { p_empresa: empresa, p_id: id }).then(function () { terminar('Anotado: ' + id + ' no va con ' + principalPropuesto + ' (no se volverá a proponer)'); })
+        var rechazado = conNombre(principalPropuesto);
+        rpc('panel_rechazar_pack', { p_empresa: empresa, p_id: id }).then(function () { terminar('Anotado: ' + id + ' no va con ' + rechazado + ' (no se volverá a proponer)'); })
           .catch(function (e) { si.disabled = no.disabled = false; fallo(e); });
       } }, 'No va con ese');
       bloque.appendChild(h('div', { class: 'en-linea' }, [si, no]));
@@ -1898,12 +2180,12 @@ function seccionPack(empresa, id, fila, editable) {
   var lista = h('ul', { class: 'lista-pack', 'aria-label': 'Anexos de este albarán' }, h('li', { class: 'sub' }, 'Buscando sus anexos…'));
   var propuestos = h('div', { class: 'propuesta-pack', hidden: 'hidden' });
   function pintarPropuestos() {
-    consulta(sb.from('albaranes').select('id_doc,num_albaran,nombre,propuesta_pack,estado').eq('empresa', empresa).ilike('propuesta_pack', id + ' ·%').order('id_doc')).then(function (r) {
+    return consulta(sb.from('albaranes').select(COLUMNAS_NOMBRE_ALBARAN + ',propuesta_pack').eq('empresa', empresa).ilike('propuesta_pack', id + ' ·%').order('id_doc')).then(function (r) {
       var filas = (r.data || []).filter(function (x) { return ['Descartado', 'Duplicado', 'Anexo'].indexOf(x.estado || '') < 0; });
       propuestos.textContent = ''; propuestos.hidden = !filas.length;
       if (!filas.length) return;
-      propuestos.appendChild(h('p', {}, [h('b', {}, 'El programa propone que vayan con este albarán: '), h('span', {}, filas.map(function (x) { return x.id_doc; }).join(', ') + '.')]));
-      var lista2 = h('ul', { class: 'lista-pack' }, filas.map(function (x) { return h('li', {}, [abrir(x.id_doc), h('span', { class: 'sub' }, (x.num_albaran || 'sin número') + (x.nombre ? ' · ' + x.nombre : ''))]); }));
+      propuestos.appendChild(h('p', {}, h('b', {}, 'El programa propone que vayan con este albarán:')));
+      var lista2 = h('ul', { class: 'lista-pack' }, filas.map(function (x) { return h('li', {}, abrir(x.id_doc, x)); }));
       propuestos.appendChild(lista2);
       if (!editable) return;
       var todos = h('button', { type: 'button', class: 'boton principal', onclick: function () {
@@ -1918,21 +2200,61 @@ function seccionPack(empresa, id, fila, editable) {
       propuestos.appendChild(h('div', { class: 'en-linea' }, [todos, h('span', { class: 'sub' }, 'Si alguno no va, ábrelo y pulsa «No va con ese».')]));
     }).catch(function () { propuestos.hidden = true; });
   }
-  function pintarAnexos() {
-    return consulta(sb.from('albaranes').select('id_doc,num_albaran,nombre,estado').eq('empresa', empresa).eq('va_con', id).order('id_doc')).then(function (r) {
-      var filas = r.data || []; lista.textContent = '';
+  function pintarAnexos(antes) {            // antes: se espera a que también estén las propuestas, para que todo salga a la vez
+    return Promise.all([consulta(sb.from('albaranes').select(COLUMNAS_NOMBRE_ALBARAN).eq('empresa', empresa).eq('va_con', id).order('id_doc')), antes]).then(function (rs) {
+      var filas = rs[0].data || []; lista.textContent = '';
       if (!filas.length) lista.appendChild(h('li', { class: 'sub' }, 'Va solo: no tiene anexos.'));
-      filas.forEach(function (x) { lista.appendChild(h('li', {}, [abrir(x.id_doc), h('span', { class: 'sub' }, (x.num_albaran || 'sin número') + (x.nombre ? ' · ' + x.nombre : ''))])); });
+      filas.forEach(function (x) { lista.appendChild(h('li', {}, abrir(x.id_doc, x))); });
       return filas.length;
     }).catch(function () { lista.textContent = ''; lista.appendChild(h('li', { class: 'sub' }, 'No se han podido cargar los anexos.')); return 0; });
   }
-  caja.appendChild(lista); caja.appendChild(propuestos); pintarAnexos(); pintarPropuestos();
+  caja.appendChild(lista); caja.appendChild(propuestos); pintarAnexos(pintarPropuestos());
   if (editable && ['Descartado', 'Duplicado'].indexOf(fila.estado || '') < 0) {
-    // 1) Añadir anexos a este albarán (se pueden escribir varios: VTX-0040, VTX-0049)
-    var nuevos = h('input', { type: 'text', id: 'campoAnexos', autocomplete: 'off', spellcheck: 'false', placeholder: 'Ej. VTX-0040, VTX-0049' });
+    // Para juntar papeles ya no hay que saberse los ID: se buscan por número, nombre o destino y se marcan en una lista.
+    // (Quien se sepa el ID puede seguir escribiéndolo: VTX-0040, VTX-0049.)
+    var candidatos = [], cargados = false, pedido = null, marcados = {}, elegido = '';
+    function pareceId(x) { return /^[A-Za-z]{2,}-[A-Za-z0-9]+$/.test(x); }
+    function escritos(campo) { return campo.value.split(/[\s,;]+/).map(function (x) { return x.trim(); }).filter(Boolean); }
+    function cargarCandidatos() {              // los demás albaranes sueltos de la empresa; primero los que llegaron más cerca de este
+      if (!pedido) pedido = consulta(sb.from('albaranes').select(COLUMNAS_NOMBRE_ALBARAN + ',referencias').eq('empresa', empresa).order('id_doc', { ascending: false }).limit(400)).then(function (r) {
+        candidatos = (r.data || []).filter(function (x) { return x.id_doc !== id && ['Descartado', 'Duplicado', 'Anexo'].indexOf(x.estado || '') < 0; })
+          .sort(function (a, b) { return Math.abs(numeroId(a.id_doc) - numeroId(id)) - Math.abs(numeroId(b.id_doc) - numeroId(id)); });
+        candidatos.forEach(function (x) { conocidos[x.id_doc] = x; });
+        cargados = true;
+      }).catch(function () { cargados = true; });
+      return pedido;
+    }
+    function coincide(x, buscado) {
+      return [x.id_doc, x.num_albaran, x.nombre, x.destino, x.origen, x.referencias].some(function (v) { return texto(v).toLowerCase().indexOf(buscado) >= 0; });
+    }
+    function pintarElegir(ul, campo, varios) {
+      var buscado = campo.value.trim().toLowerCase(), todas = candidatos.filter(function (x) { return !buscado || coincide(x, buscado); }), filas = todas.slice(0, 8);
+      ul.textContent = ''; ul.hidden = false;
+      if (!cargados) { ul.appendChild(h('li', { class: 'sub' }, 'Buscando albaranes…')); return; }
+      if (!candidatos.length) { ul.appendChild(h('li', { class: 'sub' }, 'No hay otros albaranes sueltos en ' + empresa + '.')); return; }
+      if (!filas.length) { ul.appendChild(h('li', { class: 'sub' }, 'Ninguno coincide con «' + campo.value.trim() + '». Prueba con su número, el nombre o el destino.')); return; }
+      filas.forEach(function (x) {
+        var entrada = h('input', { type: varios ? 'checkbox' : 'radio', name: varios ? null : 'elegirPrincipal', value: x.id_doc });
+        entrada.checked = varios ? !!marcados[x.id_doc] : elegido === x.id_doc;
+        entrada.addEventListener('change', function () {
+          if (!varios) { elegido = x.id_doc; return; }
+          if (entrada.checked) marcados[x.id_doc] = true; else delete marcados[x.id_doc];
+        });
+        ul.appendChild(h('li', {}, h('label', { class: 'casilla' }, [entrada, etiquetaDocumento('albaranes', x, x.id_doc)])));
+      });
+      if (todas.length > filas.length) ul.appendChild(h('li', { class: 'sub' }, 'Hay ' + (todas.length - filas.length) + ' más: escribe su número, el nombre o el destino para encontrarlo.'));
+    }
+    function conLista(campo, ul, varios) {
+      function pintar() { pintarElegir(ul, campo, varios); cargarCandidatos().then(function () { pintarElegir(ul, campo, varios); }); }
+      campo.addEventListener('focus', pintar); campo.addEventListener('input', pintar);
+    }
+    // 1) Añadir anexos a este albarán (se pueden marcar varios)
+    var nuevos = h('input', { type: 'text', id: 'campoAnexos', autocomplete: 'off', spellcheck: 'false', placeholder: 'Busca por número, nombre o destino' });
+    var listaNuevos = h('ul', { class: 'elegir-pack', hidden: 'hidden', 'aria-label': 'Albaranes que se pueden añadir a este pack' });
     var anadir = h('button', { type: 'button', class: 'boton', onclick: function () {
-      var ids = nuevos.value.split(/[\s,;]+/).map(function (x) { return x.trim().toUpperCase(); }).filter(Boolean);
-      if (!ids.length) { fallo(new Error('Escribe el ID del papel que va con este albarán (por ejemplo VTX-0040).')); nuevos.focus(); return; }
+      var ids = Object.keys(marcados), tecleados = escritos(nuevos);
+      if (!ids.length && tecleados.length && tecleados.every(pareceId)) ids = tecleados.map(function (x) { return x.toUpperCase(); });
+      if (!ids.length) { fallo(new Error('Marca en la lista los papeles que van con este albarán. Si no salen, escribe su número, el nombre o el destino para buscarlos.')); nuevos.focus(); return; }
       anadir.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Añadiendo…';
       var hechos = [];
       ids.reduce(function (cadena, otro) {
@@ -1941,21 +2263,25 @@ function seccionPack(empresa, id, fila, editable) {
         aviso.className = 'mensaje-ficha exito'; aviso.textContent = 'Añadido al pack: ' + hechos.join(', ') + '.'; nuevos.value = '';
       }).catch(function (e) {
         aviso.className = 'mensaje-ficha fallo'; aviso.textContent = (hechos.length ? 'Añadido: ' + hechos.join(', ') + '. ' : '') + mensajeError(e);
-      }).then(function () { anadir.disabled = false; pintarAnexos(); cargar(false); });
+      }).then(function () {
+        anadir.disabled = false; marcados = {}; pedido = null; cargados = false; listaNuevos.hidden = true; listaPrincipal.hidden = true;   // la lista de sueltos ha cambiado
+        pintarAnexos(); cargar(false);
+      });
     } }, 'Añadir al pack');
-    conEnter(nuevos, anadir);
-    caja.appendChild(h('div', { class: 'campo-ficha fila-pack' }, [h('label', { for: 'campoAnexos' }, 'Añadir papeles que van con este albarán (sus ID)'), h('div', { class: 'en-linea' }, [nuevos, anadir])]));
+    conEnter(nuevos, anadir); conLista(nuevos, listaNuevos, true);
+    caja.appendChild(h('div', { class: 'campo-ficha fila-pack' }, [h('label', { for: 'campoAnexos' }, 'Añadir papeles que van con este albarán'), h('div', { class: 'en-linea' }, [nuevos, anadir]), listaNuevos]));
     // 2) O al revés: este papel acompaña a otro albarán
-    var principal = h('input', { type: 'text', id: 'campoPrincipal', autocomplete: 'off', spellcheck: 'false', placeholder: 'Ej. VTX-0059' });
+    var principal = h('input', { type: 'text', id: 'campoPrincipal', autocomplete: 'off', spellcheck: 'false', placeholder: 'Busca por número, nombre o destino' });
+    var listaPrincipal = h('ul', { class: 'elegir-pack', hidden: 'hidden', 'aria-label': 'Albaranes con los que puede ir este papel' });
     var vaCon = h('button', { type: 'button', class: 'boton', onclick: function () {
-      var otro = principal.value.trim().toUpperCase();
-      if (!otro) { fallo(new Error('Escribe el ID del albarán principal (el que se factura).')); principal.focus(); return; }
+      var tecleados = escritos(principal), otro = elegido || (tecleados.length === 1 && pareceId(tecleados[0]) ? tecleados[0].toUpperCase() : '');
+      if (!otro) { fallo(new Error('Elige en la lista el albarán principal (el que se factura). Si no sale, escribe su número, el nombre o el destino para buscarlo.')); principal.focus(); return; }
       vaCon.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Juntando…';
-      rpc('panel_juntar_albaran', { p_empresa: empresa, p_id: id, p_principal: otro }).then(function (r) { terminar('Albarán ' + id + ' va ahora con ' + ((r && r.principal) || otro)); })
+      rpc('panel_juntar_albaran', { p_empresa: empresa, p_id: id, p_principal: otro }).then(function (r) { var final = (r && r.principal) || otro; terminar('Albarán ' + id + ' va ahora con ' + conNombre(final)); })
         .catch(function (e) { vaCon.disabled = false; fallo(e); });
     } }, 'Va con ese albarán');
-    conEnter(principal, vaCon);
-    caja.appendChild(h('div', { class: 'campo-ficha fila-pack' }, [h('label', { for: 'campoPrincipal' }, '¿Este papel acompaña a otro albarán? Escribe el ID del principal'), h('div', { class: 'en-linea' }, [principal, vaCon])]));
+    conEnter(principal, vaCon); conLista(principal, listaPrincipal, false);
+    caja.appendChild(h('div', { class: 'campo-ficha fila-pack' }, [h('label', { for: 'campoPrincipal' }, '¿Este papel acompaña a otro albarán? Elige el principal (el que se factura)'), h('div', { class: 'en-linea' }, [principal, vaCon]), listaPrincipal]));
   }
   caja.appendChild(aviso);
   return caja;
@@ -1973,6 +2299,13 @@ function ficha(titulo, fila, contexto) {
   var estadoArchivo = h('div', { class: 'enlaces-documento' });
   var panelDocumento = h('section', { class: 'vista-documento', 'aria-label': 'Documento para comprobar' }, [h('div', { class: 'cab-documento' }, [h('h3', {}, 'Documento'), opcionesDocumento]), visor, estadoArchivo]);
   var resumen = h('div', { class: 'resumen-importes', role: 'status' });
+  // Para los avisos de abajo: " (Almacenes Ejemplo · nº 12345)" detrás del ID, con los datos ya guardados
+  function quienEs() {
+    if (hoja !== 'facturas' && hoja !== 'albaranes') return '';
+    var numero = texto(hoja === 'facturas' ? base.num_factura : base.num_albaran).trim(), quien = texto(base.nombre).replace(/\s+/g, ' ').trim().slice(0, 28);
+    var partes = [quien, numero ? 'nº ' + numero.slice(0, 20) : ''].filter(Boolean);
+    return partes.length ? ' (' + partes.join(' · ') + ')' : '';
+  }
   function valorEntrada(c) {
     if (c === 'estado_cobro_pago' && !base[c]) return 'Pendiente';      // vacío = Pendiente (no es un cambio)
     return c === 'fecha_vencimiento' && (base[c] === null || base[c] === undefined) ? '' : texto(base[c]);
@@ -2045,7 +2378,7 @@ function ficha(titulo, fila, contexto) {
       estado.textContent = base.estado || 'Sin estado'; estado.className = 'pill ' + (base.estado === 'Procesado' ? 'ok' : 'aviso');
       ocupado(false);
       if (revisar) {                                   // revisado: la ficha se cierra sola y se avisa abajo
-        fichaSucia = null; cerrarModal(); avisoBreve(titulo + ' ' + id + (/^(Factura|Revisi)/.test(titulo) ? ' revisada' : ' revisado') + (Object.keys(cambios).length ? ' y cambios guardados' : ''));
+        fichaSucia = null; cerrarModal(); avisoBreve(titulo + ' ' + id + quienEs() + (/^(Factura|Revisi)/.test(titulo) ? ' revisada' : ' revisado') + (Object.keys(cambios).length ? ' y cambios guardados' : ''));
         cargar(false); return;
       }
       mensaje.className = 'mensaje-ficha exito'; mensaje.textContent = 'Cambios guardados.';
@@ -2061,7 +2394,7 @@ function ficha(titulo, fila, contexto) {
       rpc('panel_descartar', { p_empresa: empresa, p_hoja: hoja, p_id: id }).then(function (r) {
         var sueltos = r && Number(r.anexos_sueltos) || 0;      // era el principal de un pack: sus papeles vuelven a estar sueltos
         pendientes = 0; fichaSucia = null; guardandoFicha = false; cerrarModal();
-        avisoBreve(titulo + ' ' + id + ' descartado' + (sueltos ? '. Sus ' + sueltos + ' papel' + (sueltos === 1 ? '' : 'es') + ' del pack vuelve' + (sueltos === 1 ? '' : 'n') + ' a estar suelto' + (sueltos === 1 ? '' : 's') : ''));
+        avisoBreve(titulo + ' ' + id + quienEs() + ' descartado' + (sueltos ?'. Sus ' + sueltos + ' papel' + (sueltos === 1 ? '' : 'es') + ' del pack vuelve' + (sueltos === 1 ? '' : 'n') + ' a estar suelto' + (sueltos === 1 ? '' : 's') : ''));
         cargar(true); })
         .catch(function (e) { mensaje.textContent = mensajeError(e); mensaje.className = 'mensaje-ficha fallo'; ocupado(false); });
     } }, 'Descartar');
@@ -2083,7 +2416,7 @@ function ficha(titulo, fila, contexto) {
   var ampliar = h('button', { class: 'boton', 'aria-pressed': 'false', onclick: function () {
     var solo = document.getElementById('caja').classList.toggle('modo-datos'); ampliar.setAttribute('aria-pressed', String(solo)); ampliar.textContent = solo ? 'Ver documento y datos' : 'Ampliar formulario';
   } }, 'Ampliar formulario');
-  abrirModal(titulo + ' ' + id, h('div', { class: 'contenido-revision' }, [zona, pie]), ampliar);
+  abrirModal(tituloFicha(titulo, hoja, fila), h('div', { class: 'contenido-revision' }, [zona, pie]), ampliar);
   document.getElementById('caja').classList.add('revision-amplia');
   fichaSucia = function () { return editable && pendientes > 0; }; actualizarPendientes();
   // Archivos del documento: original y copia tachada (en el almacén de Supabase)
@@ -2091,23 +2424,27 @@ function ficha(titulo, fila, contexto) {
   localizarArchivos(empresa, hoja, id).then(function (d) {
     if (numero !== secuenciaFicha) return;
     opcionesDocumento.textContent = ''; estadoArchivo.textContent = '';
+    var pedidoVisor = 0;                    // si se pulsa "Original" y enseguida "Copia tachada", manda la última pulsación
     function mostrar(tipo, archivo) {
+      var mio = ++pedidoVisor;
       if (!archivo.enWeb) {
+        cerrarVisor();
         avisoEnElOrdenador(visor, archivo.pedido, archivo.buscar, function (traido) {
           if (numero !== secuenciaFicha) return;
           d[tipo === 'original' ? 'original' : 'tachado'] = traido; mostrar(tipo, traido);
         });
         return;
       }
-      visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, 'Abriendo…'));
+      cerrarVisor(); visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, 'Abriendo…'));
       rpc('panel_registrar_acceso_archivo', { p_id: id, p_tipo: tipo, p_accion: 'Ver documento' }).then(function () { return urlFirmada(archivo.ruta); }).then(function (url) {
-        if (numero !== secuenciaFicha) return;
-        visor.textContent = ''; visor.appendChild(visorPara(url, archivo.nombre)); estadoArchivo.textContent = '';
+        if (numero !== secuenciaFicha || mio !== pedidoVisor) return;
+        crearVisor(visor, url, archivo.nombre); estadoArchivo.textContent = '';
+        var enGrande = document.getElementById('caja').classList.contains('modo-documento');
         estadoArchivo.appendChild(h('button', { type: 'button', class: 'boton', onclick: function () {
           var solo = document.getElementById('caja').classList.toggle('modo-documento'); this.textContent = solo ? 'Volver a los datos' : 'Ver documento en grande';
-        } }, 'Ver documento en grande'));
+        } }, enGrande ? 'Volver a los datos' : 'Ver documento en grande'));
         if (S.rol === 'Administrador') estadoArchivo.appendChild(h('button', { class: 'boton', onclick: function () { descargar(archivo.ruta, archivo.nombre); } }, 'Descargar'));
-      }).catch(function () { visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, 'La vista previa no está disponible. Puedes continuar revisando los datos.')); });
+      }).catch(function () { if (numero !== secuenciaFicha || mio !== pedidoVisor) return; visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, 'La vista previa no está disponible. Puedes continuar revisando los datos.')); });
     }
     [['Original', 'original', 'original'], ['Copia tachada', 'tachado', 'tachado']].forEach(function (x) { if (d[x[2]]) opcionesDocumento.appendChild(h('button', { class: 'boton', type: 'button', onclick: function () { mostrar(x[1], d[x[2]]); } }, x[0])); });
     // Revisión manual: tacharlo a mano y enviarlo a la IA (PDF o foto)
@@ -2325,7 +2662,7 @@ function avisoBreve(texto) {
   setTimeout(function () { aviso.classList.add('saliendo'); setTimeout(function () { aviso.remove(); }, 400); }, 3500);
 }
 function abrirModal(titulo, contenido, extra) {
-  ++secuenciaFicha;
+  ++secuenciaFicha; cerrarVisor();
   if (!document.getElementById('modal').classList.contains('abierto')) focoAntesModal = document.activeElement;
   fichaSucia = null; guardandoFicha = false;
   var caja = document.getElementById('caja'); caja.textContent = ''; caja.className = 'caja';
@@ -2337,7 +2674,7 @@ function abrirModal(titulo, contenido, extra) {
 function cerrarModal() {
   if (guardandoFicha) return;
   if (fichaSucia && fichaSucia() && !confirm('Hay cambios sin guardar. ¿Cerrar sin guardarlos?')) return;
-  ++secuenciaFicha; fichaSucia = null; document.getElementById('modal').classList.remove('abierto'); document.body.style.overflow = '';
+  ++secuenciaFicha; fichaSucia = null; cerrarVisor(); document.getElementById('modal').classList.remove('abierto'); document.body.style.overflow = '';
   if (focoAntesModal && focoAntesModal.isConnected) focoAntesModal.focus();
 }
 document.getElementById('modal').addEventListener('click', function (e) { if (e.target.id === 'modal') cerrarModal(); });
@@ -2345,7 +2682,7 @@ document.addEventListener('keydown', function (e) {
   if (!document.getElementById('modal').classList.contains('abierto')) return;
   if (e.key === 'Escape') { e.preventDefault(); cerrarModal(); }
   if (e.key === 'Tab') {
-    var el = [].slice.call(document.getElementById('caja').querySelectorAll('button,input,select,textarea,a[href],summary,iframe')).filter(function (x) { return !x.disabled && x.getClientRects().length; });
+    var el = [].slice.call(document.getElementById('caja').querySelectorAll('button,input,select,textarea,a[href],summary,iframe,[tabindex="0"]')).filter(function (x) { return !x.disabled && x.getClientRects().length; });
     var primero = el[0], ultimo = el[el.length - 1];
     if (e.shiftKey && document.activeElement === primero) { e.preventDefault(); ultimo.focus(); } else if (!e.shiftKey && document.activeElement === ultimo) { e.preventDefault(); primero.focus(); }
   }
