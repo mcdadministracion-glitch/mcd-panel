@@ -74,7 +74,7 @@ function mensajeError(e) {
 }
 // Peticiones a las funciones del servidor: devuelven el dato o lanzan un error con texto claro
 function rpc(fn, args) {
-  if (/^panel_(guardar|descartar|juntar|soltar|rechazar|reintentar)/.test(fn)) DOCUMENTOS_VISTOS = {};   // van a cambiar datos: los nombres se vuelven a pedir
+  if (/^panel_(guardar|descartar|juntar|soltar|rechazar|reintentar|clase)/.test(fn)) DOCUMENTOS_VISTOS = {};   // van a cambiar datos: los nombres se vuelven a pedir
   return sb.rpc(fn, args || {}).then(function (r) { if (r.error) throw new Error(r.error.message); return r.data; });
 }
 function consulta(q) { return q.then(function (r) { if (r.error) throw new Error(r.error.message); return r; }); }
@@ -95,7 +95,7 @@ function nombreDocumento(hoja, f, sinTipo) {
   if (hoja === 'facturas' || hoja === 'albaranes') {
     var fac = hoja === 'facturas', tipo = texto(fac ? f.tipo_factura : f.tipo_albaran), numero = corto(fac ? f.num_factura : f.num_albaran, 20);
     p.push(corto(f.nombre, 28) || (/^Emitid/.test(tipo) ? 'Cliente sin nombre' : /^Recibid/.test(tipo) ? 'Proveedor sin nombre' : 'Sin nombre'));
-    p.push(sinTipo ? (numero ? 'nº ' + numero : 'sin número') : (fac ? 'factura ' : 'albarán ') + (numero || 'sin número'));
+    p.push(sinTipo ? (numero ? 'nº ' + numero : 'sin número') : (fac ? 'factura ' : esOrdenDeCarga(f) ? 'orden de carga ' : 'albarán ') + (numero || 'sin número'));
     p.push(dia(f.fecha) || 'sin fecha');
     if (fac) { if (hay(f.total)) p.push(euros(f.total)); }
     else if (f.destino) p.push('→ ' + corto(f.destino, 24));
@@ -125,8 +125,10 @@ function tituloFicha(titulo, hoja, f) {
   var n = nombreDocumento(hoja, f, true), id = (f && f.id_doc) || '';
   return h('span', { class: 'nombre-doc' }, [titulo + (n ? ' · ' + n : ''), id ? h('small', { class: 'id-doc' }, id) : null]);
 }
+// Una orden de carga se guarda con los albaranes, pero aparte (supabase/ordenes_carga.sql): no cuenta como albarán ni espera factura
+function esOrdenDeCarga(f) { return !!f && f.clase === 'orden_carga'; }
 function numeroId(id) { var m = /(\d+)\D*$/.exec(texto(id)); return m ? Number(m[1]) : 0; }
-var COLUMNAS_NOMBRE_ALBARAN = 'id_doc,num_albaran,nombre,fecha,origen,destino,importe,tipo_albaran,estado';   // lo que hace falta para nombrar un albarán
+var COLUMNAS_NOMBRE_ALBARAN = 'id_doc,num_albaran,nombre,fecha,origen,destino,importe,tipo_albaran,estado,clase';   // lo que hace falta para nombrar un albarán
 // Datos mínimos de otros documentos de los que solo se tiene el ID (el principal de un pack, lo último que ha
 // llegado...). Se guardan mientras no cambie nada. Si la consulta falla, se enseña el ID y ya está.
 var DOCUMENTOS_VISTOS = {};                  // id -> { hoja, fila }
@@ -143,7 +145,7 @@ function buscarDocumentos(ids, hojas) {
     leer('tickets', 'id_doc,fecha,comercio,estacion,categoria,total', tck),
     leer('revision', 'id_doc,archivo_original,fecha_alta', rev),
     leer('facturas', 'id_doc,empresa,tipo_factura,num_factura,fecha,nombre,total', resto),
-    leer('albaranes', 'id_doc,empresa,tipo_albaran,num_albaran,fecha,nombre,origen,destino,importe,estado', resto)
+    leer('albaranes', 'id_doc,empresa,tipo_albaran,num_albaran,fecha,nombre,origen,destino,importe,estado,clase', resto)
   ]).then(function () { return DOCUMENTOS_VISTOS; }, function () { return DOCUMENTOS_VISTOS; });
 }
 // Supabase devuelve como máximo 1000 filas por consulta: se piden por páginas hasta tenerlas todas.
@@ -253,7 +255,10 @@ function consultaLista(f) {
   var sinAnexos = tabla === 'albaranes' && !f.conAnexos && !limpiarBusqueda(f.buscar || '');
   if (f.filtro === 'Activos') q = q.not('estado', 'in', sinAnexos ? '("Descartado","Duplicado","Anexo")' : '("Descartado","Duplicado")');
   else if (f.filtro === 'Descartado' || f.filtro === 'Duplicado' || f.filtro === 'Anexo') q = q.eq('estado', f.filtro);
+  else if (f.filtro === 'Orden') q = q.eq('clase', 'orden_carga').not('estado', 'in', '("Descartado","Duplicado")');
   else if (f.filtro) q = q.eq(campo, f.filtro);
+  // Las órdenes de carga no son albaranes: en la lista normal no salen (tienen su filtro). Al buscar sí, para encontrarlas por su número.
+  if (tabla === 'albaranes' && f.filtro === 'Activos' && !limpiarBusqueda(f.buscar || '')) q = q.or('clase.is.null,clase.neq.orden_carga');
   var rango = rangoPeriodo(f.periodo);
   if (rango) q = q.gte('fecha', rango[0]).lt('fecha', rango[1]);
   var b = limpiarBusqueda(f.buscar || '');
@@ -987,12 +992,13 @@ function numeroOSinNumero(numero, id) {
 }
 function numeroConPack(f, anexos) {
   var numero = numeroOSinNumero(f.num_albaran, f.id_doc);
+  if (esOrdenDeCarga(f)) return h('span', { class: 'numero-pack' }, [numero, ' ', h('span', { class: 'pill', title: 'No es un albarán: no espera factura' }, 'Orden de carga')]);
   if (!anexos || !anexos.length) return numero;
   return h('span', { class: 'numero-pack' }, [numero, ' ', h('span', { class: 'pill marca', title: 'Papeles que van con este albarán: ' + anexos.map(function (a) { return a.num_albaran || a.id_doc; }).join(', ') },
     '+ ' + anexos.length + (anexos.length === 1 ? ' papel' : ' papeles'))]);
 }
 function vAlbaranes(v, d) {
-  barraFiltros(v, d, [['Activos', 'Todos los válidos'], ['PENDIENTE DE FACTURA', 'Esperando factura'], ['Facturado', 'Facturados'], ['Anexo', 'Anexos de un pack'], ['Descartado', 'Descartados'], ['Duplicado', 'Duplicados'], ['', 'Todo el historial']]);
+  barraFiltros(v, d, [['Activos', 'Todos los válidos'], ['PENDIENTE DE FACTURA', 'Esperando factura'], ['Facturado', 'Facturados'], ['Anexo', 'Anexos de un pack'], ['Orden', 'Órdenes de carga'], ['Descartado', 'Descartados'], ['Duplicado', 'Duplicados'], ['', 'Todo el historial']]);
   document.getElementById('contador').textContent = contadorTabla(d, S.sentido ? 'albaranes ' + nombreSentido('albaranes', S.sentido).toLowerCase() : 'albaranes');
   var c = document.getElementById('cuerpo'), conTipo = !S.sentido;
   var quien = S.sentido === 'emitidos' ? 'Cliente' : S.sentido === 'recibidos' ? 'Proveedor' : 'Cliente / proveedor';
@@ -2314,7 +2320,7 @@ var ETIQUETAS = { num_factura: 'Número de factura', num_albaran: 'Número de al
   observaciones: 'Observaciones', motivo: 'Motivo de revisión', id_doc: 'ID', empresa: 'Empresa', tipo_factura: 'Tipo (emitida o recibida)', tipo_albaran: 'Tipo (emitido o recibido)', estado: 'Estado', albaranes: 'Albaranes citados',
   comprobacion_albaranes: 'Comprobación de albaranes', estado_factura: 'Estado de facturación', factura_vinculada: 'Factura vinculada', dias_sin_factura: 'Días sin factura',
   posible_factura: 'Posible factura', categoria_gasto: 'Categoría de gasto', creado_en: 'Registrado', actualizado_en: 'Última modificación', fecha_alta: 'Fecha de alta',
-  va_con: 'Va con (pack)', referencias: 'Otras referencias (pedido, CMR…)', propuesta_pack: 'Pack propuesto por el programa', pack_rechazado: 'Packs rechazados', archivo_original: 'Archivo original', hash_sha256: 'Huella del archivo', tokens_entrada: 'Tokens de entrada', tokens_salida: 'Tokens de salida', coste_eur: 'Coste IA (€)' };
+  clase: 'Clase (orden_carga = orden de carga)', va_con: 'Va con (pack)', referencias: 'Otras referencias (pedido, CMR…)', propuesta_pack: 'Pack propuesto por el programa', pack_rechazado: 'Packs rechazados', archivo_original: 'Archivo original', hash_sha256: 'Huella del archivo', tokens_entrada: 'Tokens de entrada', tokens_salida: 'Tokens de salida', coste_eur: 'Coste IA (€)' };
 var fichaSucia = null, guardandoFicha = false, focoAntesModal = null, secuenciaFicha = 0;
 
 // ---------------------------------------------------------------------
@@ -2493,8 +2499,33 @@ function seccionPack(empresa, id, fila, editable) {
   return caja;
 }
 
+// En la ficha de un albarán: decir si en realidad es una orden de carga (o al revés). Solo quien puede revisar.
+function seccionClase(empresa, id, fila, editable) {
+  var orden = esOrdenDeCarga(fila);
+  if (!orden && (!editable || ['Descartado', 'Duplicado'].indexOf(fila.estado || '') >= 0)) return null;
+  var aviso = h('div', { class: 'mensaje-ficha', role: 'status', 'aria-live': 'polite' });
+  var caja = h('fieldset', { class: 'seccion-ficha seccion-clase' }, [h('legend', {}, orden ? 'Es una orden de carga' : '¿Es una orden de carga?'),
+    h('p', { class: 'ayuda-campo' }, orden
+      ? 'Este papel es una orden de carga (el encargo de hacer un porte), no un albarán: se guarda aparte, no cuenta como albarán y no espera factura. Puede ir en el pack de su albarán.'
+      : 'Una orden de carga es el encargo de hacer un porte, no la prueba de la entrega. Si este papel lo es, márcalo: dejará de contar como albarán y de esperar factura.')]);
+  if (editable) {
+    var boton = h('button', { type: 'button', class: 'boton', onclick: function () {
+      if (fichaSucia && fichaSucia() && !confirm('Hay cambios sin guardar en esta ficha. ¿Seguir sin guardarlos?')) return;
+      boton.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Guardando…';
+      rpc('panel_clase_albaran', { p_empresa: empresa, p_id: id, p_orden: !orden }).then(function () {
+        fichaSucia = null; guardandoFicha = false; cerrarModal();
+        avisoBreve(id + (orden ? ' vuelve a ser un albarán: espera su factura' : ' guardado como orden de carga: ya no cuenta como albarán')); cargar(true);
+      }).catch(function (e) { boton.disabled = false; aviso.className = 'mensaje-ficha fallo'; aviso.textContent = mensajeError(e); });
+    } }, orden ? 'No, es un albarán' : 'Sí, es una orden de carga');
+    caja.appendChild(h('div', { class: 'en-linea' }, [boton]));
+  }
+  caja.appendChild(aviso);
+  return caja;
+}
+
 function ficha(titulo, fila, contexto) {
   var empresa = contexto.empresa, hoja = contexto.hoja, id = fila.id_doc || '';
+  if (hoja === 'albaranes' && esOrdenDeCarga(fila)) titulo = 'Orden de carga';
   var base = Object.assign({}, fila), entradas = {}, pendientes = 0;
   var editable = !!(hoja && id && (S.rol === 'Revisor' || S.rol === 'Administrador'));
   var grupos = CAMPOS_FICHA[hoja] || [], conocidos = []; grupos.forEach(function (g) { conocidos = conocidos.concat(g[1]); });
@@ -2553,6 +2584,7 @@ function ficha(titulo, fila, contexto) {
     if (grupo[0] === 'Cobro o pago') seccion.appendChild(h('p', { class: 'ayuda-campo' }, 'Puedes guardar juntos el estado, el importe y la fecha real del cobro o pago.'));
     formulario.appendChild(seccion);
   });
+  var clase = hoja === 'albaranes' && id ? seccionClase(empresa, id, fila, editable) : null; if (clase) formulario.appendChild(clase);
   if (hoja === 'albaranes' && id) formulario.appendChild(seccionPack(empresa, id, fila, editable));
   if (id) formulario.appendChild(seccionRelacionados(empresa, hoja, fila));
   var otros = h('div', { class: 'otros-datos' });
@@ -2585,7 +2617,7 @@ function ficha(titulo, fila, contexto) {
       estado.textContent = base.estado || 'Sin estado'; estado.className = 'pill ' + (base.estado === 'Procesado' ? 'ok' : 'aviso');
       ocupado(false);
       if (revisar) {                                   // revisado: la ficha se cierra sola y se avisa abajo
-        fichaSucia = null; cerrarModal(); avisoBreve(titulo + ' ' + id + quienEs() + (/^(Factura|Revisi)/.test(titulo) ? ' revisada' : ' revisado') + (Object.keys(cambios).length ? ' y cambios guardados' : ''));
+        fichaSucia = null; cerrarModal(); avisoBreve(titulo + ' ' + id + quienEs() + (/^(Factura|Revisi|Orden)/.test(titulo) ? ' revisada' : ' revisado') + (Object.keys(cambios).length ? ' y cambios guardados' : ''));
         cargar(false); return;
       }
       mensaje.className = 'mensaje-ficha exito'; mensaje.textContent = 'Cambios guardados.';
