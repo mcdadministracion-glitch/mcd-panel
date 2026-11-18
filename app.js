@@ -447,20 +447,57 @@ function iconoPanel(vista) {
   path.setAttribute('d', trazos[vista]); svg.appendChild(path); return svg;
 }
 
-function pintarMenu() {
-  var nav = document.getElementById('menu'); nav.textContent = '';
-  if (!S.rol) return;
+// Las secciones que puede ver quien ha entrado
+function seccionesDelMenu() {
   var secciones = VISTAS.slice();
   if (S.rol === 'Administrador') secciones.push(['usuarios', 'Usuarios'], ['historial', 'Historial']);
-  var movil = h('select', { 'aria-label': 'Ir a sección', class: 'nav-movil' }, secciones.map(function (v) {
-    return h('option', { value: v[0] }, v[1]);
-  }));
-  movil.value = S.vista; movil.addEventListener('change', function () { irA(movil.value); });
+  return secciones;
+}
+// "Más" (móvil y ventanas estrechas): una hoja que sube desde la barra de abajo con el resto de secciones, con el
+// mismo aspecto que el panel. Antes era el desplegable del sistema, que cada teléfono pinta a su manera (18-nov-2026).
+var EN_LA_BARRA = ['inicio', 'revision'];
+var AYUDA_SECCION = { facturas: 'Emitidas y recibidas', albaranes: 'Y sus packs', combustible: 'Precios y repostajes', tickets: 'Comidas, peajes, gasolina',
+  documentos: 'Los archivos guardados', negocio: 'Cobros y pagos', usuarios: 'Quién puede entrar', historial: 'Quién hizo qué' };
+function cerrarHojaMas(devolverFoco) {
+  var hoja = document.getElementById('hojaMas'); if (!hoja) return;
+  hoja.remove();
+  var boton = document.querySelector('#menu .nav-mas');
+  if (boton) { boton.setAttribute('aria-expanded', 'false'); if (devolverFoco) boton.focus(); }
+}
+function abrirHojaMas() {
+  if (document.getElementById('hojaMas')) { cerrarHojaMas(true); return; }             // pulsar "Más" otra vez la cierra
+  var opciones = seccionesDelMenu().filter(function (v) { return EN_LA_BARRA.indexOf(v[0]) < 0; }).map(function (v) {
+    return h('button', { type: 'button', role: 'menuitem', class: 'hoja-opcion' + (S.vista === v[0] ? ' activo' : ''), 'aria-current': S.vista === v[0] ? 'page' : null,
+      onclick: function () { cerrarHojaMas(false); irA(v[0]); } },
+      [iconoPanel(v[0]), h('span', { class: 'hoja-texto' }, [h('b', {}, v[1]), AYUDA_SECCION[v[0]] ? h('small', {}, AYUDA_SECCION[v[0]]) : null])]);
+  });
+  var cerrar = h('button', { type: 'button', class: 'hoja-cerrar', 'aria-label': 'Cerrar el menú', onclick: function () { cerrarHojaMas(true); } }, 'Cerrar');
+  var caja = h('div', { class: 'hoja-caja', role: 'menu', 'aria-label': 'Más secciones' }, [
+    h('div', { class: 'hoja-cab' }, [h('b', {}, 'Ir a…'), cerrar]), h('div', { class: 'hoja-opciones' }, opciones)]);
+  var hoja = h('div', { id: 'hojaMas', class: 'hoja-mas', onclick: function (e) { if (e.target === hoja) cerrarHojaMas(false); } }, caja);
+  // Teclado: Escape cierra; el tabulador da la vuelta dentro de la hoja; las flechas pasan de una opción a otra
+  hoja.addEventListener('keydown', function (e) {
+    var todos = opciones.concat([cerrar]), i = todos.indexOf(document.activeElement);
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cerrarHojaMas(true); }
+    else if (e.key === 'Tab') { e.preventDefault(); todos[(i + (e.shiftKey ? todos.length - 1 : 1)) % todos.length].focus(); }
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); opciones[(Math.max(-1, opciones.indexOf(document.activeElement)) + 1) % opciones.length].focus(); }
+    else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); opciones[(opciones.indexOf(document.activeElement) + opciones.length - 1) % opciones.length].focus(); }
+  });
+  document.body.appendChild(hoja);
+  var boton = document.querySelector('#menu .nav-mas'); if (boton) boton.setAttribute('aria-expanded', 'true');
+  (hoja.querySelector('.hoja-opcion.activo') || opciones[0] || cerrar).focus();
+}
+function pintarMenu() {
+  var nav = document.getElementById('menu'); nav.textContent = '';
+  if (!S.rol) { cerrarHojaMas(false); return; }
+  var secciones = seccionesDelMenu();
   if (puedeSubir()) nav.appendChild(h('button', { type: 'button', class: 'nav-subir', title: 'Facturas, albaranes, tickets o tablas de precios',
-    onclick: function () { var e = document.getElementById('subidaGlobal'); if (e) e.click(); } }, [iconoPanel('subir'), h('span', {}, ['Subir', h('span', { class: 'solo-escritorio' }, ' documentos')])]));
-  // En el móvil, "Más" es un desplegable de verdad (todas las secciones) tapado por el botón: se lee bien con lector de pantalla
-  var otra = S.vista !== 'inicio' && S.vista !== 'revision', actual = secciones.filter(function (v) { return v[0] === S.vista; })[0];
-  nav.appendChild(h('label', { class: 'nav-mas' + (otra ? ' activo' : '') }, [iconoPanel('mas'), h('span', {}, otra && actual ? actual[1] : 'Más'), movil]));
+    onclick: function () { cerrarHojaMas(false); var e = document.getElementById('subidaGlobal'); if (e) e.click(); } }, [iconoPanel('subir'), h('span', {}, ['Subir', h('span', { class: 'solo-escritorio' }, ' documentos')])]));
+  // En el móvil solo caben Inicio, Por revisar, Subir y "Más", que abre la hoja con las demás secciones
+  var otra = EN_LA_BARRA.indexOf(S.vista) < 0, actual = secciones.filter(function (v) { return v[0] === S.vista; })[0];
+  var abierta = !!document.getElementById('hojaMas');
+  nav.appendChild(h('button', { type: 'button', class: 'nav-mas' + (otra ? ' activo' : ''), 'aria-haspopup': 'menu', 'aria-expanded': String(abierta), 'aria-controls': 'hojaMas',
+    title: 'Ver el resto de secciones', onclick: abrirHojaMas }, [iconoPanel('mas'), h('span', {}, otra && actual ? actual[1] : 'Más')]));
   secciones.forEach(function (v) {
     nav.appendChild(h('button', { class: 'nav-' + v[0] + (S.vista === v[0] ? ' activo' : ''), 'aria-current': S.vista === v[0] ? 'page' : null, onclick: function () { irA(v[0]); } },
       [iconoPanel(v[0]), v[1], v[0] === 'revision' && S.pendientes ? h('span', { class: 'num' }, S.pendientes) : null]));
