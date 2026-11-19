@@ -33,14 +33,14 @@
     --marca:#0B3E8F; --marca-fondo:#0B3E8F; --marca-fuerte:#082F6C; --marca-suave:#E2EAF6;
     --acento:#FFC20E; --acento-suave:#FFF3CC; --acento-texto:#14171C;
     --asfalto:#14171C; --asfalto-2:#232831; --asfalto-linea:#2E343E; --asfalto-texto:#C9CFD8;
-    --ok:#1E6B3E; --ok-f:#E1F2E7; --aviso:#7A4F00; --aviso-f:#FFF1C7; --error:#B42318; --error-f:#FDECEA;
+    --ok:#1E6B3E; --ok-f:#E1F2E7; --sobre-ok:#FFFFFF; --aviso:#7A4F00; --aviso-f:#FFF1C7; --error:#B42318; --error-f:#FDECEA;
     --cian:#0B7A8F; --cian-suave:#DDF1F4;
     color-scheme:light;
   }
   @media (prefers-color-scheme: dark) { :root { color-scheme:dark;
     --fondo:#0F1216; --panel:#181C22; --texto:#E8EBF0; --suave:#A3ACB9; --borde:#2E343E; --gris-f:#1F242C;
     --marca:#8DB4FF; --marca-fondo:#2D62C4; --marca-fuerte:#3B72D6; --marca-suave:#1A2740;
-    --acento-suave:#3A3010; --ok:#7FD6A2; --ok-f:#15301F; --aviso:#F2C66D; --aviso-f:#33290F; --error:#F59A91; --error-f:#3A1A17;
+    --acento-suave:#3A3010; --ok:#7FD6A2; --ok-f:#15301F; --sobre-ok:#0B2415; --aviso:#F2C66D; --aviso-f:#33290F; --error:#F59A91; --error-f:#3A1A17;
     --cian:#5FD0E2; --cian-suave:#10303A; --sombra:none; } }
   * { box-sizing:border-box; }
   [hidden] { display:none !important; }
@@ -149,9 +149,9 @@
   .boton.principal { background:var(--marca-fondo); color:#fff; border-color:var(--marca-fondo); }
   .boton.principal:hover:not(:disabled) { background:var(--marca-fuerte); border-color:var(--marca-fuerte); }
   .boton.descarga { color:var(--ok); border-color:var(--ok-f); } .boton.descarga:hover:not(:disabled) { background:var(--ok-f); border-color:var(--ok); }
-  .boton.revisar { background:var(--ok); color:#fff; border-color:var(--ok); } .boton.revisar:hover:not(:disabled) { filter:brightness(1.1); background:var(--ok); }
+  .boton.revisar { background:var(--ok); color:var(--sobre-ok); border-color:var(--ok); } .boton.revisar:hover:not(:disabled) { filter:brightness(1.1); background:var(--ok); }
   .boton.peligro { background:var(--error-f); color:var(--error); border-color:transparent; } .boton.peligro:hover:not(:disabled) { border-color:var(--error); background:var(--error-f); }
-  .boton.enlace { border:0; background:none; color:var(--marca); text-decoration:underline; text-underline-offset:3px; padding:var(--e05) 2px; min-height:0; }
+  .boton.enlace { border:0; background:none; color:var(--marca); text-decoration:underline; text-underline-offset:3px; padding:var(--e05) 2px; min-height:0; white-space:normal; text-align:left; overflow-wrap:anywhere; min-width:0; }
   .boton.enlace:hover:not(:disabled) { background:none; text-decoration-thickness:2px; }
   input, select, textarea { border:1px solid #B9C0CA; background:var(--panel); color:var(--texto); border-radius:var(--radio-s); padding:var(--e1) var(--e15); font:inherit; font-size:var(--t-m); min-height:44px; }
   input:hover, select:hover, textarea:hover { border-color:var(--suave); }
@@ -172,6 +172,7 @@
   @media (max-width:700px) { .formulario-usuario { grid-template-columns:1fr; } }
   .formulario { display:grid; gap:var(--e2); } .formulario label { display:grid; gap:var(--e05); font-size:var(--t-s); font-weight:600; color:var(--suave); }
   .formulario label input, .formulario label select { width:100%; }
+  .formulario label.en-linea { display:flex; } .formulario label.en-linea input[type=checkbox] { width:20px; flex:none; }
 
   /* ---------- Inicio ---------- */
   /* 1) Lo único importante al entrar: lo que hay por revisar, con su señal */
@@ -309,7 +310,7 @@
   .modal.abierto { display:flex; }
   .caja { background:var(--panel); border-radius:var(--radio); width:min(900px,100%); max-height:92vh; overflow:auto; padding:var(--e3); box-shadow:var(--sombra-alta); }
   .caja .cab { display:flex; align-items:center; gap:var(--e15); margin-bottom:var(--e2); flex-wrap:wrap; }
-  .caja .cab h3 { margin:0; font:700 var(--t-xl)/1.15 var(--letra-rotulo); flex:1; overflow-wrap:anywhere; }
+  .caja .cab h3 { margin:0; font:700 var(--t-xl)/1.15 var(--letra-rotulo); flex:1 1 14em; min-width:0; overflow-wrap:anywhere; }
   .caja.revision-amplia { width:min(1560px,98vw); max-height:96vh; padding:0; overflow:hidden; display:flex; flex-direction:column; }
   .caja.revision-amplia > .cab { padding:var(--e15) var(--e3); margin:0; border-bottom:1px solid var(--borde); }
   .contenido-revision { min-height:0; display:flex; flex-direction:column; }
@@ -319,7 +320,7 @@
   .cab-documento h3 { margin:0; font-size:var(--t-m); color:var(--texto); }
   .opciones-documento, .enlaces-documento { display:flex; flex-wrap:wrap; gap:var(--e1); } .enlaces-documento { padding:var(--e15) var(--e2); }
   .opciones-documento .boton, .enlaces-documento .boton { min-height:36px; padding:var(--e05) var(--e15); font-size:var(--t-xs); }
-  .visor-documento { flex:1; min-height:0; overflow:auto; } .visor-documento iframe { width:100%; height:100%; min-height:260px; border:0; background:#fff; }
+  .visor-documento { flex:1; min-height:0; overflow:auto; } .visor-texto { margin:0; padding:var(--e15); min-height:260px; white-space:pre-wrap; overflow-wrap:anywhere; font:var(--t-xs)/1.5 ui-monospace,Consolas,monospace; background:var(--panel); color:var(--texto); }
   /* Visor con zoom: el documento tiene tamaño propio (ancho del visor × zoom) y se desplaza dentro de su zona */
   .visor-caja { display:flex; flex-direction:column; height:100%; min-height:260px; }
   .visor-barra { display:flex; align-items:center; gap:var(--e1); padding:var(--e1) var(--e2); border-bottom:1px solid var(--borde); background:var(--panel); flex-wrap:wrap; }
@@ -362,7 +363,7 @@
   .modo-documento .zona-revision { grid-template-columns:1fr; } .modo-documento .editor-documento { display:none; }
   .aviso-total { max-width:520px; margin:var(--e6) auto; }
   .aviso-total h3 { font:700 var(--t-xl)/1.2 var(--letra-rotulo); text-transform:uppercase; margin-bottom:var(--e1); }
-  .aviso-flotante { position:fixed; left:50%; bottom:var(--e3); transform:translateX(-50%); z-index:30; display:flex; align-items:center; gap:var(--e05); max-width:calc(100vw - 32px);
+  .aviso-flotante { position:fixed; left:50%; bottom:var(--e3); transform:translateX(-50%); z-index:30; display:flex; align-items:center; gap:var(--e05); width:max-content; max-width:calc(100vw - 32px);
     background:var(--asfalto); color:#fff; padding:var(--e15) var(--e2); border-radius:var(--radio-s); border-left:6px solid var(--acento); box-shadow:var(--sombra-alta); font-weight:600; transition:opacity .4s; }
   .aviso-flotante.saliendo { opacity:0; }
 
@@ -374,6 +375,21 @@
   .acceso .enlaces { display:flex; gap:var(--e15); flex-wrap:wrap; margin-top:var(--e2); font-size:var(--t-s); }
   .acceso .enlaces button { background:none; border:0; color:var(--marca); cursor:pointer; text-decoration:underline; text-underline-offset:3px; font:inherit; padding:var(--e05) 0; }
 
+  /* ---------- Ficha en el móvil y en pantallas bajas (19-nov-2026) ----------
+     Antes la ventana no se desplazaba (overflow:hidden) y en un móvil pequeño o en apaisado los botones «Guardar
+     cambios», «Guardar y marcar revisado», «Descartar» y «Enviar a la IA» (tachado) quedaban fuera, sin forma de
+     llegar. Ahora se desplaza la ventana entera y el pie con los botones se queda pegado abajo. */
+  @media (max-width:960px), (max-height:560px) {
+    .caja.revision-amplia { overflow:auto; display:block; overscroll-behavior:contain; }
+    .caja.revision-amplia .zona-revision { display:block; height:auto; max-height:none; overflow:visible; }
+    .caja.revision-amplia .vista-documento { height:340px; border-right:0; border-bottom:1px solid var(--borde); }
+    .caja.revision-amplia.modo-documento .vista-documento { height:calc(96vh - 190px); min-height:340px; }
+    .caja.revision-amplia .editor-documento { overflow:visible; }
+    .caja.revision-amplia .pie-revision { position:sticky; bottom:0; z-index:3; box-shadow:0 -2px 8px rgba(0,0,0,.12); }
+    .caja.revision-amplia .tachado-paginas { max-height:none; }
+    /* En la hoja de tachar, el dedo pinta: se deja a la derecha una franja libre para poder deslizar la ventana */
+    .caja.revision-amplia .tachado-lienzo { width:calc(100% - 48px); }
+  }
   /* ---------- Pantallas medianas y móvil ---------- */
   @media (max-width:1100px) { .inicio-columnas { grid-template-columns:1fr; } }
   @media (max-width:960px) {
@@ -393,7 +409,7 @@
     nav .nav-mas span { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     header { padding:0 var(--e2); gap:var(--e15); min-height:56px; }
     .aviso-flotante { bottom:calc(88px + env(safe-area-inset-bottom)); }
-    .zona-revision { display:block; height:auto; max-height:calc(96vh - 180px); overflow:auto; }
+    .zona-revision { display:block; height:auto; }
     .vista-documento { height:340px; border-right:0; border-bottom:1px solid var(--borde); }
     .modo-documento .vista-documento { height:calc(96vh - 190px); min-height:340px; }   /* "Ver documento en grande" también agranda en el móvil */
     .visor-ayuda { display:none; }
@@ -490,6 +506,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=v4a6cf1c"></script>
+<script src="app.js?v=ve9012d9"></script>
 </body>
 </html>

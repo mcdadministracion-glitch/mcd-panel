@@ -13,6 +13,76 @@ if (!CFG.SUPABASE_URL || !CFG.SUPABASE_ANON_KEY) {
   document.getElementById('vista').textContent = 'Falta config.js con la dirección del proyecto y la clave pública.';
   throw new Error('config');
 }
+// SEGURIDAD (19-nov-2026): el panel no arranca dentro de un marco de otra web. Si no, una web ajena podría
+// meterlo escondido y hacer que la persona pulse sus botones sin saberlo ("clickjacking").
+function enUnMarco() { try { return window.top !== window.self; } catch (e) { return true; } }
+if (enUnMarco()) {
+  var vistaMarco = document.getElementById('vista'); vistaMarco.textContent = '';
+  var enlaceMarco = document.createElement('a'); enlaceMarco.href = location.href.split('#')[0]; enlaceMarco.target = '_blank'; enlaceMarco.rel = 'noopener noreferrer';
+  enlaceMarco.textContent = 'Abrir el panel en su propia pestaña';
+  vistaMarco.appendChild(document.createTextNode('Por seguridad, el panel no funciona dentro de otra página. ')); vistaMarco.appendChild(enlaceMarco);
+  throw new Error('marco');
+}
+if (!window.supabase || !window.supabase.createClient) {
+  document.getElementById('vista').textContent = 'No se ha podido cargar una parte del panel (la conexión con la base de datos). Comprueba la conexión a internet y recarga la página.';
+  throw new Error('supabase-js');
+}
+// SEGURIDAD (19-nov-2026): enlaces con datos de sesión (access_token=...).
+// Solo se aceptan los de los correos de invitación y de "He olvidado la contraseña" (type=invite o recovery), que
+// Supabase manda SIEMPRE tras la almohadilla (#). Cualquier otro se borra ANTES de crear el cliente, para que no
+// cambie la sesión de quien lo abre. Y si en este navegador ya hay una sesión abierta de OTRA cuenta, el enlace
+// tampoco se usa: hay que salir primero.
+// Ojo: supabase-js lee los datos de la almohadilla Y de la consulta (?access_token=...), y la consulta manda. Por
+// eso aquí se juntan las dos igual que hace él; y una sesión que llega en la consulta no se acepta nunca (Supabase
+// no las manda así: solo puede ser un enlace preparado por otra persona).
+var CLAVES_SESION_ENLACE = ['access_token', 'refresh_token', 'expires_in', 'expires_at', 'token_type', 'type',
+  'provider_token', 'provider_refresh_token', 'error', 'error_code', 'error_description', 'code'];
+function parametrosEnlace(almohadilla, consulta) {
+  var r = new URLSearchParams('');
+  [String(almohadilla || '').replace(/^#/, ''), String(consulta || '').replace(/^\?/, '')].forEach(function (t) {
+    try { new URLSearchParams(t).forEach(function (v, k) { r.set(k, v); }); } catch (e) { /* un "%" roto: se ignora */ }
+  });
+  return r;
+}
+function consultaTraeSesion(consulta) {
+  var p = parametrosEnlace('', consulta);
+  return !!(p.get('access_token') || p.get('refresh_token') || p.get('error_description') || p.get('code'));
+}
+// La consulta (?...) sin ningún dato de sesión; lo demás se conserva
+function consultaSinSesion(consulta) {
+  var p; try { p = new URLSearchParams(String(consulta || '').replace(/^\?/, '')); } catch (e) { return ''; }
+  CLAVES_SESION_ENLACE.forEach(function (k) { p.delete(k); });
+  var t = p.toString(); return t ? '?' + t : '';
+}
+function correoDelToken(token) {
+  try {
+    var parte = String(token || '').split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    var datos = JSON.parse(decodeURIComponent(escape(atob(parte + '==='.slice((parte.length + 3) % 4)))));
+    return String(datos.email || '').toLowerCase();
+  } catch (e) { return ''; }
+}
+function correoDeLaSesionGuardada() {
+  try {
+    var clave = 'sb-' + new URL(CFG.SUPABASE_URL).hostname.split('.')[0] + '-auth-token', guardada = JSON.parse(localStorage.getItem(clave) || 'null');
+    return guardada && guardada.user && guardada.user.email ? String(guardada.user.email).toLowerCase() : '';
+  } catch (e) { return ''; }
+}
+// Devuelve qué hacer con el enlace: 'nada' (no trae sesión), 'contrasena' (invitación o recuperación válida),
+// 'otra-cuenta' (hay otra sesión abierta) o 'quitar' (trae una sesión que no es de invitación ni recuperación,
+// o trae datos de sesión en la consulta)
+function revisarEnlace(almohadilla, correoGuardado, consulta) {
+  if (consultaTraeSesion(consulta)) return 'quitar';
+  var p = parametrosEnlace(almohadilla, consulta), tipo = p.get('type') || '';
+  if (!p.get('access_token') && !p.get('refresh_token')) return 'nada';
+  if (tipo !== 'invite' && tipo !== 'recovery') return 'quitar';
+  var delEnlace = correoDelToken(p.get('access_token'));
+  if (correoGuardado && delEnlace !== correoGuardado) return 'otra-cuenta';
+  return 'contrasena';
+}
+var ENLACE = revisarEnlace(location.hash, correoDeLaSesionGuardada(), location.search);
+var CORREO_DEL_ENLACE = ENLACE === 'otra-cuenta' ? correoDelToken(parametrosEnlace(location.hash, location.search).get('access_token')) : '';
+// Se borra de la dirección (la almohadilla y los datos de sesión de la consulta) antes de que supabase-js la lea
+if (ENLACE === 'quitar' || ENLACE === 'otra-cuenta') history.replaceState(null, '', location.pathname + consultaSinSesion(location.search));
 var sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true } });
 
 // ---------------------------------------------------------------------
@@ -70,6 +140,8 @@ function mensajeError(e) {
   if (/Password should be/i.test(m)) return 'La contraseña debe tener al menos 8 caracteres.';
   if (/User already registered/i.test(m)) return 'Ese correo ya tiene cuenta. Entra con tu contraseña.';
   if (/rate limit/i.test(m)) return 'Demasiados intentos seguidos. Espera unos minutos.';
+  if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return 'No hay conexión con el servidor. Comprueba internet y vuelve a intentarlo.';
+  if (/JWT expired/i.test(m)) return 'Tu sesión ha caducado (JWT expired). Vuelve a entrar.';
   return m;
 }
 // Peticiones a las funciones del servidor: devuelven el dato o lanzan un error con texto claro
@@ -215,6 +287,25 @@ function numeroExcel(v) {
   var n = typeof v === 'number' ? v : Number(s.indexOf(',') >= 0 ? s.replace(/\./g, '').replace(',', '.') : s);
   return isFinite(n) ? n : null;
 }
+// Un texto que viene de un documento nunca debe parecer una fórmula en Excel (ni si la hoja se guarda como CSV
+// y se abre en otro programa). 19-nov-2026: se mira el primer carácter que no sea espacio, tabulador o salto de
+// línea, y también los signos de ancho completo (＝ ＋ － ＠). Si empieza por uno, se le pone un apóstrofo delante.
+function textoSeguroExcel(v) {
+  if (typeof v !== 'string') return v;
+  return /^[\s\u00a0\u3000]*[=+\-@\uff1d\uff0b\uff0d\uff20]/.test(v) || /^[\t\r\n]/.test(v) ? "'" + v : v;
+}
+// Importes escritos a mano en una ficha (19-nov-2026). En España "1.500" son mil quinientos, pero la base de datos
+// lo leía como 1,5 y lo guardaba sin avisar. Ahora: "1.500,00" se entiende (punto de miles y coma decimal) y se manda
+// como 1500.00; "1.500" (solo puntos de miles, sin coma) es dudoso y se pide escribirlo sin punto. Nada se adivina.
+var CAMPOS_IMPORTE = ['base_imponible', 'iva_porcentaje', 'cuota_iva', 'retencion_irpf', 'otros_importes', 'total', 'importe', 'importe_cobrado_pagado'];
+function importeEscrito(v, nombreCampo) {
+  var t = String(v === null || v === undefined ? '' : v).trim().replace(/\s/g, '');
+  if (/^-?\d{1,3}(\.\d{3})+,\d+$/.test(t)) return t.replace(/\./g, '').replace(',', '.');
+  // «0.125» no puede ser de miles (empieza por 0): se deja pasar como 0,125
+  if (/^-?[1-9]\d{0,2}(\.\d{3})+$/.test(t))
+    throw new Error('En «' + nombreCampo + '» has escrito ' + t + '. Si son ' + t.replace(/\./g, '') + ' euros, escríbelo sin punto (' + t.replace(/\./g, '') + ' o ' + t.replace(/\./g, '') + ',00); si son decimales, usa la coma (' + t.replace('.', ',') + ').');
+  return String(v === null || v === undefined ? '' : v);
+}
 function prepararExcel() {
   if (window.ExcelJS) return Promise.resolve(window.ExcelJS);
   if (!bibliotecaExcel) bibliotecaExcel = new Promise(function (resolve, reject) {
@@ -323,7 +414,7 @@ function hojaExcel(libro, tabla, filas) {
       else if (c[2] === FECHA && typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) v = new Date(v.slice(0, 10) + 'T00:00:00Z');
       else if ((c[2] === EUR || c[2] === PCT) && v !== null && v !== undefined && v !== '') v = numeroExcel(v);
       else if (v !== null && typeof v === 'object') v = JSON.stringify(v);
-      if (typeof v === 'string' && /^[=+\-@]/.test(v)) v = "'" + v;            // evita fórmulas inyectadas desde un documento
+      v = textoSeguroExcel(v);            // evita fórmulas inyectadas desde un documento
       fila[c[0]] = v === undefined ? null : v;
     });
     hoja.addRow(fila);
@@ -540,7 +631,7 @@ function pantallaAcceso(modo, aviso) {
   document.getElementById('estadoServicio').hidden = true; document.getElementById('pie').hidden = true;
   var email = h('input', { type: 'email', autocomplete: 'username', required: 'required', placeholder: 'nombre@empresa.com' });
   var clave = h('input', { type: 'password', autocomplete: modo === 'nueva' ? 'new-password' : 'current-password', minlength: '8', placeholder: 'Mínimo 8 caracteres' });
-  var mensaje = h('div', { class: 'mensaje' + (aviso ? ' ' + aviso.tipo : '') }, aviso ? aviso.texto : '');
+  var mensaje = h('div', { class: 'mensaje' + (aviso ? ' ' + aviso.tipo : ''), role: 'alert', 'aria-live': 'assertive' }, aviso ? aviso.texto : '');
   var titulos = { entrar: 'Entrar', olvido: 'Recuperar contraseña', nueva: 'Guardar contraseña' };
   var ayuda = { entrar: 'Facturas, albaranes y tickets del grupo, en un solo sitio. Entra con tu correo; si aún no tienes acceso, pídeselo al administrador.',
     olvido: 'Te enviaremos un correo con un enlace para poner una contraseña nueva.',
@@ -559,6 +650,7 @@ function pantallaAcceso(modo, aviso) {
       arrancar();
     }).catch(function (err) {
       boton.disabled = false; mensaje.className = 'mensaje error'; mensaje.textContent = mensajeError(err);
+      if (mensaje.scrollIntoView) mensaje.scrollIntoView({ block: 'nearest' });   // en un móvil pequeño quedaba por debajo de la pantalla
       if (modo === 'entrar' && /Invalid login credentials/i.test(String(err && err.message || ''))) sb.rpc('panel_registrar_fallo', { p_email: correo }).then(null, function () {});
     });
   } }, [
@@ -568,7 +660,12 @@ function pantallaAcceso(modo, aviso) {
   ]);
   if (modo === 'nueva') {
     email.disabled = true; email.required = false; clave.required = true;
-    sb.auth.getUser().then(function (r) { if (r.data && r.data.user) email.value = r.data.user.email || ''; });
+    // Se dice siempre a qué cuenta se le pone la contraseña (como texto, nunca como HTML)
+    var cuenta = h('p', { class: 'sub cuenta-nueva', role: 'status' }, '');
+    form.insertBefore(cuenta, form.firstChild);
+    sb.auth.getUser().then(function (r) {
+      if (r.data && r.data.user) { email.value = r.data.user.email || ''; cuenta.textContent = 'Vas a poner contraseña a la cuenta: ' + (r.data.user.email || ''); }
+    });
   }
   var enlaces = h('div', { class: 'enlaces' });
   if (modo === 'olvido') enlaces.appendChild(h('button', { type: 'button', onclick: function () { pantallaAcceso('entrar'); } }, 'Volver a entrar'));
@@ -576,7 +673,17 @@ function pantallaAcceso(modo, aviso) {
   vista.appendChild(h('div', { class: 'tarjeta acceso' }, [h('img', { class: 'logo-acceso', src: 'logo.svg', alt: 'MCD' }), h('h2', {}, 'Gestión documental'), h('p', { class: 'sub' }, ayuda[modo]), form, mensaje, enlaces]));
   (modo === 'nueva' ? clave : email).focus();
 }
-function salir() { sb.auth.signOut().then(function () { ++secuenciaCarga; S.rol = null; S.datos = null; S.denegado = false; pantallaAcceso('entrar'); }); }
+// SEGURIDAD (19-nov-2026): al salir se recarga la página entera. Así no queda en la pestaña nada de la persona
+// anterior (lista de subidas, enlaces de miniaturas, la última ficha...) para quien entre después.
+function salir() {
+  // Sin almohadilla ni datos de sesión en la consulta: un enlace viejo no vuelve a meter otra sesión al recargar
+  function recargar() { location.replace(location.pathname + consultaSinSesion(location.search)); }
+  function noSalio() { alert('No se ha podido cerrar la sesión. Comprueba la conexión a internet y vuelve a pulsar «Salir».'); }
+  sb.auth.signOut().then(function (r) {
+    if (r && r.error) { noSalio(); return; }
+    ++secuenciaCarga; S.rol = null; S.datos = null; S.denegado = false; recargar();
+  }, noSalio);
+}
 
 // ---------------------------------------------------------------------
 // Carga de datos
@@ -655,7 +762,7 @@ function mostrarError(e) {
 function pintar() {
   var busqueda = document.activeElement && document.activeElement.id === 'busquedaTabla' ? document.activeElement : null;
   var cursor = busqueda ? busqueda.selectionStart : null;
-  var vista = document.getElementById('vista'); vista.textContent = '';
+  var vista = document.getElementById('vista'); vista.textContent = ''; formularioTocado = false;
   var titulos = { inicio: 'Hola' + (S.usuario && S.usuario.nombre ? ', ' + S.usuario.nombre.split(' ')[0] : ''), facturas: 'Facturas', albaranes: 'Albaranes',
     revision: 'Por revisar', combustible: 'Combustible', tickets: 'Tickets', documentos: 'Archivos', negocio: 'Vencimientos y costes', usuarios: 'Usuarios del panel', historial: 'Historial de cambios' };
   var ayudas = { inicio: 'Esto es lo que hay hoy en el sistema.', facturas: 'Recibidas: las de proveedores. Emitidas: las que hacéis a vuestros clientes. Pulsa una para verla o corregirla.',
@@ -858,6 +965,7 @@ async function seguirSubida(s) {
 var TIPOS_SUBIDA = '.pdf,.jpg,.jpeg,.png,.webp,.gif,.bmp,.tif,.tiff,.heic,.heif,.doc,.docx,.odt,.rtf,.xls,.xlsx,.ods,.csv,.txt,.xml,.xsig,.zip';
 function puedeSubir() { return S.rol === 'Revisor' || S.rol === 'Administrador'; }
 async function subirArchivos(ficheros) {
+    if (!puedeSubir()) return;               // (19-nov-2026) un Lector o alguien sin sesión no sube nada; la base de datos también lo impide
     for (var f of ficheros) {
       // La base de datos solo admite nombres sin caracteres de control ni de cambio de sentido y de 200 letras como
       // mucho (panel.sql, entrada_subir): se cambian por _ y un nombre larguísimo se acorta sin perder la extensión
@@ -883,9 +991,10 @@ async function subirArchivos(ficheros) {
 }
 // Subir desde cualquier sección: botón "Subir" del menú y arrastrar archivos encima de la página
 function prepararSubidaGlobal() {
-  var entrada = h('input', { type: 'file', multiple: 'multiple', class: 'oculto', id: 'subidaGlobal', accept: TIPOS_SUBIDA });
+  // Campo escondido: no se llega a él con el tabulador (era una parada invisible, también sin sesión o con rol Lector)
+  var entrada = h('input', { type: 'file', multiple: 'multiple', class: 'oculto', id: 'subidaGlobal', accept: TIPOS_SUBIDA, tabindex: '-1', 'aria-hidden': 'true' });
   document.body.appendChild(entrada);
-  entrada.addEventListener('change', function () { if (entrada.files.length) { var fs = Array.from(entrada.files); entrada.value = ''; verSubidas(fs); } });
+  entrada.addEventListener('change', function () { if (entrada.files.length) { var fs = Array.from(entrada.files); entrada.value = ''; if (puedeSubir()) verSubidas(fs); } });
   var capa = h('div', { class: 'capa-soltar', hidden: 'hidden' }, [h('div', {}, [iconoPanel('subir'), h('b', {}, 'Suelta aquí los documentos'),
     h('span', {}, 'Facturas, albaranes, tickets o tablas de precios: se separan solos')])]);
   document.body.appendChild(capa);
@@ -904,6 +1013,13 @@ function verSubidas(ficheros) {
   subirArchivos(ficheros);
   if (S.vista !== 'inicio' && S.vista !== 'tickets') irA('inicio');
   else setTimeout(pintarSubidas, 0);
+  // Se lleva la pantalla hasta la lista de subidas (en el móvil quedaba fuera de la vista y parecía que no subía nada)
+  var intentos = 0;
+  (function mostrarLista() {
+    var lista = document.getElementById('listaSubidas');
+    if (lista && lista.firstChild) { if (lista.scrollIntoView) lista.scrollIntoView({ block: 'center' }); return; }
+    if (++intentos < 30) setTimeout(mostrarLista, 100);
+  })();
 }
 
 function tarjetaSubir() {
@@ -1096,7 +1212,7 @@ function vCombustible(v, d) {
         var fila = {}; colsR.forEach(function (c) { var val = x[c[0]];
           if (c[2] === FECHA && val) val = new Date(String(val).slice(0, 10) + 'T00:00:00Z');
           else if ((c[2] === EUR || c[2] === 'l4' || c[0] === 'litros') && val !== null && val !== undefined) val = numeroExcel(val);
-          if (typeof val === 'string' && /^[=+\-@]/.test(val)) val = "'" + val;
+          val = textoSeguroExcel(val);
           fila[c[0]] = val === undefined ? null : val; });
         hr.addRow(fila);
       });
@@ -1113,7 +1229,7 @@ function vCombustible(v, d) {
         estacion: p.estacion || 'General', poblacion: p.poblacion || '', provincia: p.provincia || '', combustible: p.combustible, precio_litro: numeroExcel(p.precio_litro),
         precio_con_iva: p.precio_con_iva === null || p.precio_con_iva === undefined ? null : numeroExcel(p.precio_con_iva),
         iva: p.precio_con_iva ? 'No (sin IVA)' : p.iva_incluido === true ? 'Sí' : p.iva_incluido === false ? 'No' : 'No consta', empresa: p.empresa || 'Todas', proveedor: p.proveedor || '' };
-        Object.keys(fila).forEach(function (k) { if (typeof fila[k] === 'string' && /^[=+\-@]/.test(fila[k])) fila[k] = "'" + fila[k]; });
+        Object.keys(fila).forEach(function (k) { fila[k] = textoSeguroExcel(fila[k]); });
         hp.addRow(fila); });
       hp.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
       hp.getRow(1).eachCell(function (c) { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0A4FC4' } }; });
@@ -1341,7 +1457,7 @@ function vTickets(v, d) {
         else if (c[0] === 'empresa' && grupo[0] === 'gasolina') val = t.empresa || 'Fondo común';
         else if (c[2] === FECHA && val) val = new Date(String(val).slice(0, 10) + 'T00:00:00Z');
         else if ((c[2] === EUR || c[2] === PCT || c[0] === 'litros') && val !== null && val !== undefined) val = numeroExcel(val);
-        if (typeof val === 'string' && /^[=+\-@]/.test(val)) val = "'" + val;
+        val = textoSeguroExcel(val);
         fila[c[0]] = val === undefined ? null : val; }); hj.addRow(fila); });
       hj.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
       hj.getRow(1).eachCell(function (c) { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0A4FC4' } }; });
@@ -1435,11 +1551,19 @@ function fichaTicket(t) {
       h('fieldset', { class: 'seccion-ficha' }, [h('legend', {}, 'Datos del ticket'), rejilla]), historialDocumento('', t.id_doc)])])]);
   function cambios() { var c = {}; Object.keys(entradas).forEach(function (k) { var antes = t[k] === null || t[k] === undefined ? '' : String(t[k]).slice(0, k === 'fecha' ? 10 : 300); if (entradas[k].value !== antes) c[k] = entradas[k].value; }); return c; }
   function guardar(revisado) {
-    var c = cambios(); if (!Object.keys(c).length && !revisado) { mensaje.textContent = 'No hay cambios.'; return; }
+    var c = cambios(); if (!Object.keys(c).length && !revisado) { mensaje.className = 'mensaje-ficha'; mensaje.textContent = 'No hay cambios.'; return; }
+    var enviar = Object.assign({}, c);
+    try { Object.keys(enviar).forEach(function (k) { if (CAMPOS_IMPORTE.indexOf(k) >= 0) enviar[k] = importeEscrito(enviar[k], k === 'base_imponible' ? 'Base (€)' : k === 'cuota_iva' ? 'IVA (€)' : k === 'total' ? 'Total (€)' : 'IVA (%)'); }); }
+    catch (e) { mensaje.className = 'mensaje-ficha fallo'; mensaje.textContent = e.message; return; }
     mensaje.className = 'mensaje-ficha'; mensaje.textContent = 'Guardando…';
-    rpc('panel_guardar_ticket', { p_id: t.id_doc, p_cambios: c, p_revisado: !!revisado }).then(function () {
-      fichaSucia = null;
-      if (revisado) { cerrarModal(); avisoBreve('Ticket ' + t.id_doc + ' revisado'); } else { mensaje.className = 'mensaje-ficha exito'; mensaje.textContent = 'Cambios guardados.'; }
+    rpc('panel_guardar_ticket', { p_id: t.id_doc, p_cambios: enviar, p_revisado: !!revisado }).then(function () {
+      if (revisado) { fichaSucia = null; cerrarModal(); avisoBreve('Ticket ' + t.id_doc + ' revisado'); }
+      else {
+        // Lo guardado pasa a ser el punto de partida: así un segundo «Guardar» dice "No hay cambios" y, si se
+        // vuelve a escribir algo, al cerrar se sigue preguntando (antes se dejaba de avisar)
+        Object.keys(c).forEach(function (k) { t[k] = c[k]; });
+        mensaje.className = 'mensaje-ficha exito'; mensaje.textContent = 'Cambios guardados.';
+      }
       cargar(false);
     }).catch(function (e) { mensaje.className = 'mensaje-ficha fallo'; mensaje.textContent = mensajeError(e); });
   }
@@ -1661,7 +1785,8 @@ function enlaceDocumento(id, hoja, fila) {
 function facturaPorNumero(numero, nif, empresa) {
   return consulta(sb.from('facturas').select('id_doc,empresa,tipo_factura,num_factura,fecha,nombre,nif,total,estado').eq('num_factura', numero)).then(function (r) {
     var c = (r.data || []).filter(VIVO);
-    return c.filter(function (f) { return f.nif && f.nif === nif; })[0] || c.filter(function (f) { return f.empresa === empresa; })[0] || c[0] || null;
+    // (19-nov-2026) Ya no vale «la primera que haya»: números como "100" se repiten entre proveedores y se abría la de otro
+    return c.filter(function (f) { return f.nif && f.nif === nif; })[0] || c.filter(function (f) { return f.empresa === empresa; })[0] || null;
   });
 }
 function numerosCitados(v) { return texto(v).split(/[;,]/).map(function (x) { return x.trim(); }).filter(Boolean); }
@@ -1782,12 +1907,29 @@ document.addEventListener('mouseout', function (e) { if (miniGrande && e.target 
 var ZOOM_MINIMO = 0.5, ZOOM_MAXIMO = 6, ZOOM_PASO = 1.25, PIXELES_MAXIMOS_HOJA = 12e6;
 var visorAbierto = null;                    // para soltar la memoria del anterior al abrir otro o al cerrar la ficha
 function cerrarVisor() { if (visorAbierto) { var v = visorAbierto; visorAbierto = null; v.cerrar(); } }
+// SEGURIDAD (19-nov-2026): los archivos que no son PDF ni foto YA NO se abren en un marco (iframe) del navegador.
+// Un XML, HTML o SVG que manda un desconocido podía llevar su propio código y pintar dentro de la ficha un
+// formulario falso ("vuelve a poner tu contraseña"). Ahora los de texto (XML, TXT, CSV...) se enseñan como TEXTO
+// (textContent: nunca se interpreta nada) y el resto dice que no tiene vista previa.
+var TIPOS_TEXTO_VISOR = /\.(xml|xsig|txt|csv|json|html?|svg|eml)$/i;
+var MAXIMO_TEXTO_VISOR = 2e6;               // 2 MB de texto como mucho (más no se lee en pantalla)
+function vistaComoTexto(visor, url, nombre) {
+  var caja = h('pre', { class: 'visor-texto', tabindex: '0', 'aria-label': 'Contenido de ' + nombre }, 'Abriendo…');
+  visor.appendChild(caja);
+  fetch(url).then(function (r) { if (!r.ok) throw new Error('No se pudo descargar el documento'); return r.text(); }).then(function (t) {
+    if (!caja.isConnected) return;
+    caja.textContent = t.length > MAXIMO_TEXTO_VISOR ? t.slice(0, MAXIMO_TEXTO_VISOR) + '\n\n[… el archivo sigue; aquí solo se enseña el principio]' : t;
+  }).catch(function () { if (caja.isConnected) caja.textContent = 'La vista previa no está disponible. Puedes continuar revisando los datos.'; });
+}
+function sinVistaPrevia(visor) {
+  visor.appendChild(h('p', { class: 'vacio' }, 'Este tipo de archivo no tiene vista previa en el panel. Puedes continuar revisando los datos'
+    + (S.rol === 'Administrador' ? ' o pulsar «Descargar» para abrirlo en el ordenador.' : '.')));
+}
 function crearVisor(visor, url, nombre) {
   cerrarVisor();
   var esImagen = /\.(jpe?g|png|webp|gif|bmp)$/i.test(nombre), esPdf = /\.pdf$/i.test(nombre);
-  function marco() { return h('iframe', { src: url, title: 'Vista previa de ' + nombre, loading: 'lazy' }); }
   visor.textContent = '';
-  if (!esImagen && !esPdf) { visor.appendChild(marco()); return; }          // otros formatos: como siempre, en un marco del navegador
+  if (!esImagen && !esPdf) { if (TIPOS_TEXTO_VISOR.test(nombre)) vistaComoTexto(visor, url, nombre); else sinVistaPrevia(visor); return; }
   var zoom = 1, vivo = true, hojas = [], pdf = null, turno = 0, temporizador = null, arrastre = null, pellizco = null;
   var etiqueta = h('span', { class: 'visor-zoom', role: 'status', 'aria-live': 'polite' }, '100 %');
   function boton(letra, titulo, accion) { return h('button', { type: 'button', class: 'boton', title: titulo, 'aria-label': titulo, onclick: accion }, letra); }
@@ -1916,9 +2058,10 @@ function crearVisor(visor, url, nombre) {
       colocar(); pintar();
     } catch (e) {
       if (!vivo || !zona.isConnected) return;
-      // Sin el lector de PDF (no se pudo bajar la librería) o con un PDF que no se deja abrir: como antes, en un marco del navegador
+      // Sin el lector de PDF (no se pudo bajar la librería) o con un PDF que no se deja abrir: se dice que no hay
+      // vista previa. (Antes se abría en un marco del navegador; ya no se usan marcos: ver crearVisor.)
       este.cerrar(); if (visorAbierto === este) visorAbierto = null;
-      visor.textContent = ''; visor.appendChild(marco());
+      noDisponible();
     }
   })();
 }
@@ -1948,8 +2091,8 @@ function descargar(ruta, nombre) {
 // NEGOCIO
 // ---------------------------------------------------------------------
 function vNegocio(v, d) {
-  var empresa = h('select', {}, EMPRESAS.map(function (e) { return h('option', { value: e }, e); })); empresa.value = S.empresa;
-  var mes = h('input', { type: 'month' }); mes.value = S.mes;
+  var empresa = h('select', { 'aria-label': 'Empresa' }, EMPRESAS.map(function (e) { return h('option', { value: e }, e); })); empresa.value = S.empresa;
+  var mes = h('input', { type: 'month', 'aria-label': 'Mes' }); mes.value = S.mes;
   v.appendChild(h('div', { class: 'barra' }, [empresa, mes, h('button', { class: 'boton', onclick: function () { S.empresa = empresa.value; S.mes = mes.value || mesActual(); cargar(true); } }, 'Consultar')]));
   v.appendChild(h('h3', {}, 'Avisos de vencimientos y facturas periódicas'));
   tabla(v, ['Tipo', 'Documento', 'Aviso', 'Fecha'], d.avisos.map(function (a) { return { celdas: [a.tipo, a.id, a.texto, fecha(a.fecha)] }; }));
@@ -1971,8 +2114,11 @@ function vNegocio(v, d) {
       h('div', { class: 'formulario' }, [h('label', {}, ['NIF del proveedor', nif]), h('label', {}, ['Categoría', categoria]), h('label', {}, ['Mes inicial', inicio]),
         h('label', {}, ['Cada cuántos meses', periodo]), h('label', {}, ['Día límite del mes (1 a 28)', dia]), h('label', { class: 'en-linea' }, [activa, ' Activa']),
         h('button', { class: 'boton principal', onclick: function () {
-          rpc('panel_guardar_periodica', { p_empresa: S.empresa, p_nif: nif.value, p_categoria: categoria.value, p_inicio: inicio.value, p_periodo: Number(periodo.value), p_dia: Number(dia.value), p_activa: activa.checked })
-            .then(function () { cargar(true); }).catch(function (e) { msg.className = 'mensaje error'; msg.textContent = mensajeError(e); });
+          // La regla va a la empresa que se VE elegida arriba (antes iba a la última consultada, aunque se hubiera cambiado el desplegable)
+          var suEmpresa = empresa.value;
+          rpc('panel_guardar_periodica', { p_empresa: suEmpresa, p_nif: nif.value, p_categoria: categoria.value, p_inicio: inicio.value, p_periodo: Number(periodo.value), p_dia: Number(dia.value), p_activa: activa.checked })
+            .then(function () { S.empresa = suEmpresa; S.mes = mes.value || S.mes; cargar(true); avisoBreve('Regla guardada en ' + suEmpresa); })
+            .catch(function (e) { msg.className = 'mensaje error'; msg.textContent = mensajeError(e); });
         } }, 'Guardar regla')]), msg]));
   }
 }
@@ -1987,7 +2133,7 @@ function vUsuarios(v, usuarios) {
   var reenviar = h('button', { class: 'boton', type: 'button', onclick: function () {
     if (!email.value.trim()) { msg.className = 'mensaje error'; msg.textContent = 'Elige primero un usuario de la lista.'; return; }
     rpc('panel_reenviar_invitacion', { p_email: email.value.trim() })
-      .then(function () { msg.className = 'mensaje ok'; msg.textContent = 'Invitación pendiente: se enviará en menos de un minuto.'; cargar(false); })
+      .then(function () { cargar(false); avisoBreve('Invitación pendiente: se enviará en menos de un minuto.'); })   // (el mensaje de la tarjeta se borraba al repintar)
       .catch(function (e) { msg.className = 'mensaje error'; msg.textContent = mensajeError(e); });
   } }, 'Reenviar invitación');
   v.appendChild(h('div', { class: 'tarjeta' }, [h('h2', {}, 'Añadir o cambiar un usuario'),
@@ -2000,7 +2146,8 @@ function vUsuarios(v, usuarios) {
       h('div', { class: 'en-linea' }, [h('button', { class: 'boton principal', onclick: function () {
         if (!email.value.trim()) { msg.className = 'mensaje error'; msg.textContent = 'Escribe el correo de la persona.'; return; }
         rpc('panel_guardar_usuario', { p_email: email.value.trim(), p_nombre: nombre.value.trim(), p_rol: rol.value, p_activo: activo.checked })
-          .then(function () { cargar(true); }).catch(function (e) { msg.className = 'mensaje error'; msg.textContent = mensajeError(e); });
+          .then(function () { cargar(true); avisoBreve('Usuario guardado. Si no ha entrado nunca, le llegará la invitación en menos de un minuto.'); })
+          .catch(function (e) { msg.className = 'mensaje error'; msg.textContent = mensajeError(e); });
       } }, 'Guardar e invitar'), reenviar])]), msg]));
   v.appendChild(h('p', { class: 'sub' }, ['Para ver cuándo ha entrado cada persona y los intentos con contraseña equivocada, abre ',
     h('button', { type: 'button', class: 'boton enlace', onclick: function () {
@@ -2146,7 +2293,7 @@ function vHistorial(v, d) {
         var local = isNaN(d0) ? null : new Date(d0.getTime() - d0.getTimezoneOffset() * 60000);
         var fila = { fecha: local, persona: nombres[String(x.usuario || '').toLowerCase()] || '', usuario: texto(x.usuario), accion: nombreAccion(x.accion),
           empresa: x.empresa === '_revision' ? '' : texto(x.empresa), hoja: texto(x.hoja), id_doc: texto(x.id_doc), campo: etiquetaCampo(x), antes: texto(x.antes), despues: texto(x.despues) };
-        Object.keys(fila).forEach(function (k) { if (typeof fila[k] === 'string' && /^[=+\-@\t\r]/.test(fila[k])) fila[k] = "'" + fila[k]; });
+        Object.keys(fila).forEach(function (k) { fila[k] = textoSeguroExcel(fila[k]); });
         hoja.addRow(fila);
       });
       hoja.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
@@ -2220,6 +2367,7 @@ function exportarOriginales(v) {
 function exportar(empresa, mes, estado) {
   if (!/^\d{4}-\d{2}$/.test(mes)) { estado.className = 'mensaje error'; estado.textContent = 'Selecciona el mes.'; return; }
   estado.className = 'mensaje'; estado.textContent = 'Preparando la exportación…';
+  if (!window.JSZip) { estado.className = 'mensaje error'; estado.textContent = 'No se ha podido cargar el programa que hace el ZIP. Comprueba la conexión a internet y recarga la página.'; return; }
   var zip = new JSZip(), total = 0, faltan = [], enElOrdenador = [];
   function meter(f, d, blob) {
     total += blob.size; if (total > 40 * 1024 * 1024) throw new Error('La exportación supera 40 MB; hazla por meses más cortos o descarga los archivos uno a uno.');
@@ -2609,6 +2757,8 @@ function ficha(titulo, fila, contexto) {
   function guardarCambios(revisar) {
     if (guardandoFicha) return;
     var cambios = cambiosActuales(), esperados = { estado: base.estado === undefined ? null : base.estado };
+    try { Object.keys(cambios).forEach(function (c) { if (CAMPOS_IMPORTE.indexOf(c) >= 0) cambios[c] = importeEscrito(cambios[c], ETIQUETAS[c] || c); }); }
+    catch (e) { mensaje.className = 'mensaje-ficha fallo'; mensaje.textContent = e.message; return; }
     Object.keys(cambios).forEach(function (c) { esperados[c] = base[c] === undefined ? null : base[c]; });
     if (!revisar && !Object.keys(cambios).length) return;
     mensaje.className = 'mensaje-ficha'; mensaje.textContent = 'Guardando cambios…'; ocupado(true);
@@ -2659,8 +2809,16 @@ function ficha(titulo, fila, contexto) {
     pie.appendChild(h('div', { class: 'acciones-revision' }, (releer ? [releer] : []).concat([descartar, guardar, marcar])));
     formulario.addEventListener('submit', function (e) { e.preventDefault(); guardarCambios(false); });
   }
+  // «Ampliar formulario» y «Ver documento en grande» se excluyen: antes, pulsando los dos, la ficha se quedaba en
+  // blanco (cada modo escondía una mitad). Ahora poner uno quita el otro y los dos botones dicen lo que harán.
+  function modoFicha(modo) {
+    var caja = document.getElementById('caja');
+    caja.classList.toggle('modo-datos', modo === 'datos'); caja.classList.toggle('modo-documento', modo === 'documento');
+    ampliar.setAttribute('aria-pressed', String(modo === 'datos')); ampliar.textContent = modo === 'datos' ? 'Ver documento y datos' : 'Ampliar formulario';
+    caja.querySelectorAll('.boton-en-grande').forEach(function (b) { b.textContent = modo === 'documento' ? 'Volver a los datos' : 'Ver documento en grande'; });
+  }
   var ampliar = h('button', { class: 'boton', 'aria-pressed': 'false', onclick: function () {
-    var solo = document.getElementById('caja').classList.toggle('modo-datos'); ampliar.setAttribute('aria-pressed', String(solo)); ampliar.textContent = solo ? 'Ver documento y datos' : 'Ampliar formulario';
+    modoFicha(document.getElementById('caja').classList.contains('modo-datos') ? '' : 'datos');
   } }, 'Ampliar formulario');
   abrirModal(tituloFicha(titulo, hoja, fila), h('div', { class: 'contenido-revision' }, [zona, pie]), ampliar);
   document.getElementById('caja').classList.add('revision-amplia');
@@ -2686,8 +2844,8 @@ function ficha(titulo, fila, contexto) {
         if (numero !== secuenciaFicha || mio !== pedidoVisor) return;
         crearVisor(visor, url, archivo.nombre); estadoArchivo.textContent = '';
         var enGrande = document.getElementById('caja').classList.contains('modo-documento');
-        estadoArchivo.appendChild(h('button', { type: 'button', class: 'boton', onclick: function () {
-          var solo = document.getElementById('caja').classList.toggle('modo-documento'); this.textContent = solo ? 'Volver a los datos' : 'Ver documento en grande';
+        estadoArchivo.appendChild(h('button', { type: 'button', class: 'boton boton-en-grande', onclick: function () {
+          modoFicha(document.getElementById('caja').classList.contains('modo-documento') ? '' : 'documento');
         } }, enGrande ? 'Volver a los datos' : 'Ver documento en grande'));
         if (S.rol === 'Administrador') estadoArchivo.appendChild(h('button', { class: 'boton', onclick: function () { descargar(archivo.ruta, archivo.nombre); } }, 'Descargar'));
       }).catch(function () { if (numero !== secuenciaFicha || mio !== pedidoVisor) return; visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, 'La vista previa no está disponible. Puedes continuar revisando los datos.')); });
@@ -2923,7 +3081,11 @@ function cerrarModal() {
   ++secuenciaFicha; fichaSucia = null; cerrarVisor(); document.getElementById('modal').classList.remove('abierto'); document.body.style.overflow = '';
   if (focoAntesModal && focoAntesModal.isConnected) focoAntesModal.focus();
 }
-document.getElementById('modal').addEventListener('click', function (e) { if (e.target.id === 'modal') cerrarModal(); });
+// Solo se cierra al pulsar en el fondo si el clic EMPEZÓ en el fondo: al seleccionar el texto de un campo y soltar el
+// ratón fuera, el navegador da el clic al fondo y la ficha se cerraba (19-nov-2026)
+var pulsadoEnElFondo = false;
+document.getElementById('modal').addEventListener('pointerdown', function (e) { pulsadoEnElFondo = e.target.id === 'modal'; });
+document.getElementById('modal').addEventListener('click', function (e) { if (e.target.id === 'modal' && pulsadoEnElFondo) cerrarModal(); pulsadoEnElFondo = false; });
 document.addEventListener('keydown', function (e) {
   if (!document.getElementById('modal').classList.contains('abierto')) return;
   if (e.key === 'Escape') { e.preventDefault(); cerrarModal(); }
@@ -2950,13 +3112,23 @@ function arrancar() {
   });
 }
 // Enlaces que llegan por correo: invitación (primera contraseña) o recuperación de contraseña
-var errorEnlace = /error_description=([^&]+)/.exec(location.hash);
-if (errorEnlace) {
+// (19-nov-2026) La almohadilla se lee con URLSearchParams: un "%" mal escrito ya no deja el panel en "Cargando…".
+// La pantalla "Guardar contraseña" solo sale con un enlace de invitación o recuperación que traiga de verdad su
+// sesión (ENLACE === 'contrasena'); un "#type=recovery" suelto ya no se la planta a quien tiene la sesión abierta.
+var errorEnlace = parametrosEnlace(location.hash).get('error_description');
+if (errorEnlace !== null) {
   history.replaceState(null, '', location.pathname);
-  pantallaAcceso('entrar', { tipo: 'error', texto: /expired|invalid/i.test(decodeURIComponent(errorEnlace[1]))
+  pantallaAcceso('entrar', { tipo: 'error', texto: /expired|invalid/i.test(errorEnlace)
     ? 'El enlace del correo ha caducado o ya se usó. Pide al administrador que te reenvíe la invitación, o usa "He olvidado la contraseña".'
     : 'No se ha podido usar el enlace del correo. Pide una invitación nueva al administrador.' });
-} else if (/type=(invite|recovery)/.test(location.hash)) {
+} else if (ENLACE === 'otra-cuenta') {
+  // Se sigue con la sesión que ya había y se explica por qué no se ha usado el enlace
+  arrancar();
+  setTimeout(function () {
+    alert('Ese enlace es de otra cuenta' + (CORREO_DEL_ENLACE ? ' (' + CORREO_DEL_ENLACE + ')' : '') + ' y en este navegador ya hay una sesión abierta. ' +
+      'Por seguridad no se ha usado. Si el enlace es tuyo, pulsa «Salir» y vuelve a abrirlo desde el correo.');
+  }, 300);
+} else if (ENLACE === 'contrasena') {
   var mostrada = false;
   sb.auth.onAuthStateChange(function (evento, sesion) {
     if (!mostrada && sesion && (evento === 'PASSWORD_RECOVERY' || evento === 'SIGNED_IN' || evento === 'INITIAL_SESSION')) { mostrada = true; pantallaAcceso('nueva'); }
@@ -2967,8 +3139,13 @@ function ocupadoConExcel() {
   return [].some.call(document.querySelectorAll('.boton.descarga'), function (b) { return b.disabled; }) ||
     !!(document.activeElement && document.activeElement.closest && document.activeElement.closest('.tarjeta-excel, .herramientas'));
 }
+// Un formulario a medio rellenar (Usuarios, regla periódica) no se borra con el refresco automático: se marca al
+// escribir o cambiar algo en él y se desmarca al repintar la pantalla (19-nov-2026)
+var formularioTocado = false;
+document.getElementById('vista').addEventListener('input', function (e) { if (e.target.closest && e.target.closest('.formulario, .formulario-usuario')) formularioTocado = true; });
+document.getElementById('vista').addEventListener('change', function (e) { if (e.target.closest && e.target.closest('.formulario, .formulario-usuario')) formularioTocado = true; });
 setInterval(function () {
-  if (ocupadoConExcel()) return;
+  if (ocupadoConExcel() || formularioTocado) return;
   var escribiendo = document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
   if (S.rol && !S.denegado && !document.getElementById('modal').classList.contains('abierto') && !escribiendo && !document.hidden) cargar(false);
 }, 30000);
