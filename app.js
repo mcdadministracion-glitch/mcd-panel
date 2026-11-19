@@ -859,7 +859,11 @@ var TIPOS_SUBIDA = '.pdf,.jpg,.jpeg,.png,.webp,.gif,.bmp,.tif,.tiff,.heic,.heif,
 function puedeSubir() { return S.rol === 'Revisor' || S.rol === 'Administrador'; }
 async function subirArchivos(ficheros) {
     for (var f of ficheros) {
-      var nombre = f.name.replace(/[\\/:*?"<>|#%]/g, '_').replace(/^\.+/, '') || 'foto.jpg';
+      // La base de datos solo admite nombres sin caracteres de control ni de cambio de sentido y de 200 letras como
+      // mucho (panel.sql, entrada_subir): se cambian por _ y un nombre larguísimo se acorta sin perder la extensión
+      var nombre = f.name.replace(/[\\/:*?"<>|#%\u0000-\u001f\u007f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g, '_').replace(/^\.+/, '') || 'foto.jpg';
+      var letras = Array.from(nombre);
+      if (letras.length > 150) { var ext = (/\.[A-Za-z0-9]{1,5}$/.exec(nombre) || [''])[0]; nombre = letras.slice(0, 150 - ext.length).join('') + ext; }
       var s = { nombre: f.name, texto: 'Comprobando…', clase: '' }; SUBIDAS.push(s); pintarSubidas();
       if (f.size > 15 * 1024 * 1024) { s.clase = 'fallo'; s.texto = 'No se sube: pesa más de 15 MB'; pintarSubidas(); continue; }
       if (!/\.(pdf|jpe?g|png|webp|gif|bmp|tiff?|heic|heif|docx?|odt|rtf|xlsx?|ods|csv|txt|xml|xsig|zip)$/i.test(nombre)) { s.clase = 'fallo'; s.texto = 'No se sube: tipo de archivo no admitido'; pintarSubidas(); continue; }
@@ -1918,10 +1922,13 @@ function crearVisor(visor, url, nombre) {
     }
   })();
 }
+// Ruta de un archivo tal como se apunta en el Historial: sin caracteres de control ni de cambio de sentido del
+// texto y de 160 letras como mucho (la base de datos no admite otra cosa, 19-nov-2026)
+function rutaHistorial(ruta) { return String(ruta || '').replace(/[\u0000-\u001f\u007f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g, '_').slice(0, 160); }
 function vistaPreviaRuta(nombre, ruta) {
   abrirModal(nombre, h('div', { class: 'cargando' }, 'Preparando la vista previa…'));
   var numero = secuenciaFicha;
-  rpc('panel_registrar_acceso_archivo', { p_id: ruta.slice(0, 160), p_tipo: 'archivo', p_accion: 'Ver documento' }).then(function () { return urlFirmada(ruta); }).then(function (url) {
+  rpc('panel_registrar_acceso_archivo', { p_id: rutaHistorial(ruta), p_tipo: 'archivo', p_accion: 'Ver documento' }).then(function () { return urlFirmada(ruta); }).then(function (url) {
     if (numero !== secuenciaFicha) return;
     var caja = document.getElementById('caja'); var visor = h('div', { class: 'visor-documento', style: 'height:72vh' });
     caja.replaceChild(visor, caja.lastChild); crearVisor(visor, url, nombre);
@@ -1929,7 +1936,7 @@ function vistaPreviaRuta(nombre, ruta) {
   }).catch(function (e) { if (numero === secuenciaFicha) abrirModal('No se puede mostrar', h('p', {}, mensajeError(e))); });
 }
 function descargar(ruta, nombre) {
-  rpc('panel_registrar_acceso_archivo', { p_id: ruta.slice(0, 160), p_tipo: 'archivo', p_accion: 'Descargar documento' })
+  rpc('panel_registrar_acceso_archivo', { p_id: rutaHistorial(ruta), p_tipo: 'archivo', p_accion: 'Descargar documento' })
     .then(function () { return sb.storage.from('documentos').download(ruta); })
     .then(function (r) {
       if (r.error) throw new Error(r.error.message);
