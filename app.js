@@ -2557,7 +2557,19 @@ var AVISOS_CASILLA = [
   [/proveedor nuevo/, ['nif', 'nombre'], [], 'Proveedor nuevo: compruébalo antes de pagar'],
   [/datos bancarios|cuenta bancaria|pagar por transferencia/, ['nombre'], [], 'Confirma la cuenta bancaria del proveedor'],
   [/falta quien emite o recibe/, [], ['nombre', 'nif'], 'Falta quién lo hace o a quién va'],
-  [/no se le ha facturado antes|recibida, no emitida/, ['tipo_factura'], [], '¿Emitida o recibida?']
+  [/no se le ha facturado antes|recibida, no emitida/, ['tipo_factura'], [], '¿Emitida o recibida?'],
+  // Repaso de lo ya procesado (repaso.py): mismos datos, dichos de otra forma
+  [/las cuentas no cuadran/, ['base_imponible', 'cuota_iva', 'retencion_irpf', 'otros_importes', 'total'], [], 'Las cuentas no cuadran'],
+  [/el iva no cuadra/, ['iva_porcentaje', 'cuota_iva'], [], 'El IVA no cuadra con la base'],
+  [/no tiene total/, ['total'], [], 'Falta el total'],
+  [/falta el nif|el nif no es valido/, ['nif'], ['nif'], 'NIF que falta o no es válido'],
+  [/no tiene numero/, ['#numero'], ['#numero'], 'Falta el número'],
+  [/mismo nif y numero que/, ['#numero'], [], 'Número repetido'],
+  [/no tiene fecha|la fecha es futura|la fecha es de hace mas/, ['fecha'], ['fecha'], 'Fecha que no cuadra'],
+  [/vence antes de la fecha/, ['fecha_vencimiento'], [], 'Vence antes de la fecha de la factura'],
+  [/emitida o recibida/, ['tipo_factura'], [], '¿Emitida o recibida?'],
+  [/emitido o recibido/, [], ['tipo_albaran'], '¿Emitido o recibido?'],
+  [/comprobante de un surtidor/, [], ['nombre', 'concepto'], 'Parece un ticket de surtidor, no un albarán']
 ];
 // "Lectura dudosa (fecha, importes)": cada dato dudoso con su casilla (nombres de duda.py)
 var DUDOSO_CASILLA = { 'tipo de documento': ['#tipo'], 'numero': ['#numero'], 'fecha': ['fecha'], 'quien lo emite': ['nombre', 'nif'],
