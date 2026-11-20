@@ -544,8 +544,13 @@ function iconoPanel(vista) {
 }
 
 // Las secciones que puede ver quien ha entrado
+// Secciones que ve cada usuario (20-nov-2026): las elige un administrador en Usuarios (usuarios.secciones, null = todas).
+// Inicio se ve siempre y los administradores lo ven todo. OJO: esconde secciones; no es un candado de los datos.
+function seccionVisible(v) {
+  return v === 'inicio' || S.rol === 'Administrador' || !Array.isArray(S.secciones) || S.secciones.indexOf(v) >= 0;
+}
 function seccionesDelMenu() {
-  var secciones = VISTAS.slice();
+  var secciones = VISTAS.filter(function (v) { return seccionVisible(v[0]); });
   if (S.rol === 'Administrador') secciones.push(['usuarios', 'Usuarios'], ['historial', 'Historial']);
   return secciones;
 }
@@ -601,6 +606,7 @@ function pintarMenu() {
 }
 function irA(vista) {
   if (!S.rol || S.denegado || vista === S.vista) return;
+  if (['usuarios', 'historial'].indexOf(vista) < 0 && !seccionVisible(vista)) return;      // sección escondida para este usuario
   clearTimeout(temporizadorBusqueda);
   S.vista = vista; S.buscar = ''; S.filtro = ['facturas', 'albaranes'].indexOf(vista) >= 0 ? 'Activos' : ''; S.pagina = 1; pintarMenu(); cargar(true);
   window.scrollTo(0, 0);
@@ -609,7 +615,7 @@ function pintarCabecera(ini) {
   var u = ini.usuario || {}, s = ini.servicio || {};
   EMPRESAS = ini.empresas.map(function (e) { return e.nombre; });
   if (EMPRESAS.indexOf(S.empresa) < 0) S.empresa = EMPRESAS[0] || null;
-  S.rol = u.rol; S.usuario = u;
+  S.rol = u.rol; S.usuario = u; S.secciones = ini.misSecciones || null;
   var cont = document.getElementById('usuario'); cont.textContent = '';
   cont.appendChild(h('span', { class: 'nombre-usuario' }, u.nombre || u.email || ''));
   cont.appendChild(h('span', { class: 'pill marca' }, u.rol || ''));
@@ -698,7 +704,9 @@ function cargar(mostrarCargando, conservarBarra) {
     destino.textContent = ''; destino.appendChild(h('div', { class: 'cargando', role: 'status' }, 'Cargando…'));
   }
   var promesa;
-  if (solicitud.vista === 'inicio') promesa = rpc('panel_inicio');
+  if (solicitud.vista === 'inicio') promesa = Promise.all([rpc('panel_inicio'), rpc('panel_mis_secciones').catch(function () { return null; })]).then(function (rs) {
+    var d = rs[0]; if (d) d.misSecciones = rs[1] && Array.isArray(rs[1].secciones) ? rs[1].secciones : null; return d;      // sin la función (SQL sin pegar): todas
+  });
   else if (solicitud.vista === 'facturas' || solicitud.vista === 'albaranes') promesa = cargarTabla(solicitud);
   else if (solicitud.vista === 'revision') promesa = rpc('panel_revision');
   else if (solicitud.vista === 'combustible') promesa = cargarCombustible(solicitud);
@@ -1931,12 +1939,15 @@ function crearVisor(visor, url, nombre) {
   visor.textContent = '';
   if (!esImagen && !esPdf) { if (TIPOS_TEXTO_VISOR.test(nombre)) vistaComoTexto(visor, url, nombre); else sinVistaPrevia(visor); return; }
   var zoom = 1, vivo = true, hojas = [], pdf = null, turno = 0, temporizador = null, arrastre = null, pellizco = null;
+  var claveGiro = 'mcd-giro:' + nombre, giro = 0;
+  try { giro = (Number(localStorage.getItem(claveGiro)) || 0) % 360; } catch (e) { giro = 0; }      // sin almacenamiento: derecho
   var etiqueta = h('span', { class: 'visor-zoom', role: 'status', 'aria-live': 'polite' }, '100 %');
   function boton(letra, titulo, accion) { return h('button', { type: 'button', class: 'boton', title: titulo, 'aria-label': titulo, onclick: accion }, letra); }
   var ayuda = h('span', { class: 'visor-ayuda' }, 'Ctrl + rueda para acercar · arrastra para moverte');
   var barra = h('div', { class: 'visor-barra', role: 'toolbar', 'aria-label': 'Tamaño del documento' }, [
     boton('−', 'Alejar', function () { cambiarZoom(zoom / ZOOM_PASO); }), etiqueta, boton('+', 'Acercar', function () { cambiarZoom(zoom * ZOOM_PASO); }),
-    boton('Ajustar', 'Ajustar al ancho', function () { cambiarZoom(1); }), ayuda]);
+    boton('Ajustar', 'Ajustar al ancho', function () { cambiarZoom(1); }),
+    boton('↺', 'Girar a la izquierda', function () { girar(-90); }), boton('↻', 'Girar a la derecha', function () { girar(90); }), ayuda]);
   var lista = h('div', { class: 'visor-hojas' }, h('p', { class: 'vacio', role: 'status' }, 'Abriendo…'));
   var zona = h('div', { class: 'visor-zona', tabindex: '0', role: 'group', 'aria-label': 'Vista previa de ' + nombre }, lista);
   visor.appendChild(h('div', { class: 'visor-caja' }, [barra, zona]));
@@ -1957,6 +1968,30 @@ function crearVisor(visor, url, nombre) {
     zona.scrollLeft = fx * zona.scrollWidth - px; zona.scrollTop = fy * zona.scrollHeight - py;
     pintarLuego();
   }
+  // Girar: solo cambia cómo se ve aquí (el archivo guardado no se toca) y se recuerda en este navegador
+  function girar(grados) {
+    if (!hojas.length) return;
+    giro = ((giro + grados) % 360 + 360) % 360;
+    try { if (giro) localStorage.setItem(claveGiro, String(giro)); else localStorage.removeItem(claveGiro); } catch (e) { /* sin almacenamiento: no se recuerda */ }
+    if (pdf) { hojas.forEach(function (p) { p.proporcion = 1 / p.proporcion; p.ancho = 0; }); colocar(); pintar(); }
+    else ponerFoto();
+  }
+  // Foto: derecha se ve tal cual; girada, se pinta en un lienzo girado (mismo tamaño en pantalla que el resto)
+  var foto = null;
+  function ponerFoto() {
+    if (!foto || !foto.naturalWidth) return;
+    var el = foto;
+    if (giro) {
+      var lado = giro % 180 !== 0, w = foto.naturalWidth, alto = foto.naturalHeight;
+      var reduce = Math.min(1, Math.sqrt(PIXELES_MAXIMOS_HOJA / (w * alto)));
+      el = lienzo(Math.round((lado ? alto : w) * reduce), Math.round((lado ? w : alto) * reduce));
+      el.className = 'visor-hoja'; el.setAttribute('role', 'img'); el.setAttribute('aria-label', 'Vista previa de ' + nombre + ' (girada)');
+      var cx = el.getContext('2d');
+      cx.translate(el.width / 2, el.height / 2); cx.rotate(giro * Math.PI / 180); cx.scale(reduce, reduce);
+      cx.drawImage(foto, -w / 2, -alto / 2);
+    }
+    lista.textContent = ''; lista.appendChild(el); hojas = [{ el: el }]; colocar();
+  }
   // PDF: se pintan las páginas que se ven (y las de alrededor) a la resolución del tamaño actual
   function seVe(p) { var arriba = p.el.offsetTop, margen = zona.clientHeight; return arriba + p.el.offsetHeight > zona.scrollTop - margen && arriba < zona.scrollTop + zona.clientHeight + margen; }
   function pintarLuego() { if (!pdf || !vivo) return; clearTimeout(temporizador); temporizador = setTimeout(pintar, 120); }
@@ -1972,9 +2007,9 @@ function crearVisor(visor, url, nombre) {
         if (p.ancho === ancho) continue;
         var pagina = await pdf.getPage(i + 1);
         if (!vivo || mio !== turno) return;
-        var v1 = pagina.getViewport({ scale: 1 });
+        var rotacion = ((pagina.rotate || 0) + giro) % 360, v1 = pagina.getViewport({ scale: 1, rotation: rotacion });
         var escala = Math.min(ancho * (window.devicePixelRatio || 1) / v1.width, Math.sqrt(PIXELES_MAXIMOS_HOJA / (v1.width * v1.height)));
-        var vp = pagina.getViewport({ scale: escala }), borrador = lienzo(vp.width, vp.height), cx = borrador.getContext('2d');
+        var vp = pagina.getViewport({ scale: escala, rotation: rotacion }), borrador = lienzo(vp.width, vp.height), cx = borrador.getContext('2d');
         cx.fillStyle = '#fff'; cx.fillRect(0, 0, borrador.width, borrador.height);
         await pagina.render({ canvasContext: cx, viewport: vp }).promise;
         if (!vivo || mio !== turno) return;
@@ -2033,8 +2068,9 @@ function crearVisor(visor, url, nombre) {
   (async function () {
     try {
       if (esImagen) {
-        var foto = h('img', { class: 'visor-hoja', src: url, alt: 'Vista previa de ' + nombre, draggable: 'false' });
+        foto = h('img', { class: 'visor-hoja', src: url, alt: 'Vista previa de ' + nombre, draggable: 'false' });
         foto.addEventListener('error', function () { if (vivo && zona.isConnected) { hojas = []; noDisponible(); } });
+        foto.addEventListener('load', function () { if (vivo && giro) ponerFoto(); });
         lista.textContent = ''; lista.appendChild(foto); hojas = [{ el: foto }]; colocar();
         return;
       }
@@ -2046,7 +2082,7 @@ function crearVisor(visor, url, nombre) {
       pdf = abierto;
       var nuevas = [];
       for (var i = 1; i <= pdf.numPages; i++) {
-        var medida = (await pdf.getPage(i)).getViewport({ scale: 1 });
+        var pag = await pdf.getPage(i), medida = pag.getViewport({ scale: 1, rotation: ((pag.rotate || 0) + giro) % 360 });
         if (!vivo) return;
         var hoja = h('canvas', { class: 'visor-hoja', role: 'img', 'aria-label': 'Página ' + i + ' de ' + pdf.numPages + ' de ' + nombre });
         hoja.width = hoja.height = 1;
@@ -2130,6 +2166,29 @@ function vUsuarios(v, usuarios) {
   var email = h('input', { type: 'email', placeholder: 'correo@empresa.com' }), nombre = h('input', { type: 'text', placeholder: 'Nombre' });
   var rol = h('select', {}, ['Lector', 'Revisor', 'Administrador'].map(function (r) { return h('option', { value: r }, r); }));
   var activo = h('input', { type: 'checkbox' }); activo.checked = true; var msg = h('div', { class: 'mensaje' });
+  // Qué secciones ve (Inicio siempre; un administrador lo ve todo)
+  var casillasSeccion = VISTAS.filter(function (x) { return x[0] !== 'inicio'; }).map(function (x) {
+    var c = h('input', { type: 'checkbox', value: x[0], 'data-seccion': x[0] }); c.checked = true;
+    return { id: x[0], c: c, el: h('label', { class: 'casilla' }, [c, x[1]]) };
+  });
+  var avisoSecciones = h('p', { class: 'ayuda-campo' });
+  var cajaSecciones = h('fieldset', { class: 'secciones-usuario' }, [h('legend', {}, 'Secciones que ve')].concat(casillasSeccion.map(function (x) { return x.el; }), [avisoSecciones]));
+  function ponerSecciones(lista) { casillasSeccion.forEach(function (x) { x.c.checked = !Array.isArray(lista) || lista.indexOf(x.id) >= 0; }); }
+  function leerSecciones() {
+    var marcadas = casillasSeccion.filter(function (x) { return x.c.checked; }).map(function (x) { return x.id; });
+    return marcadas.length === casillasSeccion.length ? null : marcadas;          // todas = sin límite
+  }
+  function segunRol() {
+    var admin = rol.value === 'Administrador';
+    casillasSeccion.forEach(function (x) { x.c.disabled = admin; });
+    avisoSecciones.textContent = admin ? 'Un administrador ve siempre todas las secciones.' : 'Inicio se ve siempre. Desmarca lo que esta persona no necesita ver.';
+  }
+  rol.addEventListener('change', segunRol); segunRol();
+  function nombreSecciones(u) {
+    if (u.rol === 'Administrador' || !Array.isArray(u.secciones)) return 'Todas';
+    var nombres = VISTAS.filter(function (x) { return x[0] !== 'inicio' && u.secciones.indexOf(x[0]) >= 0; }).map(function (x) { return x[1]; });
+    return nombres.length ? nombres.join(', ') : 'Solo Inicio';
+  }
   var reenviar = h('button', { class: 'boton', type: 'button', onclick: function () {
     if (!email.value.trim()) { msg.className = 'mensaje error'; msg.textContent = 'Elige primero un usuario de la lista.'; return; }
     rpc('panel_reenviar_invitacion', { p_email: email.value.trim() })
@@ -2142,10 +2201,12 @@ function vUsuarios(v, usuarios) {
       h('li', {}, [h('b', {}, 'Revisor: '), 'además corrige fichas, sube documentos y marca revisado.']),
       h('li', {}, [h('b', {}, 'Administrador: '), 'además gestiona usuarios y reglas.'])]),
     h('div', { class: 'formulario-usuario' }, [h('label', {}, ['Correo', email]), h('label', {}, ['Nombre', nombre]), h('label', {}, ['Rol', rol]),
-      h('label', { class: 'casilla' }, [activo, 'Puede entrar (desmarca para quitarle el acceso)']),
+      h('label', { class: 'casilla' }, [activo, 'Puede entrar (desmarca para quitarle el acceso)']), cajaSecciones,
       h('div', { class: 'en-linea' }, [h('button', { class: 'boton principal', onclick: function () {
         if (!email.value.trim()) { msg.className = 'mensaje error'; msg.textContent = 'Escribe el correo de la persona.'; return; }
-        rpc('panel_guardar_usuario', { p_email: email.value.trim(), p_nombre: nombre.value.trim(), p_rol: rol.value, p_activo: activo.checked })
+        var suCorreo = email.value.trim(), susSecciones = rol.value === 'Administrador' ? null : leerSecciones();
+        rpc('panel_guardar_usuario', { p_email: suCorreo, p_nombre: nombre.value.trim(), p_rol: rol.value, p_activo: activo.checked })
+          .then(function () { return rpc('panel_secciones_usuario', { p_email: suCorreo, p_secciones: susSecciones }); })
           .then(function () { cargar(true); avisoBreve('Usuario guardado. Si no ha entrado nunca, le llegará la invitación en menos de un minuto.'); })
           .catch(function (e) { msg.className = 'mensaje error'; msg.textContent = mensajeError(e); });
       } }, 'Guardar e invitar'), reenviar])]), msg]));
@@ -2162,8 +2223,8 @@ function vUsuarios(v, usuarios) {
     if (u.invitacion_error) return 'Error al invitar';
     return u.invitado_en ? 'Enviada ' + fecha(String(u.invitado_en).slice(0, 10)) : 'Pendiente de enviar';
   }
-  tabla(v, ['Correo', 'Nombre', 'Rol', 'Activo', 'Invitación', 'Último acceso'], usuarios.map(function (u) {
-    return { celdas: [u.email, u.nombre, u.rol, u.activo ? 'Sí' : 'No', estadoInvitacion(u), u.ultimo_acceso ? fechaHora(u.ultimo_acceso) : 'Nunca'], abrir: function () { email.value = u.email; nombre.value = u.nombre || ''; rol.value = u.rol; activo.checked = !!u.activo; email.focus();
+  tabla(v, ['Correo', 'Nombre', 'Rol', 'Ve', 'Activo', 'Invitación', 'Último acceso'], usuarios.map(function (u) {
+    return { celdas: [u.email, u.nombre, u.rol, nombreSecciones(u), u.activo ? 'Sí' : 'No', estadoInvitacion(u), u.ultimo_acceso ? fechaHora(u.ultimo_acceso) : 'Nunca'], abrir: function () { email.value = u.email; nombre.value = u.nombre || ''; rol.value = u.rol; activo.checked = !!u.activo; ponerSecciones(u.secciones); segunRol(); email.focus();
       // Al elegir a alguien se dice por qué no le llegó la invitación (si es el caso)
       var motivo = u.activo ? String(u.invitacion_error || '') : '';
       msg.className = motivo && !yaTieneCuenta(u) ? 'mensaje error' : 'mensaje';
@@ -2478,6 +2539,47 @@ var ETIQUETAS = { num_factura: 'Número de factura', num_albaran: 'Número de al
   clase: 'Clase (orden_carga = orden de carga)', va_con: 'Va con (pack)', referencias: 'Otras referencias (pedido, CMR…)', propuesta_pack: 'Pack propuesto por el programa', pack_rechazado: 'Packs rechazados', archivo_original: 'Archivo original', hash_sha256: 'Huella del archivo', tokens_entrada: 'Tokens de entrada', tokens_salida: 'Tokens de salida', coste_eur: 'Coste IA (€)' };
 var fichaSucia = null, guardandoFicha = false, focoAntesModal = null, secuenciaFicha = 0;
 
+// Qué casillas hay que mirar (20-nov-2026): sale de los avisos que el programa escribe en Observaciones.
+// [texto del aviso (sin tildes, en minúsculas), casillas de facturas, casillas de albaranes, explicación corta]
+var NUMERO = { facturas: 'num_factura', albaranes: 'num_albaran' };
+var AVISOS_CASILLA = [
+  [/total no cuadra|no coincide con el total/, ['base_imponible', 'cuota_iva', 'retencion_irpf', 'otros_importes', 'total'], [], 'Las cuentas no cuadran'],
+  [/falta la base o el total|no se lee el total/, ['base_imponible', 'total'], ['importe'], 'Falta el importe'],
+  [/cuota de iva no cuadra/, ['iva_porcentaje', 'cuota_iva'], [], 'El IVA no cuadra con la base'],
+  [/suma de lineas no coincide|lineas sin importe/, ['base_imponible'], [], 'Las líneas no suman la base'],
+  [/fecha no legible|no se lee la fecha/, ['fecha'], ['fecha'], 'Fecha que no se lee'],
+  [/fecha futura/, ['fecha'], ['fecha'], 'La fecha es futura'],
+  [/fecha corregida por el programa/, ['fecha'], ['fecha'], 'Fecha corregida: compruébala'],
+  [/vencimiento anterior/, ['fecha_vencimiento'], [], 'Vence antes de la fecha de la factura'],
+  [/sin nif|nif del cliente\/proveedor no valido/, ['nif'], ['nif'], 'NIF que falta o no es válido'],
+  [/sin numero de documento/, ['#numero'], ['#numero'], 'Falta el número'],
+  [/mismo numero que/, ['#numero'], ['#numero'], 'Número repetido'],
+  [/proveedor nuevo/, ['nif', 'nombre'], [], 'Proveedor nuevo: compruébalo antes de pagar'],
+  [/datos bancarios|cuenta bancaria|pagar por transferencia/, ['nombre'], [], 'Confirma la cuenta bancaria del proveedor'],
+  [/falta quien emite o recibe/, [], ['nombre', 'nif'], 'Falta quién lo hace o a quién va'],
+  [/no se le ha facturado antes|recibida, no emitida/, ['tipo_factura'], [], '¿Emitida o recibida?']
+];
+// "Lectura dudosa (fecha, importes)": cada dato dudoso con su casilla (nombres de duda.py)
+var DUDOSO_CASILLA = { 'tipo de documento': ['#tipo'], 'numero': ['#numero'], 'fecha': ['fecha'], 'quien lo emite': ['nombre', 'nif'],
+  'quien lo recibe': ['nombre', 'nif'], 'importes': ['base_imponible', 'cuota_iva', 'total', 'importe'], 'vencimiento': ['fecha_vencimiento'],
+  'matricula': ['matricula'], 'origen o destino': ['origen', 'destino'] };
+function sinTildes(t) { return texto(t).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); }
+function casillasARevisar(hoja, fila) {
+  var marcas = {};
+  if (!fila || ['facturas', 'albaranes'].indexOf(hoja) < 0 || ['Revisar', 'Duplicado'].indexOf(fila.estado) < 0) return marcas;
+  function poner(c, porque) {
+    c = c === '#numero' ? NUMERO[hoja] : c === '#tipo' ? (hoja === 'facturas' ? 'tipo_factura' : 'tipo_albaran') : c;
+    if (!(marcas[c] = marcas[c] || []).some(function (x) { return x === porque; })) marcas[c].push(porque);
+  }
+  texto(fila.observaciones).split(/;\s*/).forEach(function (aviso) {
+    var t = sinTildes(aviso);
+    AVISOS_CASILLA.forEach(function (r) { if (r[0].test(t)) (hoja === 'facturas' ? r[1] : r[2]).forEach(function (c) { poner(c, r[3]); }); });
+    var dudosos = /^lectura dudosa \(([^)]*)\)/.exec(t);
+    if (dudosos) dudosos[1].split(/,\s*/).forEach(function (n) { (DUDOSO_CASILLA[n.trim()] || []).forEach(function (c) { poner(c, 'La IA no lo ve claro'); }); });
+  });
+  return marcas;
+}
+
 // ---------------------------------------------------------------------
 // PACKS: un albarán principal (el que se factura) y sus anexos (papeles que lo acompañan:
 // notas de entrega, CMR, PTR...). Un anexo no cuenta como albarán aparte ni espera factura.
@@ -2714,11 +2816,19 @@ function ficha(titulo, fila, contexto) {
       resumen.textContent = Number.isFinite(diferencia) ? 'Base + IVA − retención + otros = ' + euros(calculado) + (Math.abs(diferencia) > 0.02 ? ' · Diferencia con el total: ' + euros(diferencia) : ' · Coincide con el total') : 'Comprueba los importes introducidos.';
     }
   }
+  var marcas = casillasARevisar(hoja, fila), hayMarcas = Object.keys(marcas).some(function (c) { return conocidos.indexOf(c) >= 0; });
+  if (hayMarcas) formulario.appendChild(h('p', { class: 'aviso-revisar', role: 'note' }, 'En rojo, lo que hay que mirar. Debajo de cada casilla, por qué.'));
+  function marcar(c, caja) {
+    if (!marcas[c]) return caja;
+    caja.classList.add('campo-revisar');
+    caja.appendChild(h('span', { class: 'motivo-campo' }, marcas[c].join(' · ')));
+    return caja;
+  }
   grupos.forEach(function (grupo, i) {
     var seccion = h('fieldset', { class: 'seccion-ficha' }, [h('legend', {}, (i + 1) + '. ' + grupo[0])]), rejilla = h('div', { class: 'campos-ficha' });
     grupo[1].forEach(function (c) {
       var largo = ['concepto', 'observaciones', 'motivo'].indexOf(c) >= 0, etiqueta = ETIQUETAS[c] || c, valor = valorEntrada(c);
-      if (!editable) { rejilla.appendChild(h('div', { class: 'campo-ficha' + (largo ? ' campo-ancho' : '') }, [h('span', { class: 'etiqueta-ficha' }, etiqueta), h('div', { class: 'valor-ficha' }, c === 'fecha_vencimiento' ? vence(base[c]) : /^fecha/.test(c) ? fecha(valor) || '—' : valor || '—')])); return; }
+      if (!editable) { rejilla.appendChild(marcar(c, h('div', { class: 'campo-ficha' + (largo ? ' campo-ancho' : '') }, [h('span', { class: 'etiqueta-ficha' }, etiqueta), h('div', { class: 'valor-ficha' }, c === 'fecha_vencimiento' ? vence(base[c]) : /^fecha/.test(c) ? fecha(valor) || '—' : valor || '—')]))); return; }
       var entrada;
       if (c === 'estado_cobro_pago') entrada = h('select', { id: 'campo-' + c }, ['Pendiente', 'Parcial', 'Pagado', 'Cobrado'].map(function (x) { return h('option', { value: x }, x); }));
       else if (c === 'tipo_factura' || c === 'tipo_albaran') {      // emitido = lo hace la empresa; recibido = de un proveedor
@@ -2732,7 +2842,8 @@ function ficha(titulo, fila, contexto) {
       if (/base|cuota|retencion|otros|total|importe|porcentaje/.test(c)) entrada.setAttribute('inputmode', 'decimal');
       entrada.value = c === 'estado_cobro_pago' && !valor ? 'Pendiente' : valor; entradas[c] = entrada;
       entrada.addEventListener('input', actualizarPendientes); entrada.addEventListener('change', actualizarPendientes);
-      rejilla.appendChild(h('div', { class: 'campo-ficha' + (largo ? ' campo-ancho' : '') }, [h('label', { for: 'campo-' + c }, etiqueta), entrada]));
+      if (marcas[c]) entrada.setAttribute('aria-invalid', 'true');
+      rejilla.appendChild(marcar(c, h('div', { class: 'campo-ficha' + (largo ? ' campo-ancho' : '') }, [h('label', { for: 'campo-' + c }, etiqueta), entrada])));
     });
     seccion.appendChild(rejilla);
     if (grupo[0] === 'Importes') seccion.appendChild(resumen);

@@ -327,6 +327,15 @@
   .visor-barra .boton { min-height:36px; min-width:44px; padding:var(--e05) var(--e15); font-size:var(--t-s); }
   .visor-zoom { min-width:4.5em; text-align:center; font-variant-numeric:tabular-nums; font-size:var(--t-xs); color:var(--suave); }
   .visor-ayuda { margin-left:auto; font-size:var(--t-xs); color:var(--suave); }
+  /* Casillas que hay que mirar en un documento en Revisar (20-nov-2026) */
+  .aviso-revisar { margin:0 0 var(--e15); padding:var(--e1) var(--e15); border-left:4px solid var(--error); background:var(--error-f); color:var(--texto); font-size:var(--t-s); }
+  .campo-revisar input, .campo-revisar select, .campo-revisar textarea, .campo-revisar .valor-ficha { border:2px solid var(--error) !important; background:var(--error-f); }
+  .campo-revisar label, .campo-revisar .etiqueta-ficha { color:var(--error); font-weight:600; }
+  .motivo-campo { display:block; margin-top:var(--e05); font-size:var(--t-xs); color:var(--error); }
+  /* Secciones que ve cada usuario */
+  .secciones-usuario { display:flex; flex-wrap:wrap; gap:var(--e1) var(--e2); border:1px solid var(--borde); border-radius:8px; padding:var(--e1) var(--e15); margin:0; }
+  .secciones-usuario legend { padding:0 var(--e05); font-weight:600; }
+  .secciones-usuario .ayuda-campo { flex-basis:100%; margin:0; }
   .visor-zona { flex:1; min-height:0; overflow:auto; background:var(--gris-f); cursor:grab; overscroll-behavior:contain; touch-action:pan-x pan-y; }
   .visor-zona.arrastrando { cursor:grabbing; user-select:none; } .visor-zona:focus-visible { outline:3px solid var(--acento); outline-offset:-3px; }
   .visor-hojas { display:flex; flex-direction:column; align-items:center; gap:var(--e15); padding:var(--e15); width:max-content; min-width:100%; }
@@ -506,6 +515,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=ve9012d9"></script>
+<script src="app.js?v=v24ce44f"></script>
 </body>
 </html>
