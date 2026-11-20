@@ -713,7 +713,10 @@ function cargar(mostrarCargando, conservarBarra) {
   else if (solicitud.vista === 'tickets') promesa = cargarTickets(solicitud);
   else if (solicitud.vista === 'usuarios') promesa = consulta(sb.from('usuarios').select('*').order('email')).then(function (r) { return r.data; });
   else if (solicitud.vista === 'historial') promesa = cargarHistorial(solicitud);
-  else if (solicitud.vista === 'negocio') promesa = rpc('panel_negocio', { p_empresa: solicitud.empresa, p_mes: solicitud.mes });
+  else if (solicitud.vista === 'negocio') promesa = Promise.all([rpc('panel_negocio', { p_empresa: solicitud.empresa, p_mes: solicitud.mes }),
+    rpc('panel_caducidades', { p_empresa: solicitud.empresa }).catch(function () { return null; })]).then(function (rs) {
+    var d = rs[0]; if (d) d.caducidades = rs[1]; return d;                   // null = no se han podido leer (SQL sin pegar)
+  });
   else promesa = cargarCarpeta(solicitud.carpeta);
   promesa.then(function (d) {
     if (solicitud.numero !== secuenciaCarga) return;
@@ -2139,6 +2142,7 @@ function vNegocio(v, d) {
   tabla(v, ['ID', 'Factura', 'Tipo', 'Estado', { t: 'Total', num: 1 }, { t: 'Abonado', num: 1 }, 'Vence'], d.pagos.map(function (p) {
     return { celdas: [p.id, p.numero, p.tipo, p.estado, { t: euros(p.total), num: 1 }, { t: euros(p.abonado), num: 1 }, vence(p.vence)] };
   }));
+  pintarCaducidades(v, d.caducidades, empresa);
   if (S.rol === 'Administrador') {
     v.appendChild(h('h3', {}, 'Reglas de facturas periódicas'));
     tabla(v, ['NIF', 'Categoría', 'Desde', 'Cada meses', 'Día límite', 'Activa'], (d.reglas || []).map(function (r) { return { celdas: [r.nif, r.categoria, r.mes_inicio, r.periodo_meses, r.dia_limite, r.activa ? 'Sí' : 'No'] }; }));
@@ -2157,6 +2161,56 @@ function vNegocio(v, d) {
             .catch(function (e) { msg.className = 'mensaje error'; msg.textContent = mensajeError(e); });
         } }, 'Guardar regla')]), msg]));
   }
+}
+
+// Caducidades (21-nov-2026): ITV, seguros, tarjeta de transporte, CAP... de la empresa elegida arriba.
+// Se apuntan a mano (no se leen de ningún documento). Para personas, iniciales o un apodo: nunca el DNI (lo rechaza el servidor).
+var TIPOS_CADUCIDAD = ['ITV', 'Seguro', 'Tarjeta de transporte', 'Tacógrafo', 'ATP', 'Extintores', 'CAP', 'Carné de conducir', 'ADR', 'Reconocimiento médico', 'Otro'];
+var DIAS_AVISO_CADUCIDAD = 30;            // igual que avisos.py (resumen diario)
+function estadoCaducidad(dias) {
+  if (dias < 0) return h('span', { class: 'pill error' }, 'Caducado hace ' + (-dias) + (dias === -1 ? ' día' : ' días'));
+  if (dias === 0) return h('span', { class: 'pill error' }, 'Caduca hoy');
+  if (dias <= DIAS_AVISO_CADUCIDAD) return h('span', { class: 'pill aviso' }, 'Caduca en ' + dias + (dias === 1 ? ' día' : ' días'));
+  return h('span', { class: 'pill ok' }, 'Al día');
+}
+function pintarCaducidades(v, lista, selectorEmpresa) {
+  v.appendChild(h('h3', { id: 'caducidades' }, 'Caducidades: ITV, seguros, tarjeta de transporte, CAP...'));
+  v.appendChild(h('p', { class: 'sub' }, 'El resumen diario avisa de lo caducado y de lo que caduca en ' + DIAS_AVISO_CADUCIDAD + ' días. Para una persona escribe unas iniciales o un apodo, nunca el DNI.'));
+  if (lista === null || lista === undefined) { v.appendChild(h('div', { class: 'tarjeta vacio' }, 'No se han podido leer las caducidades (¿falta poner al día la base de datos?).')); return; }
+  var puede = puedeSubir();
+  var tipo = h('select', { id: 'cad-tipo', 'aria-label': 'Tipo de documento' }, TIPOS_CADUCIDAD.map(function (x) { return h('option', { value: x }, x); }));
+  var ref = h('input', { id: 'cad-ref', type: 'text', maxlength: '40', placeholder: 'Matrícula o iniciales' });
+  var vence = h('input', { id: 'cad-vence', type: 'date' });
+  var nota = h('input', { id: 'cad-nota', type: 'text', maxlength: '200', placeholder: 'Opcional' });
+  var msg = h('div', { class: 'mensaje' }), editando = { id: null };
+  var titulo = h('h3', {}, 'Apuntar una caducidad');
+  var cancelar = h('button', { class: 'boton', type: 'button', hidden: 'hidden', onclick: function () { limpiar(); } }, 'Cancelar');
+  function limpiar() { editando.id = null; ref.value = ''; vence.value = ''; nota.value = ''; tipo.value = TIPOS_CADUCIDAD[0]; titulo.textContent = 'Apuntar una caducidad'; cancelar.hidden = true; msg.textContent = ''; }
+  tabla(v, ['Tipo', 'A qué se refiere', 'Caduca', 'Estado', { t: 'Nota', largo: 1 }, ''], lista.map(function (c) {
+    var acciones = !puede ? '' : h('div', { class: 'en-linea' }, [
+      h('button', { class: 'boton', type: 'button', 'aria-label': 'Cambiar ' + c.tipo + ' ' + c.referencia, onclick: function () {
+        editando.id = c.id; tipo.value = c.tipo; ref.value = c.referencia; vence.value = String(c.vence || '').slice(0, 10); nota.value = c.nota || '';
+        titulo.textContent = 'Cambiar ' + c.tipo + ' · ' + c.referencia; cancelar.hidden = false; ref.focus();
+      } }, 'Cambiar'),
+      h('button', { class: 'boton', type: 'button', 'aria-label': 'Quitar ' + c.tipo + ' ' + c.referencia, onclick: function () {
+        if (!confirm('¿Quitar ' + c.tipo + ' · ' + c.referencia + '?\n\nDeja de avisarse. Queda apuntado en el historial.')) return;
+        rpc('panel_quitar_caducidad', { p_id: c.id }).then(function () { cargar(true); avisoBreve('Quitada'); })
+          .catch(function (e) { alert(mensajeError(e)); });
+      } }, 'Quitar')]);
+    return { celdas: [c.tipo, c.referencia, fecha(c.vence), estadoCaducidad(Number(c.dias)), c.nota || '', acciones] };
+  }));
+  if (!puede) return;
+  v.appendChild(h('div', { class: 'tarjeta' }, [titulo,
+    h('div', { class: 'formulario' }, [h('label', {}, ['Tipo', tipo]), h('label', {}, ['A qué se refiere (matrícula o iniciales)', ref]),
+      h('label', {}, ['Caduca el', vence]), h('label', {}, ['Nota', nota]),
+      h('div', { class: 'en-linea' }, [h('button', { id: 'cad-guardar', class: 'boton principal', type: 'button', onclick: function () {
+        if (!ref.value.trim()) { msg.className = 'mensaje error'; msg.textContent = 'Escribe la matrícula o unas iniciales.'; return; }
+        if (!vence.value) { msg.className = 'mensaje error'; msg.textContent = 'Elige la fecha en que caduca.'; return; }
+        var suEmpresa = selectorEmpresa.value;
+        rpc('panel_guardar_caducidad', { p_id: editando.id, p_empresa: suEmpresa, p_tipo: tipo.value, p_referencia: ref.value, p_vence: vence.value, p_nota: nota.value })
+          .then(function () { S.empresa = suEmpresa; cargar(true); avisoBreve('Caducidad guardada en ' + suEmpresa); })
+          .catch(function (e) { msg.className = 'mensaje error'; msg.textContent = mensajeError(e); });
+      } }, 'Guardar'), cancelar])]), msg]));
 }
 
 // ---------------------------------------------------------------------
@@ -2551,6 +2605,8 @@ var AVISOS_CASILLA = [
   [/fecha futura/, ['fecha'], ['fecha'], 'La fecha es futura'],
   [/fecha corregida por el programa/, ['fecha'], ['fecha'], 'Fecha corregida: compruébala'],
   [/vencimiento anterior/, ['fecha_vencimiento'], [], 'Vence antes de la fecha de la factura'],
+  [/plazo de pago de \d+ dias/, ['fecha_vencimiento'], [], 'Más de 60 días de plazo de pago (máximo legal)'],
+  [/sin linea aparte de revision por gasoleo/, ['total'], [], 'Falta la línea aparte de gasóleo'],
   [/sin nif|nif del cliente\/proveedor no valido/, ['nif'], ['nif'], 'NIF que falta o no es válido'],
   [/sin numero de documento/, ['#numero'], ['#numero'], 'Falta el número'],
   [/mismo numero que/, ['#numero'], ['#numero'], 'Número repetido'],
