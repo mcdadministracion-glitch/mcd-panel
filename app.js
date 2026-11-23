@@ -152,6 +152,109 @@ function rpc(fn, args) {
 function consulta(q) { return q.then(function (r) { if (r.error) throw new Error(r.error.message); return r; }); }
 
 // ---------------------------------------------------------------------
+// ACCESIBILIDAD (23-nov-2026, accesibilidad): piezas comunes para quien usa solo el teclado o un lector de
+// pantalla (el programa que lee la pantalla en voz alta). Ver la auditoría de accesibilidad del 23-nov-2026.
+// ---------------------------------------------------------------------
+// (23-nov-2026, accesibilidad) Avisos que el lector de pantalla lee en voz alta. Las dos "regiones vivas"
+// (#anuncio y #anuncioUrgente, en index.html) existen desde que se abre la página: así se leen siempre (un aviso
+// que se crea ya con el texto dentro a menudo no se lee). Se vacía y se escribe un instante después para que
+// también se lea un aviso igual al anterior.
+function anunciar(t, urgente) {
+  var e = document.getElementById(urgente ? 'anuncioUrgente' : 'anuncio'); if (!e || !t) return;
+  e.textContent = '';
+  setTimeout(function () { e.textContent = String(t); }, 60);
+}
+// (23-nov-2026, accesibilidad) Conservar el foco al repintar. Antes, cada vez que se repintaba la pantalla
+// (un filtro, una pestaña, el refresco de 30 s, guardar una ficha...) el foco volvía al principio de la página y
+// quien usa el teclado tenía que volver a tabular desde arriba. Cada control que se repinta lleva una clave
+// estable (data-foco) y, después de repintar, el foco vuelve al control con la misma clave.
+function claveFoco(el) {
+  var a = el || document.activeElement, e = a && a.closest && a.closest('[data-foco]');
+  return e ? e.getAttribute('data-foco') : null;
+}
+// Si el control ya no está (o está desactivado), se prueba con los de "otras" (por ejemplo, la otra flecha de la paginación)
+var FOCO_ALTERNATIVO = { 'pag-ant': ['pag-sig', 'pag-texto'], 'pag-sig': ['pag-ant', 'pag-texto'] };
+function devolverFoco(clave, cursor) {
+  if (!clave) return false;
+  var claves = [clave].concat(FOCO_ALTERNATIVO[clave] || []);
+  for (var i = 0; i < claves.length; i++) {
+    var e = document.querySelector('[data-foco="' + (window.CSS && CSS.escape ? CSS.escape(claves[i]) : claves[i]) + '"]');
+    if (e && !e.disabled && e.getClientRects().length) {
+      e.focus({ preventScroll: true });
+      if (cursor && i === 0) { try { e.setSelectionRange(cursor[0], cursor[1]); } catch (err) { /* campo sin cursor (fecha, número...) */ } }
+      return true;
+    }
+  }
+  return false;
+}
+// ¿Se ha quedado el foco "perdido" (en el fondo de la página)? Solo entonces se devuelve: así nunca se le quita
+// el foco a quien está escribiendo en otro sitio.
+function focoPerdido() { var a = document.activeElement; return !a || a === document.body || a === document.documentElement || !a.isConnected; }
+// (23-nov-2026, accesibilidad) Un botón que se desactiva mientras trabaja (Descargar Excel...) pierde el foco en algunos
+// navegadores (se va al principio de la página). Al terminar se le devuelve, si nadie lo ha puesto en otro sitio.
+function botonOcupado(boton, si) {
+  if (si) { boton.__teniaFoco = document.activeElement === boton; boton.disabled = true; return; }
+  boton.disabled = false;
+  if (boton.__teniaFoco && boton.isConnected && focoPerdido()) boton.focus({ preventScroll: true });
+  boton.__teniaFoco = false;
+}
+function hayVentanaAbierta() { return document.getElementById('modal').classList.contains('abierto') || !!document.getElementById('hojaMas'); }
+// Al cambiar de sección el foco va al título (h1): el lector de pantalla dice en qué sección se está
+function enfocarTitulo() {
+  var t = document.querySelector('#vista h1'); if (!t) return false;
+  t.setAttribute('tabindex', '-1'); t.focus({ preventScroll: true }); return true;
+}
+// La fila siguiente (o la anterior) de una tabla, para cuando la fila con el foco desaparece (por ejemplo, al marcarla revisada)
+function claveFilaVecina(el) {
+  var tr = el && el.closest && el.closest('tr'); if (!tr) return null;
+  var vecina = tr.nextElementSibling || tr.previousElementSibling, b = vecina && vecina.querySelector('[data-foco^="fila-"]');
+  return b ? b.getAttribute('data-foco') : null;
+}
+// (23-nov-2026, accesibilidad) Con la ficha (o la hoja «Más») abierta, lo de detrás queda "inerte": no se llega a ello
+// con el tabulador, ni con el cursor del lector de pantalla, ni con el ratón. Antes el lector podía salirse de la ficha.
+// exceptoMas: con la hoja «Más» abierta se deja el botón «Más» (sirve para cerrarla).
+function fondoInerte(si, exceptoMas) {
+  var partes = ['.saltar', 'body > header', '#vista', '#pie'].map(function (s) { return document.querySelector(s); });
+  if (exceptoMas) partes = partes.concat([].slice.call(document.querySelectorAll('#menu > :not(.nav-mas)')));
+  else partes.push(document.getElementById('menu'));
+  partes.forEach(function (e) {
+    if (!e) return;
+    e.inert = !!si;
+    if (si) e.setAttribute('aria-hidden', 'true'); else e.removeAttribute('aria-hidden');
+  });
+}
+// (23-nov-2026, accesibilidad) El título de la pestaña del navegador dice en qué sección (o ficha) se está.
+// Nunca lleva el nombre de un documento (puede tener datos personales): como mucho el tipo y el ID.
+var NOMBRES_VISTA = { inicio: 'Inicio', facturas: 'Facturas', albaranes: 'Albaranes', revision: 'Por revisar', combustible: 'Combustible', tickets: 'Tickets',
+  documentos: 'Archivos', negocio: 'Vencimientos y costes', usuarios: 'Usuarios', historial: 'Historial' };
+function tituloPagina(t) { document.title = (t || NOMBRES_VISTA[S.vista] || 'Panel') + ' · MCD'; }
+// (23-nov-2026, accesibilidad) Mensajes debajo de un formulario: un error se anuncia en el momento (role="alert");
+// lo demás, cuando el lector termine lo que está diciendo (role="status").
+function mensajeEn(div, textoMensaje, clase) {
+  div.setAttribute('role', clase === 'error' ? 'alert' : 'status');
+  div.className = 'mensaje' + (clase ? ' ' + clase : ''); div.textContent = textoMensaje || '';
+}
+// (23-nov-2026, accesibilidad) Un campo con un error: se marca como no válido, se une al mensaje que dice por qué
+// (aria-describedby) y recibe el foco. Al escribir en él, se quita la marca (si no estaba ya en rojo por otro motivo).
+function campoConError(campo, idMensaje, sinFoco) {
+  if (!campo) return;
+  campo.setAttribute('aria-invalid', 'true');
+  var d = (campo.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean);
+  if (d.indexOf(idMensaje) < 0) d.push(idMensaje);
+  campo.setAttribute('aria-describedby', d.join(' ')); campo.setAttribute('data-error-de', idMensaje);
+  if (!sinFoco) campo.focus();
+  function quitar() { campoSinError(campo); campo.removeEventListener('input', quitar); campo.removeEventListener('change', quitar); }
+  campo.addEventListener('input', quitar); campo.addEventListener('change', quitar);
+}
+function campoSinError(campo) {
+  var id = campo && campo.getAttribute('data-error-de'); if (!id) return;
+  var d = (campo.getAttribute('aria-describedby') || '').split(/\s+/).filter(function (x) { return x && x !== id; });
+  if (d.length) campo.setAttribute('aria-describedby', d.join(' ')); else campo.removeAttribute('aria-describedby');
+  campo.removeAttribute('data-error-de');
+  if (campo.getAttribute('data-revisar') !== 'true') campo.removeAttribute('aria-invalid');
+}
+
+// ---------------------------------------------------------------------
 // NOMBRE LEGIBLE DE UN DOCUMENTO (18-nov-2026)
 // "VTX-0049" no le dice nada a quien revisa. En pantalla se enseña lo que la persona reconoce
 // ("Almacenes Ejemplo · albarán 12345 · 16/11 · → Zaragoza") y el ID interno al lado, en pequeño.
@@ -195,7 +298,8 @@ function etiquetaDocumento(hoja, f, id, sinTipo) {
 function idConNombre(hoja, f, id) { var n = nombreDocumento(hoja, f); return n ? id + ' (' + n + ')' : id; }
 function tituloFicha(titulo, hoja, f) {
   var n = nombreDocumento(hoja, f, true), id = (f && f.id_doc) || '';
-  return h('span', { class: 'nombre-doc' }, [titulo + (n ? ' · ' + n : ''), id ? h('small', { class: 'id-doc' }, id) : null]);
+  // (23-nov-2026, accesibilidad) data-pestana: lo que sale en la pestaña del navegador (tipo e ID, sin el nombre)
+  return h('span', { class: 'nombre-doc', 'data-pestana': titulo + (id ? ' ' + id : '') }, [titulo + (n ? ' · ' + n : ''), id ? h('small', { class: 'id-doc' }, id) : null]);
 }
 // Una orden de carga se guarda con los albaranes, pero aparte (supabase/ordenes_carga.sql): no cuenta como albarán ni espera factura
 function esOrdenDeCarga(f) { return !!f && f.clase === 'orden_carga'; }
@@ -485,14 +589,14 @@ function guardarLibro(libro, nombre) {
 function botonExcelLista(d) {
   var estado = h('span', { class: 'estado-excel', role: 'status' });
   var boton = h('button', { type: 'button', class: 'boton descarga', onclick: async function () {
-    var f = d.filtros; boton.disabled = true; estado.textContent = 'Preparando…';
+    var f = d.filtros; botonOcupado(boton, true); estado.textContent = 'Preparando…';
     try {
       var excel = await prepararExcel(), filas = await leerTodo(f, function (n, t) { estado.textContent = n + ' de ' + t + '…'; });
       var libro = new excel.Workbook(); libro.creator = 'MCD'; hojaExcel(libro, f.tabla, filas);
       await guardarLibro(libro, ['MCD', TITULO_EXCEL[f.tabla] + (f.sentido ? ' ' + nombreSentido(f.tabla, f.sentido).toLowerCase() : ''), f.empresa || 'todas', f.periodo ? nombrePeriodo(f.periodo) : '', new Date().toISOString().slice(0, 10)].filter(Boolean).join('_'));
       estado.textContent = filas.length + ' filas descargadas';
     } catch (e) { estado.textContent = 'No se ha descargado: ' + mensajeError(e); }
-    finally { boton.disabled = false; }
+    finally { botonOcupado(boton, false); }
   } }, [iconoPanel('excel'), 'Descargar Excel']);
   boton.title = 'Descarga en Excel todo lo que coincide con los filtros (no solo esta página)';
   return h('div', { class: 'descarga-directa' }, [boton, estado]);
@@ -503,12 +607,13 @@ function tarjetaExcelGestoria() {
   var empresa = h('select', { 'aria-label': 'Empresa del Excel' }, [h('option', { value: '' }, 'Todas las empresas')].concat(EMPRESAS.map(function (e) { return h('option', { value: e }, e); })));
   var periodo = h('select', { 'aria-label': 'Periodo del Excel' }, PERIODOS.map(function (p) { return h('option', { value: p[0] }, p[1]); }).concat([h('option', { value: 'elegir' }, 'Elegir un mes…')]));
   periodo.value = 'mes';
-  var mes = h('input', { type: 'month', 'aria-label': 'Mes del Excel', hidden: 'hidden' }); mes.value = mesActual();
+  // (23-nov-2026, accesibilidad) En Firefox y Safari el campo de mes es texto libre: se dice el formato (AAAA-MM)
+  var mes = h('input', { type: 'month', 'aria-label': 'Mes del Excel (AAAA-MM)', placeholder: 'AAAA-MM', pattern: '\\d{4}-\\d{2}', hidden: 'hidden' }); mes.value = mesActual();
   periodo.addEventListener('change', function () { mes.hidden = periodo.value !== 'elegir'; });
   var estado = h('span', { class: 'estado-excel', role: 'status' });
   var boton = h('button', { type: 'button', class: 'boton descarga', onclick: async function () {
     var p = periodo.value === 'elegir' ? mes.value : periodo.value, e = empresa.value;
-    boton.disabled = true; estado.textContent = 'Preparando…';
+    botonOcupado(boton, true); estado.textContent = 'Preparando…';
     try {
       var excel = await prepararExcel(), base = { empresa: e, filtro: 'Activos', buscar: '', periodo: p };
       var facturas = await leerTodo(Object.assign({ tabla: 'facturas' }, base), function (n, t) { estado.textContent = 'Facturas ' + n + ' de ' + t + '…'; });
@@ -519,7 +624,7 @@ function tarjetaExcelGestoria() {
       await guardarLibro(libro, ['MCD', e || 'todas', nombrePeriodo(p), new Date().toISOString().slice(0, 10)].join('_'));
       estado.textContent = 'Descargado: ' + facturas.length + ' facturas y ' + albaranes.filter(function (a) { return a.estado !== 'Anexo'; }).length + ' albaranes';
     } catch (err) { estado.textContent = 'No se ha descargado: ' + mensajeError(err); }
-    finally { boton.disabled = false; }
+    finally { botonOcupado(boton, false); }
   } }, [iconoPanel('excel'), 'Descargar Excel']);
   return h('section', { class: 'bloque tarjeta-excel', 'aria-label': 'Excel para la gestoría' }, [
     h('h2', {}, 'Excel para la gestoría'), h('p', { class: 'sub hueco-abajo' }, 'Resumen por empresa, facturas y albaranes del periodo, en un solo archivo.'),
@@ -560,22 +665,25 @@ function seccionesDelMenu() {
 var EN_LA_BARRA = ['inicio', 'revision'];
 var AYUDA_SECCION = { facturas: 'Emitidas y recibidas', albaranes: 'Y sus packs', combustible: 'Precios y repostajes', tickets: 'Comidas, peajes, gasolina',
   documentos: 'Los archivos guardados', negocio: 'Cobros y pagos', usuarios: 'Quién puede entrar', historial: 'Quién hizo qué' };
-function cerrarHojaMas(devolverFoco) {
+function cerrarHojaMas(conFoco) {
   var hoja = document.getElementById('hojaMas'); if (!hoja) return;
   hoja.remove();
+  if (!document.getElementById('modal').classList.contains('abierto')) fondoInerte(false, true);   // (23-nov-2026, accesibilidad) lo de detrás vuelve a funcionar
   var boton = document.querySelector('#menu .nav-mas');
-  if (boton) { boton.setAttribute('aria-expanded', 'false'); if (devolverFoco) boton.focus(); }
+  if (boton) { boton.setAttribute('aria-expanded', 'false'); boton.removeAttribute('aria-controls'); if (conFoco) boton.focus(); }
 }
 function abrirHojaMas() {
   if (document.getElementById('hojaMas')) { cerrarHojaMas(true); return; }             // pulsar "Más" otra vez la cierra
+  // (23-nov-2026, accesibilidad) La hoja es una ventana (role="dialog"), no un menú: dentro hay botones normales y
+  // la sección actual lleva aria-current. Antes se anunciaba como menú y el lector se perdía con el botón «Cerrar».
   var opciones = seccionesDelMenu().filter(function (v) { return EN_LA_BARRA.indexOf(v[0]) < 0; }).map(function (v) {
-    return h('button', { type: 'button', role: 'menuitem', class: 'hoja-opcion' + (S.vista === v[0] ? ' activo' : ''), 'aria-current': S.vista === v[0] ? 'page' : null,
+    return h('button', { type: 'button', class: 'hoja-opcion' + (S.vista === v[0] ? ' activo' : ''), 'aria-current': S.vista === v[0] ? 'page' : null,
       onclick: function () { cerrarHojaMas(false); irA(v[0]); } },
       [iconoPanel(v[0]), h('span', { class: 'hoja-texto' }, [h('b', {}, v[1]), AYUDA_SECCION[v[0]] ? h('small', {}, AYUDA_SECCION[v[0]]) : null])]);
   });
   var cerrar = h('button', { type: 'button', class: 'hoja-cerrar', 'aria-label': 'Cerrar el menú', onclick: function () { cerrarHojaMas(true); } }, 'Cerrar');
-  var caja = h('div', { class: 'hoja-caja', role: 'menu', 'aria-label': 'Más secciones' }, [
-    h('div', { class: 'hoja-cab' }, [h('b', {}, 'Ir a…'), cerrar]), h('div', { class: 'hoja-opciones' }, opciones)]);
+  var caja = h('div', { class: 'hoja-caja', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'tituloHojaMas' }, [
+    h('div', { class: 'hoja-cab' }, [h('b', { id: 'tituloHojaMas' }, 'Ir a…'), cerrar]), h('div', { class: 'hoja-opciones' }, opciones)]);
   var hoja = h('div', { id: 'hojaMas', class: 'hoja-mas', onclick: function (e) { if (e.target === hoja) cerrarHojaMas(false); } }, caja);
   // Teclado: Escape cierra; el tabulador da la vuelta dentro de la hoja; las flechas pasan de una opción a otra
   hoja.addEventListener('keydown', function (e) {
@@ -586,29 +694,44 @@ function abrirHojaMas() {
     else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); opciones[(opciones.indexOf(document.activeElement) + opciones.length - 1) % opciones.length].focus(); }
   });
   document.body.appendChild(hoja);
-  var boton = document.querySelector('#menu .nav-mas'); if (boton) boton.setAttribute('aria-expanded', 'true');
+  fondoInerte(true, true);                     // (23-nov-2026, accesibilidad) lo de detrás queda inerte, salvo «Más», que la cierra
+  var boton = document.querySelector('#menu .nav-mas'); if (boton) { boton.setAttribute('aria-expanded', 'true'); boton.setAttribute('aria-controls', 'hojaMas'); }
   (hoja.querySelector('.hoja-opcion.activo') || opciones[0] || cerrar).focus();
 }
 function pintarMenu() {
-  var nav = document.getElementById('menu'); nav.textContent = '';
+  var nav = document.getElementById('menu');
+  var clave = claveFoco();                     // (23-nov-2026, accesibilidad) el botón con el foco, para devolvérselo al repintar
+  nav.textContent = '';
   if (!S.rol) { cerrarHojaMas(false); return; }
   var secciones = seccionesDelMenu();
-  if (puedeSubir()) nav.appendChild(h('button', { type: 'button', class: 'nav-subir', title: 'Facturas, albaranes, tickets o tablas de precios',
-    onclick: function () { cerrarHojaMas(false); var e = document.getElementById('subidaGlobal'); if (e) e.click(); } }, [iconoPanel('subir'), h('span', {}, ['Subir', h('span', { class: 'solo-escritorio' }, ' documentos')])]));
+  var subir = !puedeSubir() ? null : h('button', { type: 'button', class: 'nav-subir', title: 'Facturas, albaranes, tickets o tablas de precios', 'data-foco': 'nav-subir',
+    onclick: function () { cerrarHojaMas(false); var e = document.getElementById('subidaGlobal'); if (e) e.click(); } }, [iconoPanel('subir'), h('span', {}, ['Subir', h('span', { class: 'solo-escritorio' }, ' documentos')])]);
   // En el móvil solo caben Inicio, Por revisar, Subir y "Más", que abre la hoja con las demás secciones
   var otra = EN_LA_BARRA.indexOf(S.vista) < 0, actual = secciones.filter(function (v) { return v[0] === S.vista; })[0];
   var abierta = !!document.getElementById('hojaMas');
-  nav.appendChild(h('button', { type: 'button', class: 'nav-mas' + (otra ? ' activo' : ''), 'aria-haspopup': 'menu', 'aria-expanded': String(abierta), 'aria-controls': 'hojaMas',
-    title: 'Ver el resto de secciones', onclick: abrirHojaMas }, [iconoPanel('mas'), h('span', {}, otra && actual ? actual[1] : 'Más')]));
+  // (23-nov-2026, accesibilidad) «Más» abre una ventana (aria-haspopup="dialog") y solo apunta a ella mientras está abierta
+  var mas = h('button', { type: 'button', class: 'nav-mas' + (otra ? ' activo' : ''), 'aria-haspopup': 'dialog', 'aria-expanded': String(abierta), 'aria-controls': abierta ? 'hojaMas' : null,
+    'data-foco': 'nav-mas', title: 'Ver el resto de secciones', onclick: abrirHojaMas }, [iconoPanel('mas'), h('span', {}, otra && actual ? actual[1] : 'Más')]);
+  // (23-nov-2026, accesibilidad) «Subir» y «Más» van en el código justo detrás de «Por revisar»: así el tabulador sigue en el
+  // móvil el mismo orden que se ve en la barra de abajo (Inicio, Por revisar, Subir, Más). En el ordenador, «Subir» se
+  // sigue viendo arriba del todo (CSS: order:-1).
+  var puestos = false;
+  function ponerSubirYMas() { if (puestos) return; puestos = true; if (subir) nav.appendChild(subir); nav.appendChild(mas); }
   secciones.forEach(function (v) {
-    nav.appendChild(h('button', { class: 'nav-' + v[0] + (S.vista === v[0] ? ' activo' : ''), 'aria-current': S.vista === v[0] ? 'page' : null, onclick: function () { irA(v[0]); } },
+    nav.appendChild(h('button', { class: 'nav-' + v[0] + (S.vista === v[0] ? ' activo' : ''), 'aria-current': S.vista === v[0] ? 'page' : null, 'data-foco': 'nav-' + v[0], onclick: function () { irA(v[0]); } },
       [iconoPanel(v[0]), v[1], v[0] === 'revision' && S.pendientes ? h('span', { class: 'num' }, S.pendientes) : null]));
+    if (v[0] === 'revision') ponerSubirYMas();
   });
+  ponerSubirYMas();                            // (por si esta persona no ve «Por revisar»)
+  if (abierta) fondoInerte(true, true);        // los botones nuevos también quedan inertes mientras la hoja está abierta
+  else if (clave && focoPerdido() && !hayVentanaAbierta()) devolverFoco(clave);
 }
 function irA(vista) {
   if (!S.rol || S.denegado || vista === S.vista) return;
   if (['usuarios', 'historial'].indexOf(vista) < 0 && !seccionVisible(vista)) return;      // sección escondida para este usuario
   clearTimeout(temporizadorBusqueda);
+  // (23-nov-2026, accesibilidad) al llegar a la sección nueva, el foco va a su título (el lector dice dónde se está)
+  S.focoPendiente = null; S.enfocarTitulo = true; S.firmaDatos = null;
   S.vista = vista; S.buscar = ''; S.filtro = ['facturas', 'albaranes'].indexOf(vista) >= 0 ? 'Activos' : ''; S.pagina = 1; pintarMenu(); cargar(true);
   window.scrollTo(0, 0);
 }
@@ -637,9 +760,11 @@ function pantallaAcceso(modo, aviso) {
   document.getElementById('menu').textContent = ''; document.getElementById('usuario').textContent = '';
   document.getElementById('estadoServicio').hidden = true; document.getElementById('pie').hidden = true;
   var email = h('input', { type: 'email', autocomplete: 'username', required: 'required', placeholder: 'nombre@empresa.com' });
-  var clave = h('input', { type: 'password', autocomplete: modo === 'nueva' ? 'new-password' : 'current-password', minlength: '8', placeholder: 'Mínimo 8 caracteres' });
+  // (23-nov-2026, accesibilidad) la contraseña también es obligatoria al entrar (antes solo lo decía el error del servidor)
+  var clave = h('input', { type: 'password', autocomplete: modo === 'nueva' ? 'new-password' : 'current-password', minlength: '8', placeholder: 'Mínimo 8 caracteres', required: modo === 'entrar' ? 'required' : null });
   var mensaje = h('div', { class: 'mensaje' + (aviso ? ' ' + aviso.tipo : ''), role: 'alert', 'aria-live': 'assertive' }, aviso ? aviso.texto : '');
   var titulos = { entrar: 'Entrar', olvido: 'Recuperar contraseña', nueva: 'Guardar contraseña' };
+  tituloPagina(titulos[modo]);                 // (23-nov-2026, accesibilidad) «Entrar · MCD» en la pestaña del navegador
   var ayuda = { entrar: 'Facturas, albaranes y tickets del grupo, en un solo sitio. Entra con tu correo; si aún no tienes acceso, pídeselo al administrador.',
     olvido: 'Te enviaremos un correo con un enlace para poner una contraseña nueva.',
     nueva: 'Elige la contraseña con la que entrarás al panel (mínimo 8 caracteres).' };
@@ -701,8 +826,11 @@ function cargar(mostrarCargando, conservarBarra) {
     periodoHis: S.periodoHis, tipoHis: S.tipoHis, usuarioHis: S.usuarioHis, empresaHis: S.empresaHis };
   var vista = document.getElementById('vista');
   if (mostrarCargando) {
+    // (23-nov-2026, accesibilidad) «Cargando…» borra lo de debajo: se apunta antes qué control tenía el foco para
+    // devolvérselo al terminar (pintar). El resultado se anuncia al final; «Cargando…» ya no es una región viva.
+    if (!S.focoPendiente) S.focoPendiente = claveFoco();
     var destino = conservarBarra && document.getElementById('cuerpo') || vista;
-    destino.textContent = ''; destino.appendChild(h('div', { class: 'cargando', role: 'status' }, 'Cargando…'));
+    destino.textContent = ''; destino.appendChild(h('div', { class: 'cargando' }, 'Cargando…'));
   }
   var promesa;
   if (solicitud.vista === 'inicio') promesa = Promise.all([rpc('panel_inicio'), rpc('panel_mis_secciones').catch(function () { return null; })]).then(function (rs) {
@@ -722,19 +850,42 @@ function cargar(mostrarCargando, conservarBarra) {
   promesa.then(function (d) {
     if (solicitud.numero !== secuenciaCarga) return;
     if (!mostrarCargando && ocupadoConExcel()) return;
+    // (23-nov-2026, accesibilidad) El refresco automático ya no repinta si nada ha cambiado: repintar lo borra todo y el
+    // lector de pantalla pierde por dónde iba leyendo. La "firma" lleva los datos, la sección con sus filtros y lo que
+    // depende de la hora (servicio en marcha o parado, el día de hoy), para que un cambio de verdad siempre se vea.
+    var firma = firmaDatos(solicitud, d);
+    if (!mostrarCargando && firma === S.firmaDatos && vista.firstChild) {
+      if (solicitud.vista === 'inicio') refrescarCopias();
+      document.getElementById('actualizado').textContent = solicitud.vista === 'inicio' && d.hora ? 'Datos de Inicio a las ' + hora(d.hora) : 'Consulta recibida a las ' + new Date().toLocaleTimeString('es-ES');
+      return;
+    }
+    S.firmaDatos = firma;
     var tablaAnterior = !mostrarCargando && vista.querySelector('.tabla');
     var desplazamiento = tablaAnterior && [tablaAnterior.scrollLeft, tablaAnterior.scrollTop];
+    var anunciarTitulo = mostrarCargando && !S.enfocarTitulo;   // al cambiar de sección ya lo dice el título al recibir el foco
     S.datos = d;
     if (solicitud.vista === 'inicio') { if (d.diasAvisoAlbaran) DIAS_AVISO_ALBARAN = d.diasAvisoAlbaran; MINIATURAS = !!(d.servicio && d.servicio.miniaturas); pintarCabecera(d); S.pendientes = contarPendientes(d); pintarMenu(); }
     if (solicitud.vista === 'revision') { S.pendientes = contarDocumentosRevision(d); pintarMenu(); }
     pintar();
     var tablaActual = desplazamiento && vista.querySelector('.tabla');
     if (tablaActual) { tablaActual.scrollLeft = desplazamiento[0]; tablaActual.scrollTop = desplazamiento[1]; }
+    // (23-nov-2026, accesibilidad) Tras un filtro, una página o «Actualizar ahora», se dice qué ha salido («Facturas: 50 facturas»)
+    if (mostrarCargando) {
+      var cuenta = document.getElementById('contador') || vista.querySelector('.contador');
+      if (cuenta && cuenta.textContent) anunciar((NOMBRES_VISTA[S.vista] || '') + ': ' + cuenta.textContent);
+      else if (anunciarTitulo) { var t1 = vista.querySelector('h1'); if (t1) anunciar(t1.textContent); }
+    }
     document.getElementById('actualizado').textContent = solicitud.vista === 'inicio' && d.hora ? 'Datos de Inicio a las ' + hora(d.hora) : 'Consulta recibida a las ' + new Date().toLocaleTimeString('es-ES');
   }).catch(function (e) {
     if (solicitud.numero !== secuenciaCarga) return;
-    mostrarError(e);
+    S.firmaDatos = null; mostrarError(e);
   });
+}
+// (23-nov-2026, accesibilidad) Lo que hace falta comparar para saber si la pantalla ha cambiado (ver cargar)
+function firmaDatos(solicitud, d) {
+  var s = d && d.servicio, vivo = !!(s && s.conocido && (Date.now() - new Date(s.latido).getTime()) < 3 * 60 * 1000);
+  var copia = Object.assign({}, solicitud); delete copia.numero;
+  try { return JSON.stringify([copia, fechaLocalIso(new Date()), new Date().getHours() < 10, vivo, MINIATURAS, d]); } catch (e) { return String(Math.random()); }
 }
 function limpiarBusqueda(q) { return q.replace(/[,()"'\\%*]/g, ' ').trim().slice(0, 100); }
 function cargarTabla(s) {
@@ -755,9 +906,11 @@ function contarPendientes(ini) { return ini.empresas.reduce(function (t, e) { re
 function contarDocumentosRevision(lista) { var v = new Set(); lista.forEach(function (x) { v.add(x.empresa + '|' + x.hoja + '|' + x.id); }); return v.size; }
 function mostrarError(e) {
   var msg = mensajeError(e);
+  S.enfocarTitulo = false; S.focoPendiente = null;
+  anunciar(msg.indexOf('ACCESO_DENEGADO') >= 0 ? 'No tienes acceso a este panel' : msg, true);   // (23-nov-2026, accesibilidad) el error se anuncia en el momento
   var vista = document.getElementById('vista'); vista.textContent = '';
   if (msg.indexOf('ACCESO_DENEGADO') >= 0) {
-    S.denegado = true; document.getElementById('menu').textContent = ''; document.getElementById('estadoServicio').hidden = true; document.getElementById('pie').hidden = true;
+    S.denegado = true; tituloPagina('Sin acceso'); document.getElementById('menu').textContent = ''; document.getElementById('estadoServicio').hidden = true; document.getElementById('pie').hidden = true;
     sb.auth.getUser().then(function (r) {
       var correo = r.data && r.data.user ? r.data.user.email : '';
       vista.appendChild(h('div', { class: 'tarjeta aviso-total' }, [h('h3', {}, 'No tienes acceso a este panel'),
@@ -768,12 +921,14 @@ function mostrarError(e) {
     pantallaAcceso('entrar', { tipo: 'error', texto: 'Tu sesión ha caducado. Vuelve a entrar.' });
   } else {
     vista.appendChild(h('div', { class: 'tarjeta aviso-total' }, [h('h3', {}, 'No se han podido cargar los datos'), h('p', {}, msg),
-      h('button', { class: 'boton', onclick: function () { cargar(true); } }, 'Reintentar')]));
+      h('button', { class: 'boton', 'data-foco': 'reintentar', onclick: function () { cargar(true); } }, 'Reintentar')]));
   }
 }
 function pintar() {
-  var busqueda = document.activeElement && document.activeElement.id === 'busquedaTabla' ? document.activeElement : null;
-  var cursor = busqueda ? busqueda.selectionStart : null;
+  // (23-nov-2026, accesibilidad) Antes de borrar: qué control tiene el foco (y dónde está el cursor si es un campo de texto).
+  // Sustituye al apaño que solo lo hacía con la búsqueda.
+  var activo = document.activeElement, clave = claveFoco(), cursor = null;
+  try { if (clave && activo && typeof activo.selectionStart === 'number') cursor = [activo.selectionStart, activo.selectionEnd]; } catch (e) { cursor = null; }
   var vista = document.getElementById('vista'); vista.textContent = ''; formularioTocado = false;
   var titulos = { inicio: 'Hola' + (S.usuario && S.usuario.nombre ? ', ' + S.usuario.nombre.split(' ')[0] : ''), facturas: 'Facturas', albaranes: 'Albaranes',
     revision: 'Por revisar', combustible: 'Combustible', tickets: 'Tickets', documentos: 'Archivos', negocio: 'Vencimientos y costes', usuarios: 'Usuarios del panel', historial: 'Historial de cambios' };
@@ -786,7 +941,18 @@ function pintar() {
     historial: 'Quién ha cambiado qué y cuándo: lo que hacen las personas en el panel y lo que hace el programa solo. Nadie puede borrarlo ni modificarlo; se guarda 2 años (protección de datos).' };
   if (S.vista !== 'inicio') vista.appendChild(h('div', { class: 'cab-vista' }, [h('div', {}, [h('h1', {}, titulos[S.vista]), h('p', { class: 'sub' }, ayudas[S.vista])])]));
   ({ inicio: vInicio, facturas: vFacturas, albaranes: vAlbaranes, revision: vRevision, combustible: vCombustible, tickets: vTickets, documentos: vDocumentos, usuarios: vUsuarios, negocio: vNegocio, historial: vHistorial })[S.vista](vista, S.datos);
-  if (busqueda && document.getElementById('busquedaTabla')) { var n = document.getElementById('busquedaTabla'); n.focus(); n.setSelectionRange(cursor, cursor); }
+  // (23-nov-2026, accesibilidad) Después de pintar: el título de la pestaña y el foco donde estaba. Nunca se mueve el foco si
+  // hay una ficha (o la hoja «Más») abierta ni si alguien lo tiene en otro sitio (por ejemplo, escribiendo en otro campo).
+  if (!hayVentanaAbierta()) {
+    tituloPagina();
+    if (S.enfocarTitulo) enfocarTitulo();
+    else if (focoPerdido()) {
+      var pedida = clave || S.focoPendiente;
+      if (!devolverFoco(pedida, clave ? cursor : null) && !devolverFoco(S.focoAlternativo) && pedida) enfocarTitulo();
+    }
+    S.focoAlternativo = null;
+  }
+  S.focoPendiente = null; S.enfocarTitulo = false;
 }
 
 // ---------------------------------------------------------------------
@@ -809,7 +975,7 @@ function vInicio(v, d) {
       h('p', { class: 'dia' }, hoy),
       h('h1', { id: 'tituloInicio' }, pendientes ? 'Hay ' + cuantos(pendientes, 'documento', 'documentos') + ' por revisar' : 'Todo revisado'),
       h('p', { class: 'lead' }, pendientes ? lead : 'No hay nada pendiente. Lo que llegue por correo o subáis aquí se lee solo.'),
-      pendientes ? h('div', { class: 'acciones' }, [h('button', { type: 'button', class: 'boton principal', onclick: function () { irA('revision'); } }, 'Empezar a revisar')]) : null]),
+      pendientes ? h('div', { class: 'acciones' }, [h('button', { type: 'button', class: 'boton principal', 'data-foco': 'empezar', onclick: function () { irA('revision'); } }, 'Empezar a revisar')]) : null]),
     h('div', { class: 'senal' + (pendientes ? '' : ' al-dia'), 'aria-hidden': 'true' }, [h('b', {}, String(pendientes)), h('span', {}, pendientes ? 'Por revisar' : 'Al día')])]));
 
   // 2) Subir documentos
@@ -818,7 +984,7 @@ function vInicio(v, d) {
   // 3) Las cifras en una línea (Facturas y Albaranes se pueden pulsar)
   function cifra(clave, nombre, valor, ayuda) {
     var hijos = [h('span', { class: 'metrica-texto' }, [h('span', { class: 'metrica-nombre' }, nombre), h('strong', {}, String(valor)), h('span', { class: 'metrica-ayuda' }, ayuda)])];
-    return clave ? h('button', { type: 'button', class: 'metrica', onclick: function () { S.todasEmpresas = true; irA(clave); } }, hijos)
+    return clave ? h('button', { type: 'button', class: 'metrica', 'data-foco': 'metrica-' + clave, onclick: function () { S.todasEmpresas = true; irA(clave); } }, hijos)
       : h('div', { class: 'metrica', style: 'cursor:default' }, hijos);
   }
   v.appendChild(h('div', { class: 'metricas', role: 'group', 'aria-label': 'Resumen' }, [
@@ -835,9 +1001,10 @@ function vInicio(v, d) {
     return h('div', { class: 'empresa-fila' }, [
       h('div', { class: 'empresa-nombre' }, [h('b', {}, e.nombre), e.cif ? h('span', { class: 'sub' }, 'CIF ' + e.cif) : null]),
       h('div', { class: 'empresa-datos' }, [
-        h('button', { type: 'button', class: 'dato', onclick: function () { S.empresa = e.nombre; S.todasEmpresas = false; irA('facturas'); } }, [h('b', {}, String(e.facturas || 0)), ' facturas']),
-        h('button', { type: 'button', class: 'dato', onclick: function () { S.empresa = e.nombre; S.todasEmpresas = false; irA('albaranes'); } }, [h('b', {}, String(e.albaranes || 0)), ' albaranes']),
-        Number(e.documentosConAvisos) ? h('button', { type: 'button', class: 'dato aviso', onclick: function () { irA('revision'); } }, [h('b', {}, String(e.documentosConAvisos)), ' por revisar']) : null])]);
+        // (23-nov-2026, accesibilidad) cada botón dice de qué empresa es («20 facturas de JR»): antes había varios «20 facturas» iguales
+        h('button', { type: 'button', class: 'dato', 'aria-label': (e.facturas || 0) + ' facturas de ' + e.nombre, 'data-foco': 'emp-fac-' + e.nombre, onclick: function () { S.empresa = e.nombre; S.todasEmpresas = false; irA('facturas'); } }, [h('b', {}, String(e.facturas || 0)), ' facturas']),
+        h('button', { type: 'button', class: 'dato', 'aria-label': (e.albaranes || 0) + ' albaranes de ' + e.nombre, 'data-foco': 'emp-alb-' + e.nombre, onclick: function () { S.empresa = e.nombre; S.todasEmpresas = false; irA('albaranes'); } }, [h('b', {}, String(e.albaranes || 0)), ' albaranes']),
+        Number(e.documentosConAvisos) ? h('button', { type: 'button', class: 'dato aviso', 'aria-label': e.documentosConAvisos + ' por revisar de ' + e.nombre, 'data-foco': 'emp-rev-' + e.nombre, onclick: function () { irA('revision'); } }, [h('b', {}, String(e.documentosConAvisos)), ' por revisar']) : null])]);
   }))]));
   izquierda.appendChild(tarjetaExcelGestoria());
 
@@ -845,7 +1012,7 @@ function vInicio(v, d) {
   // Primero el nombre del archivo; en cuanto se sabe qué es, lo que se reconoce ("Almacenes Ejemplo · albarán 12345 · 16/11"). El ID, en pequeño.
   var listaUltimos = h('ul', { class: 'ultimos' }, d.ultimos.map(function (x) {
     var visto = DOCUMENTOS_VISTOS[x.id];
-    return h('li', { 'data-id': x.id }, [h('button', { type: 'button', class: 'ultimo-nombre', title: 'Abrir este documento', onclick: function () { abrirDocumento(x.id); } }, [
+    return h('li', { 'data-id': x.id }, [h('button', { type: 'button', class: 'ultimo-nombre', title: 'Abrir este documento', 'data-foco': 'ultimo-' + x.id, onclick: function () { abrirDocumento(x.id); } }, [
       cajaMiniatura(/^REV-/.test(x.id) ? 'revision' : 'documentos', x.id),
       h('span', { class: 'ultimo-archivo' + (visto ? ' con-nombre' : '') }, visto ? nombreDocumento(visto.hoja, visto.fila) : x.archivo || ''), h('small', { class: 'id-doc' }, x.id)]),
       h('span', { class: 'ultimo-empresa' }, x.empresa), pillEstado(x.estado), h('span', { class: 'ultimo-fecha' }, fecha(x.fecha))]);
@@ -873,15 +1040,29 @@ function vInicio(v, d) {
 function fechaLocalIso(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 function lineaCopias(v) {
   var linea = h('p', { class: 'linea-servicio linea-copias', role: 'status' }, 'Comprobando las copias de seguridad…'); v.appendChild(linea);
+  rellenarCopias(linea);
+}
+// (23-nov-2026, accesibilidad) Inicio ya no se repinta entero si nada ha cambiado (ver cargar): la línea de las copias,
+// que se lee aparte, se vuelve a mirar sola. Solo se toca si dice otra cosa (así el lector no la repite cada 30 s).
+function refrescarCopias() {
+  var l = document.querySelector('#vista .linea-copias'); if (l && S.rol === 'Administrador') rellenarCopias(l);
+}
+function rellenarCopias(destino) {
+  var linea = h('p', { class: destino.className });
+  function poner() {
+    if (destino.className === linea.className && destino.textContent === linea.textContent) return;
+    destino.className = linea.className; destino.textContent = '';
+    while (linea.firstChild) destino.appendChild(linea.firstChild);
+  }
   consulta(sb.from('estado_servicio').select('latido,datos').eq('clave', 'copias').maybeSingle()).then(function (r) {
-    var e = r.data && r.data.datos || null; linea.textContent = '';
+    var e = r.data && r.data.datos || null; linea.className = 'linea-servicio linea-copias'; linea.textContent = '';
     // Vale la de hoy; hasta las 10:00 también la de ayer (el ordenador puede encenderse tarde)
     var hoy = fechaLocalIso(new Date()), ayer = fechaLocalIso(new Date(Date.now() - 864e5)), temprano = new Date().getHours() < 10;
     function reciente(f) { return !!f && (f >= hoy || (temprano && f >= ayer)); }
     if (!e) {
       linea.appendChild(h('span', { class: 'punto' }));
       linea.appendChild(document.createTextNode('Copias de seguridad: aún sin datos (se hacen cada día a partir de las 2:00).'));
-      return;
+      poner(); return;
     }
     var okL = reciente(e.ultima_local), okE = reciente(e.ultima_externa), estado = okL && okE ? 'ok' : okL ? 'aviso' : 'error';
     linea.className = 'linea-servicio linea-copias ' + estado;
@@ -889,7 +1070,8 @@ function lineaCopias(v) {
     linea.appendChild(document.createTextNode('Copia de seguridad · en este ordenador: ' + (e.ultima_local ? fecha(e.ultima_local) : 'ninguna') + (okL ? ' ✔' : ' ✖') +
       ' · en ' + (e.externa || 'Google Drive') + ': ' + (e.ultima_externa ? fecha(e.ultima_externa) : 'ninguna') + (okE ? ' ✔' : ' ✖')));
     if (e.error && !(okL && okE)) linea.appendChild(h('span', { class: 'detalle-copias' }, e.error));
-  }).catch(function () { linea.textContent = 'No se ha podido comprobar el estado de las copias de seguridad.'; });
+    poner();
+  }).catch(function () { linea.className = 'linea-servicio linea-copias'; linea.textContent = 'No se ha podido comprobar el estado de las copias de seguridad.'; poner(); });
 }
 
 // Documentos subidos en esta sesión y lo que ha pasado con cada uno (sobrevive al refresco automático de Inicio)
@@ -929,6 +1111,16 @@ async function buscarRegistro(huella) {
   return null;
 }
 function pintarSubidas() {
+  // (23-nov-2026, accesibilidad) Antes la lista entera era una región viva y se repintaba cada 5 s («Leyendo… (25 s)»): el lector
+  // la leía entera una y otra vez. Ahora se anuncia cada documento solo cuando cambia su estado (subido, registrado, repetido, fallo).
+  SUBIDAS.forEach(function (s) {
+    var clave = (s.clase || '') + '|' + (/^Leyendo el documento|^Subido\. Esperando|^Comprobando|^Subiendo/.test(s.texto) ? 'en marcha' : s.texto);
+    if (s.anunciado === clave) return;
+    var antes = s.anunciado; s.anunciado = clave;
+    if (/^Comprobando|^Subiendo/.test(s.texto)) return;                               // pasos de un instante
+    if (antes && antes.split('|')[1] === 'en marcha' && clave.split('|')[1] === 'en marcha') return;
+    anunciar(s.nombre + ': ' + s.texto, s.clase === 'fallo');
+  });
   var ul = document.getElementById('listaSubidas'); if (!ul) return;
   ul.textContent = ''; ul.hidden = !SUBIDAS.length;
   SUBIDAS.slice(-8).reverse().forEach(function (s) {
@@ -1038,7 +1230,7 @@ function tarjetaSubir() {
   var archivo = h('input', { type: 'file', multiple: 'multiple', class: 'oculto', id: 'archivoSubir', accept: TIPOS_SUBIDA });
   var camara = h('input', { type: 'file', accept: 'image/*', capture: 'environment', class: 'oculto', id: 'camaraSubir' });
   var estado = h('span', { class: 'mensaje-ficha', role: 'status' });
-  var lista = h('ul', { class: 'lista-subidas', id: 'listaSubidas', 'aria-live': 'polite', hidden: 'hidden' });
+  var lista = h('ul', { class: 'lista-subidas', id: 'listaSubidas', hidden: 'hidden' });      // (23-nov-2026, accesibilidad) sin aria-live: ver pintarSubidas
   var botones = h('div', { class: 'tickets-subir' }, [
     h('label', { class: 'boton-grande principal', for: 'camaraSubir' }, [iconoPanel('camara'), h('b', {}, 'Hacer foto')]),
     h('label', { class: 'boton-grande', for: 'archivoSubir' }, [iconoPanel('subir'), h('b', {}, 'Elegir archivos')])]);
@@ -1060,29 +1252,30 @@ function tarjetaSubir() {
 // FACTURAS y ALBARANES: una sola barra con todo a la vista
 // ---------------------------------------------------------------------
 function barraFiltros(v, d, opcionesEstado) {
+  // (23-nov-2026, accesibilidad) data-foco: cada control de la barra tiene una clave para devolverle el foco al repintar (ver pintar)
   var empresas = h('div', { class: 'segmentos', role: 'group', 'aria-label': 'Empresa' }, [null].concat(EMPRESAS).map(function (e) {
     var activo = e === null ? S.todasEmpresas : !S.todasEmpresas && S.empresa === e;
-    return h('button', { type: 'button', class: activo ? 'activo' : '', 'aria-pressed': activo ? 'true' : 'false', onclick: function () {
+    return h('button', { type: 'button', class: activo ? 'activo' : '', 'aria-pressed': activo ? 'true' : 'false', 'data-foco': 'seg-empresa-' + (e || 'todas'), onclick: function () {
       if (activo) return;
       clearTimeout(temporizadorBusqueda); S.todasEmpresas = e === null; if (e !== null) S.empresa = e; S.pagina = 1; cargar(true);
     } }, e || 'Todas');
   }));
-  var buscar = h('input', { id: 'busquedaTabla', type: 'search', maxlength: '100', 'aria-label': 'Buscar', placeholder: 'Buscar número, nombre, NIF, matrícula…' });
+  var buscar = h('input', { id: 'busquedaTabla', type: 'search', maxlength: '100', 'aria-label': 'Buscar', 'data-foco': 'buscar', placeholder: 'Buscar número, nombre, NIF, matrícula…' });
   buscar.value = S.buscar;
   buscar.addEventListener('input', function () { S.buscar = buscar.value; S.pagina = 1; ++secuenciaCarga; clearTimeout(temporizadorBusqueda); temporizadorBusqueda = setTimeout(function () { cargar(true, true); }, 350); });
-  var estado = h('select', { 'aria-label': 'Estado' }, opcionesEstado.map(function (o) { return h('option', { value: o[0] }, o[1]); }));
+  var estado = h('select', { 'aria-label': 'Estado', 'data-foco': 'sel-estado' }, opcionesEstado.map(function (o) { return h('option', { value: o[0] }, o[1]); }));
   estado.value = S.filtro;
   estado.addEventListener('change', function () { clearTimeout(temporizadorBusqueda); S.filtro = estado.value; S.pagina = 1; cargar(true, true); });
-  var periodo = h('select', { 'aria-label': 'Fecha' }, PERIODOS.map(function (o) { return h('option', { value: o[0] }, o[1]); }));
+  var periodo = h('select', { 'aria-label': 'Fecha', 'data-foco': 'sel-fecha' }, PERIODOS.map(function (o) { return h('option', { value: o[0] }, o[1]); }));
   periodo.value = S.periodo;
   periodo.addEventListener('change', function () { clearTimeout(temporizadorBusqueda); S.periodo = periodo.value; S.pagina = 1; cargar(true, true); });
-  var limpiar = h('button', { type: 'button', class: 'boton enlace', hidden: !(S.buscar || S.periodo || S.filtro !== 'Activos') ? 'hidden' : null, onclick: function () {
-    S.buscar = ''; S.periodo = ''; S.filtro = 'Activos'; S.pagina = 1; cargar(true);
+  var limpiar = h('button', { type: 'button', class: 'boton enlace suelto', hidden: !(S.buscar || S.periodo || S.filtro !== 'Activos') ? 'hidden' : null, onclick: function () {
+    S.buscar = ''; S.periodo = ''; S.filtro = 'Activos'; S.pagina = 1; S.focoPendiente = 'buscar'; cargar(true);    // (23-nov-2026, accesibilidad) el botón desaparece: el foco va a la búsqueda
   } }, 'Quitar filtros');
   var tablaVista = S.vista, cuentas = d.cuentas || {};
   var sentidos = h('div', { class: 'segmentos sentidos', role: 'group', 'aria-label': 'Emitidas o recibidas' }, SENTIDOS.map(function (o) {
     var activo = (S.sentido || '') === o[0];
-    return h('button', { type: 'button', class: activo ? 'activo' : '', 'aria-pressed': activo ? 'true' : 'false', onclick: function () {
+    return h('button', { type: 'button', class: activo ? 'activo' : '', 'aria-pressed': activo ? 'true' : 'false', 'data-foco': 'seg-sentido-' + (o[0] || 'todas'), onclick: function () {
       if (activo) return;
       clearTimeout(temporizadorBusqueda); S.sentido = o[0]; S.pagina = 1; cargar(true, true);
     } }, nombreSentido(tablaVista, o[0]) + (cuentas[o[0]] === undefined ? '' : ' (' + cuentas[o[0]] + ')'));
@@ -1099,10 +1292,11 @@ function barraFiltros(v, d, opcionesEstado) {
 }
 function paginacion(c, d) {
   if (d.total <= d.tamano) return;
-  var anterior = h('button', { class: 'boton', onclick: function () { S.pagina = d.pagina - 1; cargar(true, true); window.scrollTo(0, 0); } }, '← Anterior');
-  var siguiente = h('button', { class: 'boton', onclick: function () { S.pagina = d.pagina + 1; cargar(true, true); window.scrollTo(0, 0); } }, 'Siguiente →');
+  // (23-nov-2026, accesibilidad) data-foco: tras cambiar de página el foco sigue en la flecha (o en la otra, si esta se desactiva)
+  var anterior = h('button', { class: 'boton', 'data-foco': 'pag-ant', onclick: function () { S.pagina = d.pagina - 1; cargar(true, true); window.scrollTo(0, 0); } }, '← Anterior');
+  var siguiente = h('button', { class: 'boton', 'data-foco': 'pag-sig', onclick: function () { S.pagina = d.pagina + 1; cargar(true, true); window.scrollTo(0, 0); } }, 'Siguiente →');
   anterior.disabled = d.pagina <= 1; siguiente.disabled = d.pagina * d.tamano >= d.total;
-  c.appendChild(h('div', { class: 'paginacion' }, [anterior, h('span', {}, 'Página ' + d.pagina + ' de ' + Math.ceil(d.total / d.tamano)), siguiente]));
+  c.appendChild(h('div', { class: 'paginacion', role: 'group', 'aria-label': 'Páginas' }, [anterior, h('span', { 'data-foco': 'pag-texto', tabindex: '-1' }, 'Página ' + d.pagina + ' de ' + Math.ceil(d.total / d.tamano)), siguiente]));
 }
 function contadorTabla(d, tipo) { return !d.total ? '0 ' + tipo : d.total <= d.tamano ? d.total + ' ' + tipo : ((d.pagina - 1) * d.tamano + 1) + '–' + Math.min(d.pagina * d.tamano, d.total) + ' de ' + d.total + ' ' + tipo; }
 function vFacturas(v, d) {
@@ -1111,7 +1305,7 @@ function vFacturas(v, d) {
   var c = document.getElementById('cuerpo'), conTipo = !S.sentido;
   var quien = S.sentido === 'emitidos' ? 'Cliente' : S.sentido === 'recibidos' ? 'Proveedor' : 'Cliente / proveedor';
   tabla(c, ['Nº factura', 'Fecha', { t: quien, largo: 1 }, 'Empresa'].concat(conTipo ? ['Tipo'] : [], [{ t: 'Total', num: 1 }, 'Vence', 'Estado']), d.filas.map(function (f) {
-    return { mini: { hoja: 'facturas', id: f.id_doc }, abrir: function () { ficha('Factura', f, { empresa: f.empresa, hoja: 'facturas' }); },
+    return { clave: f.empresa + '|' + f.id_doc, mini: { hoja: 'facturas', id: f.id_doc }, abrir: function () { ficha('Factura', f, { empresa: f.empresa, hoja: 'facturas' }); },
       celdas: [numeroOSinNumero(f.num_factura, f.id_doc), fecha(f.fecha), f.nombre, f.empresa].concat(conTipo ? [f.tipo_factura || 'Sin indicar'] : [],
         [{ t: euros(f.total), num: 1 }, vence(f.fecha_vencimiento), pillEstado(f.estado)]) };
   }), 'Factura');
@@ -1153,7 +1347,7 @@ function vAlbaranes(v, d) {
     }));
   }
   tabla(c, ['Nº albarán', 'Fecha', { t: quien, largo: 1 }, 'Empresa'].concat(conTipo ? ['Tipo'] : [], ['Ruta', { t: 'Importe', num: 1 }, 'Factura']), d.filas.map(function (f) {
-    return { mini: { hoja: 'albaranes', id: f.id_doc }, abrir: function () { ficha('Albarán', f, { empresa: f.empresa, hoja: 'albaranes' }); },
+    return { clave: f.empresa + '|' + f.id_doc, mini: { hoja: 'albaranes', id: f.id_doc }, abrir: function () { ficha('Albarán', f, { empresa: f.empresa, hoja: 'albaranes' }); },
       celdas: [numeroConPack(f, (d.anexos || {})[f.empresa + '|' + f.id_doc]), fecha(f.fecha), f.nombre, f.empresa].concat(conTipo ? [f.tipo_albaran || 'Sin indicar'] : [],
         [[f.origen, f.destino].filter(Boolean).join(' → '), { t: euros(f.importe), num: 1 },
         f.factura_vinculada ? pillFactura(f) : f.estado_factura === 'PENDIENTE DE FACTURA' ? pillEsperaFactura(f) : pillVaCon(f)]) };
@@ -1200,16 +1394,16 @@ function litros(v) { return v === null || v === undefined ? '—' : Number(v).to
 function vCombustible(v, d) {
   var empresas = h('div', { class: 'segmentos', role: 'group', 'aria-label': 'Empresa' }, [null].concat(EMPRESAS).map(function (e) {
     var activo = e === null ? S.todasEmpresas : !S.todasEmpresas && S.empresa === e;
-    return h('button', { type: 'button', class: activo ? 'activo' : '', 'aria-pressed': activo ? 'true' : 'false', onclick: function () {
+    return h('button', { type: 'button', class: activo ? 'activo' : '', 'aria-pressed': activo ? 'true' : 'false', 'data-foco': 'seg-empresa-' + (e || 'todas'), onclick: function () {
       if (activo) return; S.todasEmpresas = e === null; if (e !== null) S.empresa = e; cargar(true);
     } }, e || 'Todas');
   }));
-  var periodo = h('select', { 'aria-label': 'Fecha' }, PERIODOS.map(function (o) { return h('option', { value: o[0] }, o[1]); }));
+  var periodo = h('select', { 'aria-label': 'Fecha', 'data-foco': 'sel-fecha' }, PERIODOS.map(function (o) { return h('option', { value: o[0] }, o[1]); }));
   periodo.value = S.periodoComb;
   periodo.addEventListener('change', function () { S.periodoComb = periodo.value; cargar(true); });
   var estadoX = h('span', { class: 'estado-excel', role: 'status' });
   var excel = h('button', { type: 'button', class: 'boton descarga', onclick: async function () {
-    excel.disabled = true; estadoX.textContent = 'Preparando…';
+    botonOcupado(excel, true); estadoX.textContent = 'Preparando…';
     try {
       var X = await prepararExcel(), libro = new X.Workbook(); libro.creator = 'MCD';
       var hr = libro.addWorksheet('Repostajes', { views: [{ state: 'frozen', ySplit: 1 }] });
@@ -1248,7 +1442,7 @@ function vCombustible(v, d) {
       await guardarLibro(libro, ['MCD', 'Combustible', S.todasEmpresas ? 'todas' : S.empresa, nombrePeriodo(S.periodoComb), new Date().toISOString().slice(0, 10)].join('_'));
       estadoX.textContent = 'Descargado';
     } catch (e) { estadoX.textContent = 'No se ha descargado: ' + mensajeError(e); }
-    finally { excel.disabled = false; }
+    finally { botonOcupado(excel, false); }
   } }, [iconoPanel('excel'), 'Descargar Excel']);
   v.appendChild(h('div', { class: 'herramientas' }, [h('div', { class: 'fila-herramientas' }, [empresas,
     h('label', { class: 'campo-corto' }, ['Fecha', periodo]), h('div', { class: 'descarga-directa' }, [excel, estadoX])])]));
@@ -1271,30 +1465,33 @@ function vCombustible(v, d) {
 
   v.appendChild(h('p', { class: 'sub' }, 'Solo se comparan con la tabla de precios los repostajes de ' + NOMBRE_GASOLINERA_TABLA +
     '. Los de otras gasolineras van aparte y no se comparan.'));
-  v.appendChild(h('h3', {}, 'Repostajes más caros que la tabla (' + NOMBRE_GASOLINERA_TABLA + ')'));
+  // (23-nov-2026, accesibilidad) los apartados de la sección son h2 (antes se saltaba de h1 a h3); se ven igual (clase subtitulo)
+  v.appendChild(h('h2', { class: 'subtitulo' }, 'Repostajes más caros que la tabla (' + NOMBRE_GASOLINERA_TABLA + ')'));
   if (!caros.length) v.appendChild(h('div', { class: 'tarjeta vacio' }, reps.length ? 'Ningún repostaje supera el precio del día.' : 'Todavía no hay repostajes de ' + NOMBRE_GASOLINERA_TABLA + ' en este periodo.'));
   else tabla(v, ['Fecha', { t: 'Estación', largo: 1 }, 'Empresa', 'Matrícula', 'Combustible', { t: 'Litros', num: 1 }, { t: 'Facturado', num: 1 }, { t: 'Tabla', num: 1 },
     { t: 'Diferencia', num: 1 }, { t: 'De más', num: 1 }], caros.map(function (x) {
-      return { abrir: function () { abrirFichaPorId('Factura', x.empresa, 'facturas', x.id_doc); },
+      return { clave: 'caro-' + x.id, abrir: function () { abrirFichaPorId('Factura', x.empresa, 'facturas', x.id_doc); },
         celdas: [fecha(x.fecha), x.estacion_tabla || x.estacion || x.gasolinera || '—', x.empresa, x.matricula || '—', x.combustible, { t: litros(x.litros), num: 1 }, { t: eurosLitro(x.precio_litro), num: 1 },
           { t: eurosLitro(x.precio_tabla), num: 1 }, { t: '+' + eurosLitro(x.diferencia_litro), num: 1 }, { t: euros(x.sobrecoste), num: 1 }] };
     }), 'Factura');
 
-  v.appendChild(h('h3', {}, 'Repostajes en ' + NOMBRE_GASOLINERA_TABLA));
+  v.appendChild(h('h2', { class: 'subtitulo' }, 'Repostajes en ' + NOMBRE_GASOLINERA_TABLA));
   if (!reps.length) v.appendChild(h('div', { class: 'tarjeta vacio' }, 'No hay repostajes de ' + NOMBRE_GASOLINERA_TABLA + ' en este periodo.'));
   else tabla(v, ['Fecha', { t: 'Estación', largo: 1 }, 'Empresa', 'Combustible', { t: 'Litros', num: 1 }, { t: 'Facturado', num: 1 }, { t: 'Tabla', num: 1 }, 'Resultado'],
     reps.slice(0, 300).map(function (x) {
-      return { abrir: function () { abrirFichaPorId('Factura', x.empresa, 'facturas', x.id_doc); },
+      // (23-nov-2026, accesibilidad) la nota (por qué no se compara) se ve escrita debajo: antes solo salía al pasar el ratón
+      var pildora = h('span', { class: 'pill ' + ({ 'Correcto': 'ok', 'Más barato': 'ok', 'Más caro': 'error', 'Sin precio': 'aviso' }[x.estado] || '') },
+        x.estado === 'Sin precio' ? 'Sin comparar' : x.estado);
+      return { clave: 'rep-' + x.id, abrir: function () { abrirFichaPorId('Factura', x.empresa, 'facturas', x.id_doc); },
         celdas: [fecha(x.fecha), x.estacion_tabla || x.estacion || x.gasolinera || '—', x.empresa, x.combustible || '—', { t: litros(x.litros), num: 1 }, { t: eurosLitro(x.precio_litro), num: 1 },
-          { t: eurosLitro(x.precio_tabla), num: 1 }, h('span', { class: 'pill ' + ({ 'Correcto': 'ok', 'Más barato': 'ok', 'Más caro': 'error', 'Sin precio': 'aviso' }[x.estado] || ''), title: x.nota || '' },
-            x.estado === 'Sin precio' ? 'Sin comparar' : x.estado)] };
+          { t: eurosLitro(x.precio_tabla), num: 1 }, x.nota ? h('span', { class: 'con-nota' }, [pildora, h('small', { class: 'nota-celda' }, x.nota)]) : pildora] };
     }), 'Factura');
 
-  v.appendChild(h('h3', {}, 'Repostajes en otras gasolineras'));
+  v.appendChild(h('h2', { class: 'subtitulo' }, 'Repostajes en otras gasolineras'));
   if (!otrasReps.length) v.appendChild(h('div', { class: 'tarjeta vacio' }, 'No hay repostajes en otras gasolineras en este periodo.'));
   else tabla(v, ['Fecha', { t: 'Gasolinera', largo: 1 }, 'Empresa', 'Matrícula', 'Combustible', { t: 'Litros', num: 1 }, { t: 'Precio', num: 1 }, { t: 'Importe', num: 1 }],
     otrasReps.slice(0, 300).map(function (x) {
-      return { abrir: function () { abrirFichaPorId('Factura', x.empresa, 'facturas', x.id_doc); },
+      return { clave: 'otra-' + x.id, abrir: function () { abrirFichaPorId('Factura', x.empresa, 'facturas', x.id_doc); },
         celdas: [fecha(x.fecha), x.estacion || x.gasolinera || '—', x.empresa, x.matricula || '—', x.combustible || '—', { t: litros(x.litros), num: 1 },
           { t: eurosLitro(x.precio_litro), num: 1 }, { t: x.importe === null || x.importe === undefined ? '—' : euros(x.importe), num: 1 }] };
     }), 'Factura');
@@ -1304,13 +1501,13 @@ function vCombustible(v, d) {
   var tks = todosTks.filter(function (t) { return esNieves(t.comercio, t.estacion); });
   var tksOtras = todosTks.filter(function (t) { return !esNieves(t.comercio, t.estacion); });
   var comun = tks.filter(function (t) { return !t.empresa; }), conFactura = tks.filter(function (t) { return t.empresa; });
-  v.appendChild(h('h3', {}, 'Tickets de gasolina (' + NOMBRE_GASOLINERA_TABLA + ')'));
+  v.appendChild(h('h2', { class: 'subtitulo' }, 'Tickets de gasolina (' + NOMBRE_GASOLINERA_TABLA + ')'));
   v.appendChild(h('p', { class: 'sub' }, 'Hasta que llega la factura de la gasolinera, el ticket está en el fondo común (sin empresa). Cuando llega y coincide ' +
     '(mismo día y mismos litros), pasa solo a la empresa de la factura, y su estación sirve para comparar el precio.'));
   if (!tks.length) v.appendChild(h('div', { class: 'tarjeta vacio' }, 'No hay tickets de ' + NOMBRE_GASOLINERA_TABLA + ' en este periodo. Se suben con el botón "Subir documentos" o "Hacer foto".'));
   else tabla(v, ['Fecha', 'Ticket', { t: 'Estación', largo: 1 }, 'Matrícula', { t: 'Litros', num: 1 }, { t: 'Total', num: 1 }, 'Empresa', 'Estado'],
     comun.concat(conFactura).map(function (t) {
-      return { abrir: function () { fichaTicket(t); },
+      return { clave: 'tck-' + t.id_doc, abrir: function () { fichaTicket(t); },
         celdas: [t.fecha ? fecha(t.fecha) : '—', t.id_doc, t.estacion || t.comercio || '—', t.matricula || '—', { t: litros(t.litros), num: 1 },
           { t: t.total === null || t.total === undefined ? '—' : euros(t.total), num: 1 },
           t.empresa && t.factura_id_doc ? pildoraEnlace('ok', t.empresa + ' · ' + t.factura_id_doc, 'Abrir la factura con la que está enlazado', function () { abrirDocumento(t.factura_id_doc, 'facturas', t.empresa); })
@@ -1320,11 +1517,11 @@ function vCombustible(v, d) {
     }), 'Ticket');
   if (comun.length) v.appendChild(h('p', { class: 'sub' }, 'Fondo común: ' + comun.length + ' ticket(s) · ' +
     euros(comun.reduce(function (s, t) { return s + (Number(t.total) || 0); }, 0)) + ' esperando su factura.'));
-  v.appendChild(h('h3', {}, 'Tickets de otras gasolineras'));
+  v.appendChild(h('h2', { class: 'subtitulo' }, 'Tickets de otras gasolineras'));
   if (!tksOtras.length) v.appendChild(h('div', { class: 'tarjeta vacio' }, 'No hay tickets de otras gasolineras en este periodo.'));
   else tabla(v, ['Fecha', 'Ticket', { t: 'Gasolinera', largo: 1 }, 'Matrícula', { t: 'Litros', num: 1 }, { t: 'Total', num: 1 }, 'Estado'],
     tksOtras.map(function (t) {
-      return { abrir: function () { fichaTicket(t); },
+      return { clave: 'tck-' + t.id_doc, abrir: function () { fichaTicket(t); },
         celdas: [t.fecha ? fecha(t.fecha) : '—', t.id_doc, t.comercio || t.estacion || '—', t.matricula || '—', { t: litros(t.litros), num: 1 },
           { t: t.total === null || t.total === undefined ? '—' : euros(t.total), num: 1 }, pillEstado(t.estado)] };
     }), 'Ticket');
@@ -1348,12 +1545,14 @@ function vCombustible(v, d) {
     if (claves.indexOf(S.tablaComb) < 0) S.tablaComb = claves[0];
     var mostrar = claves.slice(0, 40);
     if (mostrar.indexOf(S.tablaComb) < 0) mostrar.push(S.tablaComb);
-    v.appendChild(h('h3', {}, 'Tablas de precios recibidas'));
+    v.appendChild(h('h2', { class: 'subtitulo' }, 'Tablas de precios recibidas'));
     v.appendChild(h('p', { class: 'sub' }, 'Cada tabla que llega se guarda con su fecha y no sustituye a las anteriores. Cada repostaje se compara con la tabla que ' +
       'estaba en vigor el día que se repostó, aunque la factura llegue mucho después.'));
-    v.appendChild(h('div', { class: 'segmentos pestanas-precios', role: 'tablist', 'aria-label': 'Tablas de precios' }, mostrar.map(function (k) {
+    // (23-nov-2026, accesibilidad) antes se anunciaban como pestañas sin comportarse como tales: ahora son botones que se
+    // pulsan (aria-pressed), igual que los de Empresa, y el foco se queda en el botón pulsado (data-foco)
+    v.appendChild(h('div', { class: 'segmentos pestanas-precios', role: 'group', 'aria-label': 'Tablas de precios' }, mostrar.map(function (k) {
       var f = k.split('|')[0], e = k.split('|')[1], activo = k === S.tablaComb;
-      return h('button', { type: 'button', role: 'tab', 'aria-selected': activo ? 'true' : 'false', class: activo ? 'activo' : '',
+      return h('button', { type: 'button', 'aria-pressed': activo ? 'true' : 'false', class: activo ? 'activo' : '', 'data-foco': 'tabla-' + k,
         onclick: function () { S.tablaComb = k; pintar(); } }, fecha(f) + (e ? ' · ' + e : '') + (ultimaDe[e] === f ? ' (en vigor)' : ''));
     })));
     var k = S.tablaComb, filas = tablas[k], fTabla = k.split('|')[0], eTabla = k.split('|')[1], sig = siguiente(k);
@@ -1375,11 +1574,11 @@ function vCombustible(v, d) {
   var dias = Array.from(new Set(generales.map(function (p) { return String(p.fecha).slice(0, 10); }))).sort().reverse().slice(0, 62);
   var mapa = {}; generales.forEach(function (p) { mapa[String(p.fecha).slice(0, 10) + '|' + p.combustible] = p; });
   if (!dias.length && !porEstacion.length) {
-    v.appendChild(h('h3', {}, 'Precios del proveedor'));
+    v.appendChild(h('h2', { class: 'subtitulo' }, 'Precios del proveedor'));
     v.appendChild(h('div', { class: 'tarjeta vacio' }, 'Aún no ha llegado ninguna tabla de precios para estas fechas. Cuando llegue por correo aparecerá aquí.'));
   }
   if (dias.length) {
-    v.appendChild(h('h3', {}, 'Precios por día (tabla del proveedor)'));
+    v.appendChild(h('h2', { class: 'subtitulo' }, 'Precios por día (tabla del proveedor)'));
     tabla(v, ['Día'].concat(tipos.map(function (t) { return { t: t, num: 1 }; })), dias.map(function (dia) {
       return { celdas: [fecha(dia)].concat(tipos.map(function (t) { var p = mapa[dia + '|' + t]; return { t: p ? eurosLitro(p.precio_litro) : '—', num: 1 }; })) };
     }));
@@ -1426,23 +1625,25 @@ function vTickets(v, d) {
     var deOtras = lista.filter(function (t) { return !esNieves(t.comercio, t.estacion); });
     selectorGas = h('div', { class: 'segmentos', role: 'group', 'aria-label': 'Gasolinera' }, [['nieves', NOMBRE_GASOLINERA_TABLA, deNieves], ['otras', 'Otras gasolineras', deOtras]].map(function (o) {
       var activo = S.gasTck === o[0];
-      return h('button', { type: 'button', class: activo ? 'activo' : '', 'aria-pressed': activo ? 'true' : 'false', onclick: function () { S.gasTck = o[0]; pintar(); } },
+      return h('button', { type: 'button', class: activo ? 'activo' : '', 'aria-pressed': activo ? 'true' : 'false', 'data-foco': 'seg-gasolinera-' + o[0], onclick: function () { S.gasTck = o[0]; pintar(); } },
         o[1] + ' (' + o[2].length + ')');
     }));
     lista = S.gasTck === 'otras' ? deOtras : deNieves;
   }
-  var pestanas = h('div', { class: 'pestanas-tickets', role: 'tablist', 'aria-label': 'Tipo de ticket' }, GRUPOS_TICKET.map(function (g) {
+  // (23-nov-2026, accesibilidad) antes se anunciaban como pestañas («pestaña 1 de 4») sin comportarse como tales: ahora son
+  // botones que se pulsan (aria-pressed), como los de Empresa, y el foco se queda en el pulsado al repintar (data-foco)
+  var pestanas = h('div', { class: 'pestanas-tickets', role: 'group', 'aria-label': 'Tipo de ticket' }, GRUPOS_TICKET.map(function (g) {
     var activo = g[0] === S.catTck;
-    return h('button', { type: 'button', role: 'tab', 'aria-selected': activo ? 'true' : 'false', class: 'pestana-ticket' + (activo ? ' activo' : ''),
+    return h('button', { type: 'button', 'aria-pressed': activo ? 'true' : 'false', class: 'pestana-ticket' + (activo ? ' activo' : ''), 'data-foco': 'tab-' + g[0],
       onclick: function () { S.catTck = g[0]; pintar(); } },
       [h('span', { class: 'pestana-nombre' }, g[1]), h('span', { class: 'pestana-dato' }, porGrupo[g[0]].length + ' · ' + euros(sumaTotal(porGrupo[g[0]])))]);
   }));
 
   // Filtros
-  var periodo = h('select', { 'aria-label': 'Fecha' }, PERIODOS.map(function (o) { return h('option', { value: o[0] }, o[1]); }));
+  var periodo = h('select', { 'aria-label': 'Fecha', 'data-foco': 'sel-fecha' }, PERIODOS.map(function (o) { return h('option', { value: o[0] }, o[1]); }));
   periodo.value = S.periodoTck;
   periodo.addEventListener('change', function () { S.periodoTck = periodo.value; cargar(true); });
-  var estado = h('select', { 'aria-label': 'Estado' }, [['', 'Todos los válidos'], ['Revisar', 'A revisar'], ['Descartado', 'Descartados']].map(function (o) { return h('option', { value: o[0] }, o[1]); }));
+  var estado = h('select', { 'aria-label': 'Estado', 'data-foco': 'sel-estado' }, [['', 'Todos los válidos'], ['Revisar', 'A revisar'], ['Descartado', 'Descartados']].map(function (o) { return h('option', { value: o[0] }, o[1]); }));
   estado.value = S.estadoTck;
   estado.addEventListener('change', function () { S.estadoTck = estado.value; cargar(true); });
 
@@ -1453,7 +1654,7 @@ function vTickets(v, d) {
   // Excel: la pestaña elegida (con año y mes) y un resumen por mes de todas las pestañas
   var estadoX = h('span', { class: 'estado-excel', role: 'status' });
   var excel = h('button', { type: 'button', class: 'boton descarga', onclick: async function () {
-    excel.disabled = true; estadoX.textContent = 'Preparando…';
+    botonOcupado(excel, true); estadoX.textContent = 'Preparando…';
     try {
       var X = await prepararExcel(), libro = new X.Workbook(); libro.creator = 'MCD';
       var cols = [['anio', 'Año'], ['mes', 'Mes'], ['fecha', 'Fecha', FECHA], ['comercio', 'Comercio'], ['nif', 'NIF'], ['categoria', 'Categoría'], ['concepto', 'Concepto'],
@@ -1494,7 +1695,7 @@ function vTickets(v, d) {
         nombrePeriodo(S.periodoTck), new Date().toISOString().slice(0, 10)].join('_'));
       estadoX.textContent = lista.length + ' tickets descargados';
     } catch (e) { estadoX.textContent = 'No se ha descargado: ' + mensajeError(e); }
-    finally { excel.disabled = false; }
+    finally { botonOcupado(excel, false); }
   } }, [iconoPanel('excel'), 'Descargar Excel']);
 
   v.appendChild(h('div', { class: 'herramientas' }, [pestanas,
@@ -1503,7 +1704,7 @@ function vTickets(v, d) {
     h('div', { class: 'fila-herramientas' }, [selectorGas, h('label', { class: 'campo-corto' }, ['Fecha', periodo]), h('label', { class: 'campo-corto' }, ['Estado', estado])])]));
   if (grupo[0] === 'gasolina') v.appendChild(h('p', { class: 'sub' }, [S.gasTck === 'otras' ? 'Gasolineras que no son ' + NOMBRE_GASOLINERA_TABLA + ': no se comparan con la tabla de precios. ' : '',
     'Sin empresa = fondo común: cada ticket pasa solo a su empresa cuando llega la factura de la gasolinera. También se ven en ',
-    h('button', { type: 'button', class: 'boton enlace', onclick: function () { irA('combustible'); } }, 'Combustible'), ', comparados con la tabla de precios.']));
+    h('button', { type: 'button', class: 'boton enlace', 'data-foco': 'ir-combustible', onclick: function () { irA('combustible'); } }, 'Combustible'), ', comparados con la tabla de precios.']));
   // IVA que no se puede deducir (21-nov-2026): tickets sin el NIF de la empresa (nota de tickets.py)
   var sinNif = lista.filter(function (t) { return t.estado !== 'Descartado' && /^IVA no deducible con este ticket/m.test(texto(t.observaciones).split(/;\s*/).join('\n')); });
   if (sinNif.length) v.appendChild(h('p', { class: 'sub aviso-iva', role: 'note' }, 'IVA que no se puede deducir: ' + sinNif.length + ' ticket' + (sinNif.length === 1 ? '' : 's') +
@@ -1517,11 +1718,11 @@ function vTickets(v, d) {
   function fila(t) {
     var comunes = [t.fecha ? fecha(t.fecha) : '—'];
     var mini = { hoja: 'tickets', id: t.id_doc, huella: t.hash_sha256 };
-    if (grupo[0] === 'gasolina') return { mini: mini, abrir: function () { fichaTicket(t); }, celdas: comunes.concat([
+    if (grupo[0] === 'gasolina') return { clave: 'tck-' + t.id_doc, mini: mini, abrir: function () { fichaTicket(t); }, celdas: comunes.concat([
       (S.gasTck === 'otras' ? [t.comercio, t.estacion].filter(Boolean).join(' · ') : t.estacion || t.comercio) || '—', t.matricula || '—', { t: litros(t.litros), num: 1 },
       { t: t.total === null || t.total === undefined ? '—' : euros(t.total), num: 1 },
       t.empresa ? h('span', { class: 'pill ok' }, t.empresa) : h('span', { class: 'pill', title: 'Esperando la factura de la gasolinera' }, 'Fondo común'), pillEstado(t.estado)]) };
-    return { mini: mini, abrir: function () { fichaTicket(t); }, celdas: comunes.concat([t.comercio || '—'], grupo[0] === 'otros' ? [t.categoria] : [],
+    return { clave: 'tck-' + t.id_doc, mini: mini, abrir: function () { fichaTicket(t); }, celdas: comunes.concat([t.comercio || '—'], grupo[0] === 'otros' ? [t.categoria] : [],
       [{ t: t.total === null || t.total === undefined ? '—' : euros(t.total), num: 1 }, { t: t.cuota_iva === null || t.cuota_iva === undefined ? '—' : euros(t.cuota_iva), num: 1 },
        t.forma_pago || '—', pillEstado(t.estado)]) };
   }
@@ -1529,13 +1730,14 @@ function vTickets(v, d) {
   var anios = Array.from(new Set(meses.map(function (k) { return k ? k.slice(0, 4) : ''; })));
   anios.forEach(function (a, ia) {
     var delAnio = lista.filter(function (t) { return (claveMes(t).slice(0, 4)) === a; });
-    var bloque = h('section', { class: 'anio-tickets' }, [h('h3', { class: 'cab-anio' }, [a || 'Sin fecha', h('span', { class: 'sub' }, ' · ' + delAnio.length + ' ticket' + (delAnio.length === 1 ? '' : 's') + ' · ' + euros(sumaTotal(delAnio)))])]);
+    // (23-nov-2026, accesibilidad) el año es un h2 (antes h3 justo debajo del h1); se ve igual (clase subtitulo)
+    var bloque = h('section', { class: 'anio-tickets' }, [h('h2', { class: 'subtitulo cab-anio' }, [a || 'Sin fecha', h('span', { class: 'sub' }, ' · ' + delAnio.length + ' ticket' + (delAnio.length === 1 ? '' : 's') + ' · ' + euros(sumaTotal(delAnio)))])]);
     meses.filter(function (k) { return (k ? k.slice(0, 4) : '') === a; }).forEach(function (k, im) {
       var delMes = lista.filter(function (t) { return claveMes(t) === k; });
       var caja = h('details', { class: 'mes-tickets' }, [h('summary', {}, [h('span', { class: 'mes-nombre' }, nombreMes(k)),
         h('span', { class: 'mes-dato' }, delMes.length + ' ticket' + (delMes.length === 1 ? '' : 's') + ' · ' + euros(sumaTotal(delMes)))])]);
       if (ia === 0 && im === 0) caja.open = true;
-      tabla(caja, columnas, delMes.map(fila), 'Ticket');
+      tabla(caja, columnas, delMes.map(fila), 'Ticket', 'Tickets de ' + nombreMes(k));
       bloque.appendChild(caja);
     });
     v.appendChild(bloque);
@@ -1555,7 +1757,7 @@ function fichaTicket(t) {
     e.value = valor; entradas[c[0]] = e;
     rejilla.appendChild(h('div', { class: 'campo-ficha' + (c[0] === 'concepto' || c[0] === 'comercio' ? ' campo-ancho' : '') }, [h('label', { for: 'tck-' + c[0] }, c[1]), e]));
   });
-  var mensaje = h('div', { class: 'mensaje-ficha', role: 'status' });
+  var mensaje = h('div', { class: 'mensaje-ficha', id: 'mensajeFicha', role: 'status' });
   var visor = h('div', { class: 'visor-documento' }, h('p', { class: 'vacio' }, 'Buscando la foto…'));
   var cuerpo = h('div', { class: 'contenido-revision' }, [h('div', { class: 'zona-revision' }, [
     h('section', { class: 'vista-documento' }, [h('div', { class: 'cab-documento' }, [h('h3', {}, 'Foto del ticket')]), visor]),
@@ -1569,9 +1771,10 @@ function fichaTicket(t) {
   function cambios() { var c = {}; Object.keys(entradas).forEach(function (k) { var antes = t[k] === null || t[k] === undefined ? '' : String(t[k]).slice(0, k === 'fecha' ? 10 : 300); if (entradas[k].value !== antes) c[k] = entradas[k].value; }); return c; }
   function guardar(revisado) {
     var c = cambios(); if (!Object.keys(c).length && !revisado) { mensaje.className = 'mensaje-ficha'; mensaje.textContent = 'No hay cambios.'; return; }
-    var enviar = Object.assign({}, c);
-    try { Object.keys(enviar).forEach(function (k) { if (CAMPOS_IMPORTE.indexOf(k) >= 0) enviar[k] = importeEscrito(enviar[k], k === 'base_imponible' ? 'Base (€)' : k === 'cuota_iva' ? 'IVA (€)' : k === 'total' ? 'Total (€)' : 'IVA (%)'); }); }
-    catch (e) { mensaje.className = 'mensaje-ficha fallo'; mensaje.textContent = e.message; return; }
+    var enviar = Object.assign({}, c), campoMal = null;
+    try { Object.keys(enviar).forEach(function (k) { campoMal = k; if (CAMPOS_IMPORTE.indexOf(k) >= 0) enviar[k] = importeEscrito(enviar[k], k === 'base_imponible' ? 'Base (€)' : k === 'cuota_iva' ? 'IVA (€)' : k === 'total' ? 'Total (€)' : 'IVA (%)'); }); }
+    // (23-nov-2026, accesibilidad) el importe mal escrito queda marcado, unido al mensaje y con el foco
+    catch (e) { mensaje.className = 'mensaje-ficha fallo'; mensaje.textContent = e.message; campoConError(entradas[campoMal], 'mensajeFicha'); return; }
     mensaje.className = 'mensaje-ficha'; mensaje.textContent = 'Guardando…';
     rpc('panel_guardar_ticket', { p_id: t.id_doc, p_cambios: enviar, p_revisado: !!revisado }).then(function () {
       if (revisado) { fichaSucia = null; cerrarModal(); avisoBreve('Ticket ' + t.id_doc + ' revisado'); }
@@ -1631,13 +1834,16 @@ function fichaTicket(t) {
 function vRevision(v, lista) {
   var tipos = ['', 'Factura a revisar', 'Albarán a revisar', 'Albarán sin factura', 'Pack por confirmar', 'Ticket a revisar', 'Revisión manual'];
   if (S.filtro && !lista.some(function (x) { return x.tipo === S.filtro; })) S.filtro = '';   // se vació ese grupo: volver a "Todo"
-  v.appendChild(h('div', { class: 'barra' }, h('div', { class: 'chips' }, tipos.map(function (t) {
+  // (23-nov-2026, accesibilidad) los chips dicen cuál está elegido (aria-pressed; antes solo se veía por el color) y el
+  // foco se queda en el pulsado al repintar (data-foco)
+  v.appendChild(h('div', { class: 'barra' }, h('div', { class: 'chips', role: 'group', 'aria-label': 'Qué tipo de pendiente' }, tipos.map(function (t) {
     var n = lista.filter(function (x) { return !t || x.tipo === t; }).length;
-    return t && !n ? null : h('button', { class: S.filtro === t ? 'activo' : '', onclick: function () { S.filtro = t; pintar(); } }, (t || 'Todo') + ' (' + n + ')');
+    return t && !n ? null : h('button', { type: 'button', class: S.filtro === t ? 'activo' : '', 'aria-pressed': S.filtro === t ? 'true' : 'false', 'data-foco': 'chip-' + (t || 'todo'),
+      onclick: function () { S.filtro = t; pintar(); } }, (t || 'Todo') + ' (' + n + ')');
   }))));
   var enviados = SUBIDAS.filter(function (s) { return /^tachado_/.test(s.nombre); });
   if (enviados.length) {
-    v.appendChild(h('section', { class: 'tarjeta enviados-tachado' }, [h('h3', {}, 'Enviados a la IA'),
+    v.appendChild(h('section', { class: 'tarjeta enviados-tachado' }, [h('h2', { class: 'subtitulo' }, 'Enviados a la IA'),     // (23-nov-2026, accesibilidad) h2: va justo debajo del h1
       h('p', { class: 'sub' }, 'El servicio los lee en un minuto. Cuando estén leídos, pulsa "Abrir" para revisar y corregir sus datos.'),
       h('ul', { id: 'listaSubidas', class: 'lista-subidas' })]));
     setTimeout(pintarSubidas, 0);
@@ -1660,7 +1866,7 @@ function vRevision(v, lista) {
     return hueco;
   }
   tabla(v, ['Documento', 'Qué pasa', 'Empresa', 'Fecha', 'Cliente / proveedor', { t: 'Importe', num: 1 }, { t: 'Motivo', largo: 1 }], filas.map(function (x) {
-    return { mini: { hoja: x.hoja, id: x.id }, abrir: function () { if (x.hoja === 'tickets') { abrirDesdeHistorial({ hoja: 'tickets', id_doc: x.id }); return; }
+    return { clave: x.hoja + '|' + x.empresa + '|' + x.id + '|' + x.tipo, mini: { hoja: x.hoja, id: x.id }, abrir: function () { if (x.hoja === 'tickets') { abrirDesdeHistorial({ hoja: 'tickets', id_doc: x.id }); return; }
         abrirFichaPorId(x.hoja === 'facturas' ? 'Factura' : x.hoja === 'albaranes' ? 'Albarán' : 'Revisión manual', x.empresa, x.hoja, x.id); },
       celdas: [celdaDocumento(x), ENVIADOS_TACHADO[x.id] && x.tipo === 'Revisión manual' ? h('span', { class: 'pill ok' }, 'Enviado a la IA') : pillEstado(x.tipo === 'Albarán sin factura' ? 'Sin factura' : x.tipo),
         x.empresa === '_revision' || !x.empresa ? '—' : x.empresa, fecha(x.fecha), x.nombre, { t: x.total === null || x.total === undefined ? '' : euros(x.total), num: 1 },
@@ -1704,19 +1910,22 @@ function cargarCarpeta(prefijo) {
 }
 function vDocumentos(v, d) {
   if (S.rol === 'Administrador') exportarOriginales(v);
-  var miga = h('div', { class: 'miga' }, h('button', { class: 'abrir-fila', type: 'button', onclick: function () { S.carpeta = ''; cargar(true); } }, 'Documentos'));
+  // (23-nov-2026, accesibilidad) la miga de pan es una navegación con nombre; la carpeta actual lleva aria-current
+  var miga = h('div', { class: 'miga', role: 'navigation', 'aria-label': 'Carpeta actual' }, h('button', { class: 'abrir-fila', type: 'button', 'data-foco': 'miga-', onclick: function () { S.carpeta = ''; S.focoPendiente = 'miga-'; cargar(true); } }, 'Documentos'));
   d.camino.forEach(function (c, i) {
-    miga.appendChild(h('span', {}, '›'));
+    miga.appendChild(h('span', { 'aria-hidden': 'true' }, '›'));
     var ruta = d.camino.slice(0, i + 1).join('/');
-    miga.appendChild(i < d.camino.length - 1 ? h('button', { class: 'abrir-fila', type: 'button', onclick: function () { S.carpeta = ruta; cargar(true); } }, c) : h('b', {}, c));
+    miga.appendChild(i < d.camino.length - 1 ? h('button', { class: 'abrir-fila', type: 'button', 'data-foco': 'miga-' + ruta, onclick: function () { S.carpeta = ruta; S.focoPendiente = 'miga-' + ruta; cargar(true); } }, c) : h('b', { 'aria-current': 'location' }, c));
   });
   v.appendChild(miga);
   v.appendChild(h('p', { class: 'sub' }, 'Aquí están los originales de los últimos ' + DIAS_EN_LA_WEB + ' días. Los anteriores siguen guardados en el ordenador: ábrelos desde su factura, albarán o ticket con "Traer del ordenador".'));
   if (!d.elementos.length) { v.appendChild(h('div', { class: 'tarjeta vacio' }, 'Carpeta vacía. Los archivos aparecen aquí cuando el servicio termina de procesarlos.')); return; }
   tabla(v, [{ t: 'Nombre', largo: 1 }, 'Modificado', { t: 'Tamaño', num: 1 }], d.elementos.map(function (x) {
     var esCarpeta = x.tipo === 'carpeta';
-    return { abrir: esCarpeta ? function () { S.carpeta = x.ruta; cargar(true); } : function () { vistaPreviaRuta(x.nombre, x.ruta); },
-      celdas: [(esCarpeta ? '📁 ' : '📄 ') + x.nombre, x.fecha ? fecha(String(x.fecha).slice(0, 10)) + ' ' + hora(x.fecha) : '', { t: esCarpeta ? '' : tamano(x.tamano), num: 1 }] };
+    // (23-nov-2026, accesibilidad) el dibujo (📁 📄) no se lee en voz alta (aria-hidden) y el botón dice «Abrir carpeta: …» o «Abrir archivo: …»
+    // (al abrir una carpeta, el foco va a la primera fila de la carpeta nueva: la fila pulsada ya no existe)
+    return { clave: x.ruta, tituloFicha: esCarpeta ? 'carpeta' : 'archivo', abrir: esCarpeta ? function () { S.carpeta = x.ruta; S.focoPendiente = 'miga-'; cargar(true); } : function () { vistaPreviaRuta(x.nombre, x.ruta); },
+      celdas: [h('span', {}, [h('span', { 'aria-hidden': 'true' }, esCarpeta ? '📁 ' : '📄 '), x.nombre]), x.fecha ? fecha(String(x.fecha).slice(0, 10)) + ' ' + hora(x.fecha) : '', { t: esCarpeta ? '' : tamano(x.tamano), num: 1 }] };
   }));
 }
 // ---------------------------------------------------------------------
@@ -1965,8 +2174,11 @@ function crearVisor(visor, url, nombre, aparte) {
     boton('Ajustar', 'Ajustar al ancho', function () { cambiarZoom(1); }),
     boton('↺', 'Girar a la izquierda', function () { girar(-90); }), boton('↻', 'Girar a la derecha', function () { girar(90); }), ayuda]);
   var lista = h('div', { class: 'visor-hojas' }, h('p', { class: 'vacio', role: 'status' }, 'Abriendo…'));
-  var zona = h('div', { class: 'visor-zona', tabindex: '0', role: 'group', 'aria-label': 'Vista previa de ' + nombre }, lista);
-  visor.appendChild(h('div', { class: 'visor-caja' }, [barra, zona]));
+  // (23-nov-2026, accesibilidad) la ayuda de la zona del documento dice también las teclas (antes solo el ratón)
+  var idTeclas = 'teclasVisor' + (++crearVisor.cuenta);
+  var teclas = h('span', { class: 'solo-lector', id: idTeclas }, 'Teclas: más y menos para el tamaño, 0 para ajustarlo al ancho, flechas para moverte.');
+  var zona = h('div', { class: 'visor-zona', tabindex: '0', role: 'group', 'aria-label': 'Vista previa de ' + nombre, 'aria-describedby': idTeclas }, lista);
+  visor.appendChild(h('div', { class: 'visor-caja' }, [barra, teclas, zona]));
   function noDisponible() { lista.textContent = ''; lista.appendChild(h('p', { class: 'vacio' }, 'La vista previa no está disponible. Puedes continuar revisando los datos.')); }
   // Tamaño en pantalla de cada hoja: el ancho del visor × el zoom (100 % = ajustado al ancho)
   function colocar() {
@@ -2118,18 +2330,19 @@ function crearVisor(visor, url, nombre, aparte) {
   })();
   return este;
 }
+crearVisor.cuenta = 0;
 // Ruta de un archivo tal como se apunta en el Historial: sin caracteres de control ni de cambio de sentido del
 // texto y de 160 letras como mucho (la base de datos no admite otra cosa, 19-nov-2026)
 function rutaHistorial(ruta) { return String(ruta || '').replace(/[\u0000-\u001f\u007f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g, '_').slice(0, 160); }
 function vistaPreviaRuta(nombre, ruta) {
-  abrirModal(nombre, h('div', { class: 'cargando' }, 'Preparando la vista previa…'));
+  abrirModal(nombre, h('div', { class: 'cargando' }, 'Preparando la vista previa…'), null, 'Vista previa de un archivo');
   var numero = secuenciaFicha;
   rpc('panel_registrar_acceso_archivo', { p_id: rutaHistorial(ruta), p_tipo: 'archivo', p_accion: 'Ver documento' }).then(function () { return urlFirmada(ruta); }).then(function (url) {
     if (numero !== secuenciaFicha) return;
     var caja = document.getElementById('caja'); var visor = h('div', { class: 'visor-documento', style: 'height:72vh' });
     caja.replaceChild(visor, caja.lastChild); crearVisor(visor, url, nombre);
     if (S.rol === 'Administrador') caja.querySelector('.cab').insertBefore(h('button', { class: 'boton', onclick: function () { descargar(ruta, nombre); } }, 'Descargar'), caja.querySelector('.cab .boton'));
-  }).catch(function (e) { if (numero === secuenciaFicha) abrirModal('No se puede mostrar', h('p', {}, mensajeError(e))); });
+  }).catch(function (e) { if (numero === secuenciaFicha) abrirModal('No se puede mostrar', h('p', { role: 'alert' }, mensajeError(e))); });
 }
 function descargar(ruta, nombre) {
   rpc('panel_registrar_acceso_archivo', { p_id: rutaHistorial(ruta), p_tipo: 'archivo', p_accion: 'Descargar documento' })
@@ -2144,35 +2357,40 @@ function descargar(ruta, nombre) {
 // NEGOCIO
 // ---------------------------------------------------------------------
 function vNegocio(v, d) {
-  var empresa = h('select', { 'aria-label': 'Empresa' }, EMPRESAS.map(function (e) { return h('option', { value: e }, e); })); empresa.value = S.empresa;
-  var mes = h('input', { type: 'month', 'aria-label': 'Mes' }); mes.value = S.mes;
-  v.appendChild(h('div', { class: 'barra' }, [empresa, mes, h('button', { class: 'boton', onclick: function () { S.empresa = empresa.value; S.mes = mes.value || mesActual(); cargar(true); } }, 'Consultar')]));
-  v.appendChild(h('h3', {}, 'Avisos de vencimientos y facturas periódicas'));
+  var empresa = h('select', { 'aria-label': 'Empresa', 'data-foco': 'neg-empresa' }, EMPRESAS.map(function (e) { return h('option', { value: e }, e); })); empresa.value = S.empresa;
+  var mes = h('input', { type: 'month', 'aria-label': 'Mes', 'data-foco': 'neg-mes', placeholder: 'AAAA-MM', pattern: '\\d{4}-\\d{2}' }); mes.value = S.mes;
+  // (23-nov-2026, accesibilidad) la empresa y el mes llevan su nombre escrito encima (antes solo lo sabía el lector de pantalla)
+  v.appendChild(h('div', { class: 'barra' }, [h('label', { class: 'campo-corto' }, ['Empresa', empresa]), h('label', { class: 'campo-corto' }, ['Mes (AAAA-MM)', mes]),
+    h('button', { class: 'boton', 'data-foco': 'neg-consultar', onclick: function () { S.empresa = empresa.value; S.mes = mes.value || mesActual(); cargar(true); } }, 'Consultar')]));
+  // (23-nov-2026, accesibilidad) los apartados son h2 (antes se saltaba de h1 a h3); se ven igual (clase subtitulo)
+  v.appendChild(h('h2', { class: 'subtitulo' }, 'Avisos de vencimientos y facturas periódicas'));
   tabla(v, ['Tipo', 'Documento', 'Aviso', 'Fecha'], d.avisos.map(function (a) { return { celdas: [a.tipo, a.id, a.texto, fecha(a.fecha)] }; }));
-  v.appendChild(h('h3', {}, 'Coste sin IVA por camión'));
+  v.appendChild(h('h2', { class: 'subtitulo' }, 'Coste sin IVA por camión'));
   v.appendChild(h('p', { class: 'sub' }, 'Solo se asigna el coste cuando las líneas cuadran con la base. Los importes sin matrícula quedan "Sin asignar".'));
   tabla(v, ['Matrícula', { t: 'Base', num: 1 }], d.costes.map(function (c) { return { celdas: [c.matricula, { t: euros(c.base), num: 1 }] }; }));
-  v.appendChild(h('h3', {}, 'Cobros y pagos del mes'));
+  v.appendChild(h('h2', { class: 'subtitulo' }, 'Cobros y pagos del mes'));
   tabla(v, ['ID', 'Factura', 'Tipo', 'Estado', { t: 'Total', num: 1 }, { t: 'Abonado', num: 1 }, 'Vence'], d.pagos.map(function (p) {
     return { celdas: [p.id, p.numero, p.tipo, p.estado, { t: euros(p.total), num: 1 }, { t: euros(p.abonado), num: 1 }, vence(p.vence)] };
   }));
   pintarCaducidades(v, d.caducidades, empresa);
   if (S.rol === 'Administrador') {
-    v.appendChild(h('h3', {}, 'Reglas de facturas periódicas'));
+    v.appendChild(h('h2', { class: 'subtitulo' }, 'Reglas de facturas periódicas'));
     tabla(v, ['NIF', 'Categoría', 'Desde', 'Cada meses', 'Día límite', 'Activa'], (d.reglas || []).map(function (r) { return { celdas: [r.nif, r.categoria, r.mes_inicio, r.periodo_meses, r.dia_limite, r.activa ? 'Sí' : 'No'] }; }));
-    var nif = h('input', { placeholder: 'NIF proveedor', maxlength: '9' }), categoria = h('select', {}, ['Gasoleo', 'Telepeaje', 'Seguros', 'Otros'].map(function (c) { return h('option', { value: c }, c); }));
-    var inicio = h('input', { type: 'month' }); inicio.value = S.mes;
+    // (23-nov-2026, accesibilidad) el NIF es obligatorio (se dice en la etiqueta y con required); un error señala su campo
+    var nif = h('input', { placeholder: 'NIF proveedor', maxlength: '9', required: 'required' }), categoria = h('select', {}, ['Gasoleo', 'Telepeaje', 'Seguros', 'Otros'].map(function (c) { return h('option', { value: c }, c); }));
+    var inicio = h('input', { type: 'month', placeholder: 'AAAA-MM', pattern: '\\d{4}-\\d{2}' }); inicio.value = S.mes;
     var periodo = h('input', { type: 'number', min: '1', max: '24', value: '1' }), dia = h('input', { type: 'number', min: '1', max: '28', value: '15' });
-    var activa = h('input', { type: 'checkbox' }); activa.checked = true; var msg = h('div', { class: 'mensaje' });
+    var activa = h('input', { type: 'checkbox' }); activa.checked = true; var msg = h('div', { class: 'mensaje', id: 'msgRegla', role: 'status' });
     v.appendChild(h('div', { class: 'tarjeta' }, [h('h3', {}, 'Factura periódica esperada'), h('p', { class: 'sub' }, 'Una regla por empresa, proveedor y categoría. Usa la misma combinación para cambiarla o desactivarla.'),
-      h('div', { class: 'formulario' }, [h('label', {}, ['NIF del proveedor', nif]), h('label', {}, ['Categoría', categoria]), h('label', {}, ['Mes inicial', inicio]),
+      h('div', { class: 'formulario' }, [h('label', {}, ['NIF del proveedor (obligatorio)', nif]), h('label', {}, ['Categoría', categoria]), h('label', {}, ['Mes inicial (AAAA-MM)', inicio]),
         h('label', {}, ['Cada cuántos meses', periodo]), h('label', {}, ['Día límite del mes (1 a 28)', dia]), h('label', { class: 'en-linea' }, [activa, ' Activa']),
-        h('button', { class: 'boton principal', onclick: function () {
+        h('button', { class: 'boton principal', 'data-foco': 'regla-guardar', onclick: function () {
           // La regla va a la empresa que se VE elegida arriba (antes iba a la última consultada, aunque se hubiera cambiado el desplegable)
           var suEmpresa = empresa.value;
+          if (!nif.value.trim()) { mensajeEn(msg, 'Escribe el NIF del proveedor.', 'error'); campoConError(nif, 'msgRegla'); return; }
           rpc('panel_guardar_periodica', { p_empresa: suEmpresa, p_nif: nif.value, p_categoria: categoria.value, p_inicio: inicio.value, p_periodo: Number(periodo.value), p_dia: Number(dia.value), p_activa: activa.checked })
             .then(function () { S.empresa = suEmpresa; S.mes = mes.value || S.mes; cargar(true); avisoBreve('Regla guardada en ' + suEmpresa); })
-            .catch(function (e) { msg.className = 'mensaje error'; msg.textContent = mensajeError(e); });
+            .catch(function (e) { mensajeEn(msg, mensajeError(e), 'error'); });
         } }, 'Guardar regla')]), msg]));
   }
 }
@@ -2188,18 +2406,20 @@ function estadoCaducidad(dias) {
   return h('span', { class: 'pill ok' }, 'Al día');
 }
 function pintarCaducidades(v, lista, selectorEmpresa) {
-  v.appendChild(h('h3', { id: 'caducidades' }, 'Caducidades: ITV, seguros, tarjeta de transporte, CAP...'));
+  v.appendChild(h('h2', { id: 'caducidades', class: 'subtitulo' }, 'Caducidades: ITV, seguros, tarjeta de transporte, CAP...'));   // (23-nov-2026, accesibilidad) h2
   v.appendChild(h('p', { class: 'sub' }, 'El resumen diario avisa de lo caducado y de lo que caduca en ' + DIAS_AVISO_CADUCIDAD + ' días. Para una persona escribe unas iniciales o un apodo, nunca el DNI.'));
   if (lista === null || lista === undefined) { v.appendChild(h('div', { class: 'tarjeta vacio' }, 'No se han podido leer las caducidades (¿falta poner al día la base de datos?).')); return; }
   var puede = puedeSubir();
   var tipo = h('select', { id: 'cad-tipo', 'aria-label': 'Tipo de documento' }, TIPOS_CADUCIDAD.map(function (x) { return h('option', { value: x }, x); }));
-  var ref = h('input', { id: 'cad-ref', type: 'text', maxlength: '40', placeholder: 'Matrícula o iniciales' });
-  var vence = h('input', { id: 'cad-vence', type: 'date' });
+  // (23-nov-2026, accesibilidad) «a qué se refiere» y la fecha son obligatorios: se dice en la etiqueta (y con required) y un
+  // error señala su campo, que recibe el foco
+  var ref = h('input', { id: 'cad-ref', type: 'text', maxlength: '40', placeholder: 'Matrícula o iniciales', required: 'required' });
+  var vence = h('input', { id: 'cad-vence', type: 'date', required: 'required' });
   var nota = h('input', { id: 'cad-nota', type: 'text', maxlength: '200', placeholder: 'Opcional' });
-  var msg = h('div', { class: 'mensaje' }), editando = { id: null };
+  var msg = h('div', { class: 'mensaje', id: 'msgCaducidad', role: 'status' }), editando = { id: null };
   var titulo = h('h3', {}, 'Apuntar una caducidad');
   var cancelar = h('button', { class: 'boton', type: 'button', hidden: 'hidden', onclick: function () { limpiar(); } }, 'Cancelar');
-  function limpiar() { editando.id = null; ref.value = ''; vence.value = ''; nota.value = ''; tipo.value = TIPOS_CADUCIDAD[0]; titulo.textContent = 'Apuntar una caducidad'; cancelar.hidden = true; msg.textContent = ''; }
+  function limpiar() { editando.id = null; ref.value = ''; vence.value = ''; nota.value = ''; tipo.value = TIPOS_CADUCIDAD[0]; titulo.textContent = 'Apuntar una caducidad'; cancelar.hidden = true; msg.textContent = ''; campoSinError(ref); campoSinError(vence); }
   tabla(v, ['Tipo', 'A qué se refiere', 'Caduca', 'Estado', { t: 'Nota', largo: 1 }, ''], lista.map(function (c) {
     var acciones = !puede ? '' : h('div', { class: 'en-linea' }, [
       h('button', { class: 'boton', type: 'button', 'aria-label': 'Cambiar ' + c.tipo + ' ' + c.referencia, onclick: function () {
@@ -2215,15 +2435,15 @@ function pintarCaducidades(v, lista, selectorEmpresa) {
   }));
   if (!puede) return;
   v.appendChild(h('div', { class: 'tarjeta' }, [titulo,
-    h('div', { class: 'formulario' }, [h('label', {}, ['Tipo', tipo]), h('label', {}, ['A qué se refiere (matrícula o iniciales)', ref]),
-      h('label', {}, ['Caduca el', vence]), h('label', {}, ['Nota', nota]),
-      h('div', { class: 'en-linea' }, [h('button', { id: 'cad-guardar', class: 'boton principal', type: 'button', onclick: function () {
-        if (!ref.value.trim()) { msg.className = 'mensaje error'; msg.textContent = 'Escribe la matrícula o unas iniciales.'; return; }
-        if (!vence.value) { msg.className = 'mensaje error'; msg.textContent = 'Elige la fecha en que caduca.'; return; }
+    h('div', { class: 'formulario' }, [h('label', {}, ['Tipo', tipo]), h('label', {}, ['A qué se refiere (matrícula o iniciales, obligatorio)', ref]),
+      h('label', {}, ['Caduca el (obligatorio)', vence]), h('label', {}, ['Nota', nota]),
+      h('div', { class: 'en-linea' }, [h('button', { id: 'cad-guardar', class: 'boton principal', type: 'button', 'data-foco': 'cad-guardar', onclick: function () {
+        if (!ref.value.trim()) { mensajeEn(msg, 'Escribe la matrícula o unas iniciales.', 'error'); campoConError(ref, 'msgCaducidad'); return; }
+        if (!vence.value) { mensajeEn(msg, 'Elige la fecha en que caduca.', 'error'); campoConError(vence, 'msgCaducidad'); return; }
         var suEmpresa = selectorEmpresa.value;
         rpc('panel_guardar_caducidad', { p_id: editando.id, p_empresa: suEmpresa, p_tipo: tipo.value, p_referencia: ref.value, p_vence: vence.value, p_nota: nota.value })
           .then(function () { S.empresa = suEmpresa; cargar(true); avisoBreve('Caducidad guardada en ' + suEmpresa); })
-          .catch(function (e) { msg.className = 'mensaje error'; msg.textContent = mensajeError(e); });
+          .catch(function (e) { mensajeEn(msg, mensajeError(e), 'error'); });
       } }, 'Guardar'), cancelar])]), msg]));
 }
 
@@ -2231,9 +2451,10 @@ function pintarCaducidades(v, lista, selectorEmpresa) {
 // USUARIOS (administrador) y exportación
 // ---------------------------------------------------------------------
 function vUsuarios(v, usuarios) {
-  var email = h('input', { type: 'email', placeholder: 'correo@empresa.com' }), nombre = h('input', { type: 'text', placeholder: 'Nombre' });
+  // (23-nov-2026, accesibilidad) el correo es obligatorio (etiqueta y required); los errores señalan su campo y se anuncian
+  var email = h('input', { type: 'email', placeholder: 'correo@empresa.com', required: 'required' }), nombre = h('input', { type: 'text', placeholder: 'Nombre' });
   var rol = h('select', {}, ['Lector', 'Revisor', 'Administrador'].map(function (r) { return h('option', { value: r }, r); }));
-  var activo = h('input', { type: 'checkbox' }); activo.checked = true; var msg = h('div', { class: 'mensaje' });
+  var activo = h('input', { type: 'checkbox' }); activo.checked = true; var msg = h('div', { class: 'mensaje', id: 'msgUsuario', role: 'status' });
   // Qué secciones ve (Inicio siempre; un administrador lo ve todo)
   var casillasSeccion = VISTAS.filter(function (x) { return x[0] !== 'inicio'; }).map(function (x) {
     var c = h('input', { type: 'checkbox', value: x[0], 'data-seccion': x[0] }); c.checked = true;
@@ -2257,30 +2478,31 @@ function vUsuarios(v, usuarios) {
     var nombres = VISTAS.filter(function (x) { return x[0] !== 'inicio' && u.secciones.indexOf(x[0]) >= 0; }).map(function (x) { return x[1]; });
     return nombres.length ? nombres.join(', ') : 'Solo Inicio';
   }
-  var reenviar = h('button', { class: 'boton', type: 'button', onclick: function () {
-    if (!email.value.trim()) { msg.className = 'mensaje error'; msg.textContent = 'Elige primero un usuario de la lista.'; return; }
+  var reenviar = h('button', { class: 'boton', type: 'button', 'data-foco': 'usu-reenviar', onclick: function () {
+    if (!email.value.trim()) { mensajeEn(msg, 'Elige primero un usuario de la lista.', 'error'); campoConError(email, 'msgUsuario'); return; }
     rpc('panel_reenviar_invitacion', { p_email: email.value.trim() })
       .then(function () { cargar(false); avisoBreve('Invitación pendiente: se enviará en menos de un minuto.'); })   // (el mensaje de la tarjeta se borraba al repintar)
-      .catch(function (e) { msg.className = 'mensaje error'; msg.textContent = mensajeError(e); });
+      .catch(function (e) { mensajeEn(msg, mensajeError(e), 'error'); });
   } }, 'Reenviar invitación');
   v.appendChild(h('div', { class: 'tarjeta' }, [h('h2', {}, 'Añadir o cambiar un usuario'),
     h('p', { class: 'sub' }, 'Al guardar un correo nuevo le llega en menos de un minuto un correo para elegir su contraseña. Si no le llega, que mire en el correo no deseado; mientras no haya entrado nunca, «Reenviar invitación» se lo manda otra vez. Para cambiar a alguien, pulsa su correo en la lista.'),
     h('ul', { class: 'roles' }, [h('li', {}, [h('b', {}, 'Lector: '), 've facturas, albaranes y archivos, y descarga Excel (por ejemplo, la gestoría).']),
       h('li', {}, [h('b', {}, 'Revisor: '), 'además corrige fichas, sube documentos y marca revisado.']),
       h('li', {}, [h('b', {}, 'Administrador: '), 'además gestiona usuarios y reglas.'])]),
-    h('div', { class: 'formulario-usuario' }, [h('label', {}, ['Correo', email]), h('label', {}, ['Nombre', nombre]), h('label', {}, ['Rol', rol]),
+    h('div', { class: 'formulario-usuario' }, [h('label', {}, ['Correo (obligatorio)', email]), h('label', {}, ['Nombre', nombre]), h('label', {}, ['Rol', rol]),
       h('label', { class: 'casilla' }, [activo, 'Puede entrar (desmarca para quitarle el acceso)']), cajaSecciones,
-      h('div', { class: 'en-linea' }, [h('button', { class: 'boton principal', onclick: function () {
-        if (!email.value.trim()) { msg.className = 'mensaje error'; msg.textContent = 'Escribe el correo de la persona.'; return; }
+      h('div', { class: 'en-linea' }, [h('button', { class: 'boton principal', 'data-foco': 'usu-guardar', onclick: function () {
+        if (!email.value.trim()) { mensajeEn(msg, 'Escribe el correo de la persona.', 'error'); campoConError(email, 'msgUsuario'); return; }
         var suCorreo = email.value.trim(), susSecciones = rol.value === 'Administrador' ? null : leerSecciones();
         rpc('panel_guardar_usuario', { p_email: suCorreo, p_nombre: nombre.value.trim(), p_rol: rol.value, p_activo: activo.checked })
           .then(function () { return rpc('panel_secciones_usuario', { p_email: suCorreo, p_secciones: susSecciones }); })
           .then(function () { cargar(true); avisoBreve('Usuario guardado. Si no ha entrado nunca, le llegará la invitación en menos de un minuto.'); })
-          .catch(function (e) { msg.className = 'mensaje error'; msg.textContent = mensajeError(e); });
+          .catch(function (e) { mensajeEn(msg, mensajeError(e), 'error'); });
       } }, 'Guardar e invitar'), reenviar])]), msg]));
   v.appendChild(h('p', { class: 'sub' }, ['Para ver cuándo ha entrado cada persona y los intentos con contraseña equivocada, abre ',
     h('button', { type: 'button', class: 'boton enlace', onclick: function () {
       clearTimeout(temporizadorBusqueda); S.vista = 'historial'; S.buscar = ''; S.tipoHis = 'accesos'; S.periodoHis = 'mes'; S.usuarioHis = ''; S.empresaHis = ''; S.pagina = 1;
+      S.enfocarTitulo = true; S.focoPendiente = null;        // (23-nov-2026, accesibilidad) el foco va al título de la sección nueva
       pintarMenu(); cargar(true); window.scrollTo(0, 0);
     } }, 'Historial → Entradas al panel'), '.']));
   // El servicio anota "Ya tiene cuenta activa..." cuando la persona ya ha entrado alguna vez (no se le manda invitación)
@@ -2292,11 +2514,11 @@ function vUsuarios(v, usuarios) {
     return u.invitado_en ? 'Enviada ' + fecha(String(u.invitado_en).slice(0, 10)) : 'Pendiente de enviar';
   }
   tabla(v, ['Correo', 'Nombre', 'Rol', 'Ve', 'Activo', 'Invitación', 'Último acceso'], usuarios.map(function (u) {
-    return { celdas: [u.email, u.nombre, u.rol, nombreSecciones(u), u.activo ? 'Sí' : 'No', estadoInvitacion(u), u.ultimo_acceso ? fechaHora(u.ultimo_acceso) : 'Nunca'], abrir: function () { email.value = u.email; nombre.value = u.nombre || ''; rol.value = u.rol; activo.checked = !!u.activo; ponerSecciones(u.secciones); segunRol(); email.focus();
+    // (23-nov-2026, accesibilidad) el botón de la fila dice lo que hace: «Abrir usuario para editarlo: correo»
+    return { clave: 'usu-' + u.email, tituloFicha: 'usuario para editarlo', celdas: [u.email, u.nombre, u.rol, nombreSecciones(u), u.activo ? 'Sí' : 'No', estadoInvitacion(u), u.ultimo_acceso ? fechaHora(u.ultimo_acceso) : 'Nunca'], abrir: function () { email.value = u.email; nombre.value = u.nombre || ''; rol.value = u.rol; activo.checked = !!u.activo; ponerSecciones(u.secciones); segunRol(); campoSinError(email); email.focus();
       // Al elegir a alguien se dice por qué no le llegó la invitación (si es el caso)
       var motivo = u.activo ? String(u.invitacion_error || '') : '';
-      msg.className = motivo && !yaTieneCuenta(u) ? 'mensaje error' : 'mensaje';
-      msg.textContent = !motivo ? '' : (yaTieneCuenta(u) ? motivo : 'No se pudo enviar la invitación: ' + motivo); } };
+      mensajeEn(msg, !motivo ? '' : (yaTieneCuenta(u) ? motivo : 'No se pudo enviar la invitación: ' + motivo), motivo && !yaTieneCuenta(u) ? 'error' : ''); } };
   }));
 }
 // ---------------------------------------------------------------------
@@ -2358,7 +2580,12 @@ function fechaHora(iso) { var d = new Date(iso); return isNaN(d) ? texto(iso) : 
 function valorHistorial(v) {
   var t = texto(v).replace(/\| true$/, '| puede entrar').replace(/\| false$/, '| sin acceso');   // usuarios: activo sí/no
   if (t === '') return h('span', { class: 'vacio-historial' }, '(vacío)');
-  return t.length > 160 ? h('span', { title: t }, t.slice(0, 160) + '…') : t;
+  // (23-nov-2026, accesibilidad) el resto de un texto largo se puede abrir («Ver entero»): antes solo estaba en el «title»
+  // (al pasar el ratón), que no se puede leer con el teclado ni en el móvil. El clic no abre la fila.
+  if (t.length <= 160) return t;
+  function quieto(e) { e.stopPropagation(); }
+  return h('span', { class: 'texto-largo', title: t }, [t.slice(0, 160) + '… ',
+    h('details', { class: 'ver-entero', onclick: quieto, onkeydown: quieto }, [h('summary', {}, 'Ver entero'), h('span', {}, t.slice(160))])]);
 }
 function etiquetaCampo(x) {
   if (x.accion === 'Gestionar usuario' || x.accion === 'Reenviar invitacion') return 'Usuario ' + texto(x.campo);
@@ -2389,25 +2616,25 @@ function sePuedeAbrir(x) { return !!x.id_doc && ['facturas', 'albaranes', 'revis
 function vHistorial(v, d) {
   var nombres = nombresUsuarios(d.usuarios);
   function selector(etiqueta, opciones, valor, cambiar) {
-    var s = h('select', { 'aria-label': etiqueta }, opciones.map(function (o) { return h('option', { value: o[0] }, o[1]); }));
+    var s = h('select', { 'aria-label': etiqueta, 'data-foco': 'sel-' + etiqueta }, opciones.map(function (o) { return h('option', { value: o[0] }, o[1]); }));
     s.value = valor; s.addEventListener('change', function () { clearTimeout(temporizadorBusqueda); cambiar(s.value); S.pagina = 1; cargar(true, true); });
     return h('label', { class: 'campo-corto' }, [etiqueta, s]);
   }
   var personas = [['', 'Todas'], ['Sistema', 'El programa (servicio del ordenador)'], ['Supabase (a mano)', 'Supabase (a mano)']]
     .concat(d.usuarios.map(function (u) { return [u.email, (u.nombre ? u.nombre + ' · ' : '') + u.email]; }));
   if (S.usuarioHis && !personas.some(function (o) { return o[0] === S.usuarioHis; })) personas.push([S.usuarioHis, S.usuarioHis]);
-  var buscar = h('input', { id: 'busquedaTabla', type: 'search', maxlength: '100', 'aria-label': 'Buscar en el historial', placeholder: 'Buscar ID de documento, dato o valor…' });
+  var buscar = h('input', { id: 'busquedaTabla', type: 'search', maxlength: '100', 'aria-label': 'Buscar en el historial', 'data-foco': 'buscar', placeholder: 'Buscar ID de documento, dato o valor…' });
   buscar.value = S.buscar;
   buscar.addEventListener('input', function () { S.buscar = buscar.value; S.pagina = 1; ++secuenciaCarga; clearTimeout(temporizadorBusqueda); temporizadorBusqueda = setTimeout(function () { cargar(true, true); }, 350); });
   var hayFiltros = S.buscar || S.usuarioHis || S.empresaHis || S.tipoHis !== 'cambios' || S.periodoHis !== 'mes';
-  var limpiar = h('button', { type: 'button', class: 'boton enlace', hidden: hayFiltros ? null : 'hidden', onclick: function () {
-    S.buscar = ''; S.usuarioHis = ''; S.empresaHis = ''; S.tipoHis = 'cambios'; S.periodoHis = 'mes'; S.pagina = 1; cargar(true);
+  var limpiar = h('button', { type: 'button', class: 'boton enlace suelto', hidden: hayFiltros ? null : 'hidden', onclick: function () {
+    S.buscar = ''; S.usuarioHis = ''; S.empresaHis = ''; S.tipoHis = 'cambios'; S.periodoHis = 'mes'; S.pagina = 1; S.focoPendiente = 'buscar'; cargar(true);
   } }, 'Quitar filtros');
 
   // Excel: todo lo filtrado (se lee por páginas de 1000)
   var estadoX = h('span', { class: 'estado-excel', role: 'status' });
   var excel = h('button', { type: 'button', class: 'boton descarga', onclick: async function () {
-    excel.disabled = true; estadoX.textContent = 'Preparando…';
+    botonOcupado(excel, true); estadoX.textContent = 'Preparando…';
     try {
       var r = await consultaTodo(function () { return consultaHistorial(d.filtros); }), filas = r.data || [];
       var X = await prepararExcel(), libro = new X.Workbook(); libro.creator = 'MCD';
@@ -2431,7 +2658,7 @@ function vHistorial(v, d) {
       await guardarLibro(libro, ['MCD', 'Historial', nombrePeriodo(S.periodoHis), new Date().toISOString().slice(0, 10)].join('_'));
       estadoX.textContent = (r.count || 0) > filas.length ? 'Descargadas las ' + filas.length + ' más recientes de ' + r.count + '. Acota las fechas para el resto.' : 'Descargado';
     } catch (e) { estadoX.textContent = 'No se ha descargado: ' + mensajeError(e); }
-    finally { excel.disabled = false; }
+    finally { botonOcupado(excel, false); }
   } }, [iconoPanel('excel'), 'Descargar Excel']);
 
   v.appendChild(h('div', { class: 'herramientas' }, [
@@ -2449,7 +2676,7 @@ function vHistorial(v, d) {
   }
   tabla(cuerpo, ['Fecha y hora', 'Persona', 'Acción', 'Documento', 'Dato', { t: 'Cambio (antes → después)', largo: 1 }], d.filas.map(function (x) {
     var correo = texto(x.usuario), nombre = nombres[correo.toLowerCase()];
-    return {
+    return { clave: 'his-' + x.id,
       abrir: sePuedeAbrir(x) ? function () { abrirDesdeHistorial(x); } : null,
       celdas: [fechaHora(x.fecha), h('span', { title: correo }, nombre || correo || '—'),
         h('span', { class: 'pill ' + (/Descart|fallida|sin permiso|Borrado/.test(x.accion || '') ? 'error' : x.accion === 'Entrada' ? 'ok' : CONSULTAS_HISTORIAL.indexOf(x.accion) >= 0 || PROGRAMA_HISTORIAL.indexOf(x.accion) >= 0 ? '' : 'marca') }, nombreAccion(x.accion)),
@@ -2477,9 +2704,10 @@ function historialDocumento(empresa, id) {
         return h('li', {}, [h('span', { class: 'cuando' }, fechaHora(x.fecha)), ' · ', h('b', {}, quien), ' · ', nombreAccion(x.accion)].concat(
           consultaDoc ? [' (' + etiquetaCampo(x) + ')'] : [': ', h('i', {}, etiquetaCampo(x)), ' ', celdaCambio(x)]));
       })));
-      lista.appendChild(h('button', { type: 'button', class: 'boton enlace', onclick: function () {
+      lista.appendChild(h('button', { type: 'button', class: 'boton enlace suelto', onclick: function () {
         cerrarModal(); if (document.getElementById('modal').classList.contains('abierto')) return;
         clearTimeout(temporizadorBusqueda);
+        S.enfocarTitulo = true; S.focoPendiente = null;        // (23-nov-2026, accesibilidad) el foco va al título de la sección nueva
         S.vista = 'historial'; S.buscar = id; S.tipoHis = ''; S.periodoHis = ''; S.usuarioHis = ''; S.empresaHis = ''; S.pagina = 1; pintarMenu(); cargar(true); window.scrollTo(0, 0);
       } }, 'Ver en la pantalla Historial'));
     }).catch(function (e) { cargado = false; lista.textContent = ''; lista.appendChild(h('p', { class: 'vacio' }, 'No se ha podido cargar: ' + mensajeError(e))); });
@@ -2488,13 +2716,17 @@ function historialDocumento(empresa, id) {
 }
 
 function exportarOriginales(v) {
-  var empresaExportar = h('select', { 'aria-label': 'Empresa de los originales' }, EMPRESAS.map(function (e) { return h('option', { value: e }, e); })), mesExportar = h('input', { type: 'month', 'aria-label': 'Mes de los originales' }); mesExportar.value = S.mes;
-  var estado = h('div', { class: 'mensaje' });
-  v.appendChild(h('div', { class: 'tarjeta' }, [h('h3', {}, 'Exportar facturas para la gestoría'), h('p', { class: 'sub' }, 'Se descargan los archivos originales del mes elegido en un ZIP.'),
-    h('div', { class: 'en-linea' }, [empresaExportar, mesExportar, h('button', { class: 'boton', onclick: function () { exportar(empresaExportar.value, mesExportar.value, estado); } }, 'Descargar originales ZIP')]), estado]));
+  // (23-nov-2026, accesibilidad) empresa y mes con su nombre escrito encima; el mes es obligatorio y un error lo señala;
+  // el apartado es un h2 (va justo debajo del h1 de la sección)
+  var empresaExportar = h('select', { 'aria-label': 'Empresa de los originales' }, EMPRESAS.map(function (e) { return h('option', { value: e }, e); }));
+  var mesExportar = h('input', { type: 'month', 'aria-label': 'Mes de los originales (AAAA-MM)', placeholder: 'AAAA-MM', pattern: '\\d{4}-\\d{2}', required: 'required' }); mesExportar.value = S.mes;
+  var estado = h('div', { class: 'mensaje', id: 'msgExportar', role: 'status' });
+  v.appendChild(h('div', { class: 'tarjeta' }, [h('h2', { class: 'subtitulo' }, 'Exportar facturas para la gestoría'), h('p', { class: 'sub' }, 'Se descargan los archivos originales del mes elegido en un ZIP.'),
+    h('div', { class: 'en-linea' }, [h('label', { class: 'campo-corto' }, ['Empresa', empresaExportar]), h('label', { class: 'campo-corto' }, ['Mes (obligatorio)', mesExportar]),
+      h('button', { class: 'boton', 'data-foco': 'exportar-zip', onclick: function () { exportar(empresaExportar.value, mesExportar.value, estado, mesExportar); } }, 'Descargar originales ZIP')]), estado]));
 }
-function exportar(empresa, mes, estado) {
-  if (!/^\d{4}-\d{2}$/.test(mes)) { estado.className = 'mensaje error'; estado.textContent = 'Selecciona el mes.'; return; }
+function exportar(empresa, mes, estado, campoMes) {
+  if (!/^\d{4}-\d{2}$/.test(mes)) { mensajeEn(estado, 'Selecciona el mes (AAAA-MM).', 'error'); campoConError(campoMes, 'msgExportar'); return; }
   estado.className = 'mensaje'; estado.textContent = 'Preparando la exportación…';
   if (!window.JSZip) { estado.className = 'mensaje error'; estado.textContent = 'No se ha podido cargar el programa que hace el ZIP. Comprueba la conexión a internet y recarga la página.'; return; }
   var zip = new JSZip(), total = 0, faltan = [], enElOrdenador = [];
@@ -2562,30 +2794,54 @@ function siguienteMes(m) { var a = Number(m.slice(0, 4)), n = Number(m.slice(5, 
 // ---------------------------------------------------------------------
 // Tabla genérica y ficha de detalle
 // ---------------------------------------------------------------------
-function tabla(contenedor, columnas, filas, tituloFicha) {
+// (23-nov-2026, accesibilidad) Texto de un elemento sin lo que está escondido para el lector (aria-hidden: dibujos, miniaturas)
+function textoVisible(el) {
+  var copia = el.cloneNode(true);
+  [].forEach.call(copia.querySelectorAll('[aria-hidden="true"]'), function (x) { x.remove(); });
+  return copia.textContent.replace(/\s+/g, ' ').trim();
+}
+// nombre (opcional): cómo se llama la tabla para el lector de pantalla. Si no se da, se usa el título que va justo
+// antes (h2/h3) o, si no hay, el nombre de la sección.
+function tabla(contenedor, columnas, filas, tituloFicha, nombre) {
   if (!filas.length) { contenedor.appendChild(h('div', { class: 'tarjeta vacio' }, 'No hay datos que mostrar.')); return; }
   function clases(c) { return [c.num ? 'num' : '', c.largo ? 'largo' : ''].join(' ').trim(); }
-  var cab = h('tr', {}, columnas.map(function (c) { return h('th', { class: clases(c), scope: 'col' }, c.t !== undefined ? c.t : c); }));
-  var cuerpo = h('tbody', {}, filas.map(function (f) {
-    var tr = h('tr', { class: f.abrir ? 'abrible' : '' }, f.celdas.map(function (c, i) {
+  // (23-nov-2026, accesibilidad) Roles escritos a mano (table, row, cell...): en pantallas de hasta 1100 px cada fila se
+  // pinta como una tarjeta (display:block) y Safari/VoiceOver dejaba de ver la tabla; las cabeceras ya no se quitan
+  // (antes display:none), solo se esconden a la vista.
+  var cab = h('tr', { role: 'row' }, columnas.map(function (c) { return h('th', { class: clases(c), scope: 'col', role: 'columnheader' }, c.t !== undefined ? c.t : c); }));
+  var cuerpo = h('tbody', { role: 'rowgroup' }, filas.map(function (f) {
+    var tr = h('tr', { class: f.abrir ? 'abrible' : '', role: 'row' }, f.celdas.map(function (c, i) {
       var obj = c && c.t !== undefined && !(c instanceof Node);
       var col = columnas[i] || {};
-      return h('td', { class: clases(col), 'data-etiqueta': col.t !== undefined ? col.t : String(col) }, obj ? c.t : c);
+      return h('td', { class: clases(col), role: 'cell', 'data-etiqueta': col.t !== undefined ? col.t : String(col) }, obj ? c.t : c);
     }));
     var mini = f.mini ? cajaMiniatura(f.mini.hoja, f.mini.id, f.mini.huella) : null;      // la miniatura va delante, en la primera celda
     if (f.abrir) {
       tr.addEventListener('click', f.abrir);
-      var celda = tr.cells[0], contenido = celda.textContent.trim();
-      var boton = h('button', { type: 'button', class: 'abrir-fila', 'aria-label': 'Abrir ' + (tituloFicha || 'elemento') + (contenido ? ': ' + contenido : ''), onclick: function (e) { e.stopPropagation(); f.abrir(); } });
+      var celda = tr.cells[0], contenido = textoVisible(celda), titulo = f.tituloFicha || tituloFicha || 'elemento';
+      // (23-nov-2026, accesibilidad) data-foco: al repintar, el foco vuelve a esta misma fila (por su ID, no por su posición)
+      var clave = f.clave || (f.mini ? f.mini.hoja + '|' + f.mini.id : contenido);
+      var boton = h('button', { type: 'button', class: 'abrir-fila', 'data-foco': 'fila-' + clave, 'aria-label': 'Abrir ' + titulo + (contenido ? ': ' + contenido : ''), onclick: function (e) { e.stopPropagation(); f.abrir(); } });
       if (mini) boton.appendChild(mini);
       while (celda.firstChild) boton.appendChild(celda.firstChild);
       celda.appendChild(boton);
     } else if (mini) tr.cells[0].insertBefore(mini, tr.cells[0].firstChild);
     return tr;
   }));
-  var envoltura = h('div', { class: 'tabla' }, h('table', {}, [h('thead', {}, cab), cuerpo]));
+  var tablaHtml = h('table', { role: 'table' }, [h('thead', { role: 'rowgroup' }, cab), cuerpo]);
+  if (nombre) tablaHtml.setAttribute('aria-label', nombre);
+  else {
+    var previo = contenedor.lastElementChild, pasos = 0;
+    while (previo && pasos < 3 && !/^H[2-4]$/.test(previo.tagName)) { previo = previo.previousElementSibling; pasos++; }
+    if (previo && /^H[2-4]$/.test(previo.tagName)) {
+      if (!previo.id) previo.id = 'titulo-tabla-' + (++tabla.cuenta);
+      tablaHtml.setAttribute('aria-labelledby', previo.id);
+    } else tablaHtml.setAttribute('aria-label', NOMBRES_VISTA[S.vista] || 'Tabla');
+  }
+  var envoltura = h('div', { class: 'tabla' }, tablaHtml);
   contenedor.appendChild(envoltura); ponerMiniaturas(envoltura);
 }
+tabla.cuenta = 0;
 
 var CAMPOS_FICHA = {
   facturas: [['Datos de la factura', ['tipo_factura', 'num_factura', 'fecha', 'fecha_vencimiento', 'nif', 'nombre', 'matricula', 'concepto']],
@@ -2679,7 +2935,7 @@ function seccionPack(empresa, id, fila, editable) {
     var nombre = h('span', {}, etiquetaDocumento('albaranes', conocidos[otro], otro));
     var boton = h('button', { type: 'button', class: 'boton enlace', onclick: function () {
       if (fichaSucia && fichaSucia() && !confirm('Hay cambios sin guardar en esta ficha. ¿Abrir el otro albarán sin guardarlos?')) return;
-      fichaSucia = null; abrirFichaPorId('Albarán', empresa, 'albaranes', otro);
+      fichaSucia = null; irAOtraFicha('Albarán', empresa, 'albaranes', otro);
     } }, [cajaMiniatura('albaranes', otro), nombre]);
     if (!conocidos[otro]) buscarDocumentos([otro], ['albaranes']).then(function (vistos) {
       if (!vistos[otro]) return;
@@ -2730,8 +2986,14 @@ function seccionPack(empresa, id, fila, editable) {
       var rechazado = conNombre(principalPropuesto);
       return rpc('panel_rechazar_pack', { p_empresa: empresa, p_id: id }).then(function () { terminar('Anotado: ' + id + ' no va con ' + rechazado + ' (no se volverá a proponer)'); });
     };
+    var preguntaRepetido = '¿Es una foto repetida del MISMO papel que ' + principalPropuesto + '?\n\nEste (' + id + ') se descarta: deja de contar y queda apuntado en el historial. ' +
+      'Antes, mira que no tenga algún dato que el otro no tenga (código del conductor, referencia…).';
+    var descartarRepetido = function () {
+      return rpc('panel_descartar', { p_empresa: empresa, p_hoja: 'albaranes', p_id: id }).then(function () { terminar('Descartado ' + id + ': era una foto repetida de ' + conNombre(principalPropuesto)); });
+    };
     var botonesPropuesta = [comparar(principalPropuesto, 'Este papel', 'El albarán propuesto', {
-      pregunta: '¿Este papel va con el albarán propuesto?' + (motivo ? ' Motivo del programa: ' + motivo + '.' : ''), si: juntarConPropuesto, no: rechazarPropuesto })];
+      pregunta: '¿Este papel va con el albarán propuesto?' + (motivo ? ' Motivo del programa: ' + motivo + '.' : ''), si: juntarConPropuesto, no: rechazarPropuesto,
+      repetido: descartarRepetido, repetidoTexto: 'Es el mismo papel repetido: descartar este (' + id + ')', repetidoPregunta: preguntaRepetido })];
     if (editable) {
       var si = h('button', { type: 'button', class: 'boton principal', onclick: function () {
         si.disabled = no.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Juntando…';
@@ -2741,7 +3003,12 @@ function seccionPack(empresa, id, fila, editable) {
         si.disabled = no.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Guardando…';
         rechazarPropuesto().catch(function (e) { si.disabled = no.disabled = false; fallo(e); });
       } }, 'No va con ese');
-      botonesPropuesta.unshift(si, no);
+      var rep = h('button', { type: 'button', class: 'boton', onclick: function () {
+        if (!confirm(preguntaRepetido)) return;
+        si.disabled = no.disabled = rep.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Descartando el repetido…';
+        descartarRepetido().catch(function (e) { si.disabled = no.disabled = rep.disabled = false; fallo(e); });
+      } }, 'Es el mismo papel repetido');
+      botonesPropuesta.unshift(si, no, rep);
     }
     bloque.appendChild(h('div', { class: 'en-linea' }, botonesPropuesta));
     caja.appendChild(bloque);
@@ -2812,12 +3079,21 @@ function seccionPack(empresa, id, fila, editable) {
     function coincide(x, buscado) {
       return [x.id_doc, x.num_albaran, x.nombre, x.destino, x.origen, x.referencias, x.referencia_facturacion, x.codigo_conductor].some(function (v) { return texto(v).toLowerCase().indexOf(buscado) >= 0; });
     }
+    // (23-nov-2026, accesibilidad) La lista que sale debajo del buscador se anuncia: el campo dice que abre una lista
+    // (aria-expanded, aria-controls) y un aviso dice cuántos albaranes han salido y cómo marcarlos.
+    function verLista(ul, campo, si) { ul.hidden = !si; campo.setAttribute('aria-expanded', String(!!si)); }
+    function decirCuantos(campo, t) {
+      var aviso = document.getElementById(campo.getAttribute('aria-describedby') || '');
+      if (aviso && aviso.textContent !== t) aviso.textContent = t;
+    }
     function pintarElegir(ul, campo, varios) {
       var buscado = campo.value.trim().toLowerCase(), todas = candidatos.filter(function (x) { return !buscado || coincide(x, buscado); }), filas = todas.slice(0, 8);
-      ul.textContent = ''; ul.hidden = false;
+      ul.textContent = ''; verLista(ul, campo, true);
       if (!cargados) { ul.appendChild(h('li', { class: 'sub' }, 'Buscando albaranes…')); return; }
-      if (!candidatos.length) { ul.appendChild(h('li', { class: 'sub' }, 'No hay otros albaranes sueltos en ' + empresa + '.')); return; }
-      if (!filas.length) { ul.appendChild(h('li', { class: 'sub' }, 'Ninguno coincide con «' + campo.value.trim() + '». Prueba con su número, el nombre o el destino.')); return; }
+      if (!candidatos.length) { ul.appendChild(h('li', { class: 'sub' }, 'No hay otros albaranes sueltos en ' + empresa + '.')); decirCuantos(campo, 'No hay otros albaranes sueltos.'); return; }
+      if (!filas.length) { ul.appendChild(h('li', { class: 'sub' }, 'Ninguno coincide con «' + campo.value.trim() + '». Prueba con su número, el nombre o el destino.')); decirCuantos(campo, 'Ninguno coincide.'); return; }
+      decirCuantos(campo, todas.length + (todas.length === 1 ? ' albarán encontrado' : ' albaranes encontrados') + (todas.length > filas.length ? ' (se ven ' + filas.length + ')' : '') +
+        (varios ? '; márcalos con la tecla Espacio.' : '; elige uno con la tecla Espacio.'));
       filas.forEach(function (x) {
         var entrada = h('input', { type: varios ? 'checkbox' : 'radio', name: varios ? null : 'elegirPrincipal', value: x.id_doc });
         entrada.checked = varios ? !!marcados[x.id_doc] : elegido === x.id_doc;
@@ -2836,8 +3112,9 @@ function seccionPack(empresa, id, fila, editable) {
       campo.addEventListener('focus', pintar); campo.addEventListener('input', pintar);
     }
     // 1) Añadir anexos a este albarán (se pueden marcar varios)
-    var nuevos = h('input', { type: 'text', id: 'campoAnexos', autocomplete: 'off', spellcheck: 'false', placeholder: 'Busca por número, nombre o destino' });
-    var listaNuevos = h('ul', { class: 'elegir-pack', hidden: 'hidden', 'aria-label': 'Albaranes que se pueden añadir a este pack' });
+    var nuevos = h('input', { type: 'text', id: 'campoAnexos', autocomplete: 'off', spellcheck: 'false', placeholder: 'Busca por número, nombre o destino',
+      'aria-controls': 'listaAnexos', 'aria-expanded': 'false', 'aria-describedby': 'cuantosAnexos' });
+    var listaNuevos = h('ul', { class: 'elegir-pack', id: 'listaAnexos', hidden: 'hidden', 'aria-label': 'Albaranes que se pueden añadir a este pack' });
     var anadir = h('button', { type: 'button', class: 'boton', onclick: function () {
       var ids = Object.keys(marcados), tecleados = escritos(nuevos);
       if (!ids.length && tecleados.length && tecleados.every(pareceId)) ids = tecleados.map(function (x) { return x.toUpperCase(); });
@@ -2851,15 +3128,17 @@ function seccionPack(empresa, id, fila, editable) {
       }).catch(function (e) {
         aviso.className = 'mensaje-ficha fallo'; aviso.textContent = (hechos.length ? 'Añadido: ' + hechos.join(', ') + '. ' : '') + mensajeError(e);
       }).then(function () {
-        anadir.disabled = false; marcados = {}; pedido = null; cargados = false; listaNuevos.hidden = true; listaPrincipal.hidden = true;   // la lista de sueltos ha cambiado
+        anadir.disabled = false; marcados = {}; pedido = null; cargados = false; verLista(listaNuevos, nuevos, false); verLista(listaPrincipal, principal, false);   // la lista de sueltos ha cambiado
         pintarAnexos(); cargar(false);
       });
     } }, 'Añadir al pack');
     conEnter(nuevos, anadir); conLista(nuevos, listaNuevos, true);
-    caja.appendChild(h('div', { class: 'campo-ficha fila-pack' }, [h('label', { for: 'campoAnexos' }, 'Añadir papeles que van con este albarán'), h('div', { class: 'en-linea' }, [nuevos, anadir]), listaNuevos]));
+    caja.appendChild(h('div', { class: 'campo-ficha fila-pack' }, [h('label', { for: 'campoAnexos' }, 'Añadir papeles que van con este albarán'), h('div', { class: 'en-linea' }, [nuevos, anadir]),
+      h('span', { class: 'sub', id: 'cuantosAnexos', role: 'status' }), listaNuevos]));
     // 2) O al revés: este papel acompaña a otro albarán
-    var principal = h('input', { type: 'text', id: 'campoPrincipal', autocomplete: 'off', spellcheck: 'false', placeholder: 'Busca por número, nombre o destino' });
-    var listaPrincipal = h('ul', { class: 'elegir-pack', hidden: 'hidden', 'aria-label': 'Albaranes con los que puede ir este papel' });
+    var principal = h('input', { type: 'text', id: 'campoPrincipal', autocomplete: 'off', spellcheck: 'false', placeholder: 'Busca por número, nombre o destino',
+      'aria-controls': 'listaPrincipal', 'aria-expanded': 'false', 'aria-describedby': 'cuantosPrincipal' });
+    var listaPrincipal = h('ul', { class: 'elegir-pack', id: 'listaPrincipal', hidden: 'hidden', 'aria-label': 'Albaranes con los que puede ir este papel' });
     var vaCon = h('button', { type: 'button', class: 'boton', onclick: function () {
       var tecleados = escritos(principal), otro = elegido || (tecleados.length === 1 && pareceId(tecleados[0]) ? tecleados[0].toUpperCase() : '');
       if (!otro) { fallo(new Error('Elige en la lista el albarán principal (el que se factura). Si no sale, escribe su número, el nombre o el destino para buscarlo.')); principal.focus(); return; }
@@ -2868,7 +3147,8 @@ function seccionPack(empresa, id, fila, editable) {
         .catch(function (e) { vaCon.disabled = false; fallo(e); });
     } }, 'Va con ese albarán');
     conEnter(principal, vaCon); conLista(principal, listaPrincipal, false);
-    caja.appendChild(h('div', { class: 'campo-ficha fila-pack' }, [h('label', { for: 'campoPrincipal' }, '¿Este papel acompaña a otro albarán? Elige el principal (el que se factura)'), h('div', { class: 'en-linea' }, [principal, vaCon]), listaPrincipal]));
+    caja.appendChild(h('div', { class: 'campo-ficha fila-pack' }, [h('label', { for: 'campoPrincipal' }, '¿Este papel acompaña a otro albarán? Elige el principal (el que se factura)'), h('div', { class: 'en-linea' }, [principal, vaCon]),
+      h('span', { class: 'sub', id: 'cuantosPrincipal', role: 'status' }), listaPrincipal]));
   }
   caja.appendChild(aviso);
   return caja;
@@ -2903,25 +3183,34 @@ function abrirComparacion(op) {
   var volver = h('button', { type: 'button', class: 'boton comparar-volver', onclick: volverDeLaComparacion }, '← Volver a la ficha');
   var acciones = [];
   if (op.respuesta) {
-    var contestar = function (acepta) {
-      si.disabled = no.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = acepta ? 'Juntando…' : 'Guardando…';
-      (acepta ? op.respuesta.si() : op.respuesta.no()).catch(function (e) {
+    var botones = [];
+    var contestar = function (que) {
+      if (que === 'repetido' && !confirm(op.respuesta.repetidoPregunta)) return;
+      botones.forEach(function (b) { b.disabled = true; }); aviso.className = 'mensaje-ficha';
+      aviso.textContent = que === 'si' ? 'Juntando…' : que === 'repetido' ? 'Descartando el repetido…' : 'Guardando…';
+      op.respuesta[que]().catch(function (e) {
         if (comparacion !== mia) return;
-        si.disabled = no.disabled = false; aviso.className = 'mensaje-ficha fallo'; aviso.textContent = mensajeError(e);
+        botones.forEach(function (b) { b.disabled = false; }); aviso.className = 'mensaje-ficha fallo'; aviso.textContent = mensajeError(e);
       });
     };
-    var si = h('button', { type: 'button', class: 'boton principal', onclick: function () { contestar(true); } }, 'Sí, va con este');
-    var no = h('button', { type: 'button', class: 'boton', onclick: function () { contestar(false); } }, 'No va con este');
-    acciones.push(si, no);
+    var si = h('button', { type: 'button', class: 'boton principal', onclick: function () { contestar('si'); } }, 'Sí, va con este');
+    var no = h('button', { type: 'button', class: 'boton', onclick: function () { contestar('no'); } }, 'No va con este');
+    botones.push(si, no);
+    // (23-nov-2026) Dos fotos del MISMO papel: no es otra hoja del pack, es un repetido. Se descarta uno (queda en el historial)
+    if (op.respuesta.repetido) botones.push(h('button', { type: 'button', class: 'boton', onclick: function () { contestar('repetido'); } }, op.respuesta.repetidoTexto));
+    acciones.push.apply(acciones, botones);
   }
   acciones.push(volver);
   function columna(doc) {
     var titulo = h('span', { class: 'comparar-nombre' }, etiquetaDocumento('albaranes', doc.fila, doc.id));
-    var datos = h('dl', { class: 'comparar-datos' }, h('dd', { class: 'sub' }, 'Cargando sus datos…'));
+    // (23-nov-2026, accesibilidad) «Cargando…» y «No se encuentra» van en un párrafo aparte: un dd sin su dt no es válido
+    var avisoDatos = h('p', { class: 'sub' }, 'Cargando sus datos…');
+    var datos = h('dl', { class: 'comparar-datos', hidden: 'hidden' });
     var visor = h('div', { class: 'visor-documento comparar-visor' }, h('p', { class: 'vacio' }, 'Buscando el archivo del documento…'));
     doc.pintar = function (otraFila) {             // el resumen, con «igual» donde los dos dicen lo mismo
       datos.textContent = '';
-      if (!doc.fila) { datos.appendChild(h('dd', { class: 'sub' }, 'No se encuentra este albarán (puede que ya no exista).')); return; }
+      if (!doc.fila) { datos.hidden = true; avisoDatos.hidden = false; avisoDatos.textContent = 'No se encuentra este albarán (puede que ya no exista).'; return; }
+      avisoDatos.hidden = true; datos.hidden = false;
       titulo.textContent = ''; titulo.appendChild(etiquetaDocumento('albaranes', doc.fila, doc.id));
       CAMPOS_COMPARAR.forEach(function (c) {
         var v = texto(doc.fila[c[0]]).trim(), w = otraFila ? texto(otraFila[c[0]]).trim() : '';
@@ -2933,7 +3222,7 @@ function abrirComparacion(op) {
     };
     doc.visor = visor;
     return h('section', { class: 'comparar-doc', 'aria-label': doc.papel + ' ' + doc.id }, [
-      h('h4', {}, [h('span', { class: 'pill marca' }, doc.papel), titulo]), datos, visor]);
+      h('h4', {}, [h('span', { class: 'pill marca' }, doc.papel), titulo]), avisoDatos, datos, visor]);
   }
   function sinVista(visor, t) { if (comparacion !== mia) return; visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, t || 'La vista previa no está disponible.')); }
   // El archivo de cada uno: el original (o la copia tachada si no hay original), como en la ficha y apuntado en el historial
@@ -3003,7 +3292,7 @@ function ficha(titulo, fila, contexto) {
   var base = Object.assign({}, fila), entradas = {}, pendientes = 0;
   var editable = !!(hoja && id && (S.rol === 'Revisor' || S.rol === 'Administrador'));
   var grupos = CAMPOS_FICHA[hoja] || [], conocidos = []; grupos.forEach(function (g) { conocidos = conocidos.concat(g[1]); });
-  var formulario = h('form', { 'aria-label': 'Datos del documento' }), mensaje = h('div', { class: 'mensaje-ficha', role: 'status', 'aria-live': 'polite' });
+  var formulario = h('form', { 'aria-label': 'Datos del documento' }), mensaje = h('div', { class: 'mensaje-ficha', id: 'mensajeFicha', role: 'status', 'aria-live': 'polite' });
   var estado = pillEstado(fila.estado || 'Sin estado'), indicador = h('span', { class: 'cambios-ficha' }, editable ? 'Sin cambios pendientes' : 'Consulta de solo lectura');
   var pie = h('div', { class: 'pie-revision' }, [indicador, mensaje]);
   var opcionesDocumento = h('div', { class: 'opciones-documento' }), visor = h('div', { class: 'visor-documento' }, h('p', { class: 'vacio' }, 'Buscando el archivo del documento…'));
@@ -3038,7 +3327,12 @@ function ficha(titulo, fila, contexto) {
   function marcar(c, caja) {
     if (!marcas[c]) return caja;
     caja.classList.add('campo-revisar');
-    caja.appendChild(h('span', { class: 'motivo-campo' }, marcas[c].join(' · ')));
+    // (23-nov-2026, accesibilidad) el motivo queda unido a su casilla (aria-describedby): antes el lector decía «no válido»
+    // sin decir por qué («Las cuentas no cuadran»)
+    var idm = 'motivo-' + c;
+    caja.appendChild(h('span', { class: 'motivo-campo', id: idm }, marcas[c].join(' · ')));
+    var e = caja.querySelector('input,select,textarea');
+    if (e) { e.setAttribute('aria-describedby', idm); e.setAttribute('data-revisar', 'true'); }
     return caja;
   }
   grupos.forEach(function (grupo, i) {
@@ -3084,9 +3378,10 @@ function ficha(titulo, fila, contexto) {
   function ocupado(v) { guardandoFicha = v; formulario.querySelectorAll('input,select,textarea').forEach(function (e) { e.disabled = v; }); if (marcar) marcar.disabled = v; if (descartar) descartar.disabled = v; actualizarPendientes(); }
   function guardarCambios(revisar) {
     if (guardandoFicha) return;
-    var cambios = cambiosActuales(), esperados = { estado: base.estado === undefined ? null : base.estado };
-    try { Object.keys(cambios).forEach(function (c) { if (CAMPOS_IMPORTE.indexOf(c) >= 0) cambios[c] = importeEscrito(cambios[c], ETIQUETAS[c] || c); }); }
-    catch (e) { mensaje.className = 'mensaje-ficha fallo'; mensaje.textContent = e.message; return; }
+    var cambios = cambiosActuales(), esperados = { estado: base.estado === undefined ? null : base.estado }, campoMal = null;
+    try { Object.keys(cambios).forEach(function (c) { campoMal = c; if (CAMPOS_IMPORTE.indexOf(c) >= 0) cambios[c] = importeEscrito(cambios[c], ETIQUETAS[c] || c); }); }
+    // (23-nov-2026, accesibilidad) el importe mal escrito queda marcado, unido al mensaje que dice cómo arreglarlo, y con el foco
+    catch (e) { mensaje.className = 'mensaje-ficha fallo'; mensaje.textContent = e.message; campoConError(entradas[campoMal], 'mensajeFicha'); return; }
     Object.keys(cambios).forEach(function (c) { esperados[c] = base[c] === undefined ? null : base[c]; });
     if (!revisar && !Object.keys(cambios).length) return;
     mensaje.className = 'mensaje-ficha'; mensaje.textContent = 'Guardando cambios…'; ocupado(true);
@@ -3139,16 +3434,22 @@ function ficha(titulo, fila, contexto) {
   }
   // «Ampliar formulario» y «Ver documento en grande» se excluyen: antes, pulsando los dos, la ficha se quedaba en
   // blanco (cada modo escondía una mitad). Ahora poner uno quita el otro y los dos botones dicen lo que harán.
+  // (23-nov-2026, accesibilidad) «Ampliar formulario» ya no lleva aria-pressed: como su texto cambia («Ver documento y
+  // datos»), el lector decía cosas como «Ver documento y datos, pulsado». Ahora el texto dice siempre lo que hará.
   function modoFicha(modo) {
     var caja = document.getElementById('caja');
     caja.classList.toggle('modo-datos', modo === 'datos'); caja.classList.toggle('modo-documento', modo === 'documento');
-    ampliar.setAttribute('aria-pressed', String(modo === 'datos')); ampliar.textContent = modo === 'datos' ? 'Ver documento y datos' : 'Ampliar formulario';
+    ampliar.textContent = modo === 'datos' ? 'Ver documento y datos' : 'Ampliar formulario';
     caja.querySelectorAll('.boton-en-grande').forEach(function (b) { b.textContent = modo === 'documento' ? 'Volver a los datos' : 'Ver documento en grande'; });
   }
-  var ampliar = h('button', { class: 'boton', 'aria-pressed': 'false', onclick: function () {
+  var ampliar = h('button', { type: 'button', class: 'boton', onclick: function () {
     modoFicha(document.getElementById('caja').classList.contains('modo-datos') ? '' : 'datos');
   } }, 'Ampliar formulario');
+  // abrirFichaPorId abre primero «Cargando…» con abrirModal: el camino de vuelta se conserva hasta aquí
+  var veniaDeFicha = historialFichas.length > 0 && document.querySelector('#caja .volver-ficha');
+  if (veniaDeFicha) abriendoDesdeFicha = true;
   abrirModal(tituloFicha(titulo, hoja, fila), h('div', { class: 'contenido-revision' }, [zona, pie]), ampliar);
+  if (hoja && id) fichaActual = { titulo: titulo, empresa: empresa, hoja: hoja, id: id };
   document.getElementById('caja').classList.add('revision-amplia');
   fichaSucia = function () { return editable && pendientes > 0; }; actualizarPendientes();
   // Archivos del documento: original y copia tachada (en el almacén de Supabase)
@@ -3159,6 +3460,8 @@ function ficha(titulo, fila, contexto) {
     var pedidoVisor = 0;                    // si se pulsa "Original" y enseguida "Copia tachada", manda la última pulsación
     function mostrar(tipo, archivo) {
       var mio = ++pedidoVisor;
+      // (23-nov-2026, accesibilidad) «Original» y «Copia tachada» dicen cuál se está viendo (aria-pressed)
+      [].forEach.call(opcionesDocumento.querySelectorAll('button[data-tipo]'), function (b) { b.setAttribute('aria-pressed', String(b.getAttribute('data-tipo') === tipo)); });
       if (!archivo.enWeb) {
         cerrarVisor();
         avisoEnElOrdenador(visor, archivo.pedido, archivo.buscar, function (traido) {
@@ -3178,7 +3481,7 @@ function ficha(titulo, fila, contexto) {
         if (S.rol === 'Administrador') estadoArchivo.appendChild(h('button', { class: 'boton', onclick: function () { descargar(archivo.ruta, archivo.nombre); } }, 'Descargar'));
       }).catch(function () { if (numero !== secuenciaFicha || mio !== pedidoVisor) return; visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, 'La vista previa no está disponible. Puedes continuar revisando los datos.')); });
     }
-    [['Original', 'original', 'original'], ['Copia tachada', 'tachado', 'tachado']].forEach(function (x) { if (d[x[2]]) opcionesDocumento.appendChild(h('button', { class: 'boton', type: 'button', onclick: function () { mostrar(x[1], d[x[2]]); } }, x[0])); });
+    [['Original', 'original', 'original'], ['Copia tachada', 'tachado', 'tachado']].forEach(function (x) { if (d[x[2]]) opcionesDocumento.appendChild(h('button', { class: 'boton', type: 'button', 'data-tipo': x[1], 'aria-pressed': 'false', onclick: function () { mostrar(x[1], d[x[2]]); } }, x[0])); });
     // Revisión manual: tacharlo a mano y enviarlo a la IA (PDF o foto)
     if (hoja === 'revision' && editable && d.original && ENVIADOS_TACHADO[id]) {
       panelDocumento.appendChild(h('p', { class: 'ayuda-campo aviso-tachado' }, 'Ya se envió la copia tachada a la IA. En un minuto saldrá de esta lista y aparecerá como factura, albarán o ticket.'));
@@ -3277,8 +3580,10 @@ function abrirTachado(revId, archivo) {
   var zona = h('div', { class: 'tachado-paginas' }, estado);
   var contador = h('span', { class: 'tachado-contador' }, '0 recuadros');
   var historia = [], paginas = [];
-  var deshacer = h('button', { type: 'button', class: 'boton', disabled: 'disabled', onclick: function () {
-    var i = historia.pop(); if (i === undefined) return; paginas[i].recuadros.pop(); pintarPagina(paginas[i]); actualizar(); } }, 'Deshacer el último');
+  function deshacerUltimo() {
+    var i = historia.pop(); if (i === undefined) return false; paginas[i].recuadros.pop(); pintarPagina(paginas[i]); actualizar(); return true;
+  }
+  var deshacer = h('button', { type: 'button', class: 'boton', disabled: 'disabled', onclick: function () { deshacerUltimo(); } }, 'Deshacer el último');
   var confirma = h('input', { type: 'checkbox', id: 'tachadoConfirma' });
   var enviar = h('button', { type: 'button', class: 'boton principal', disabled: 'disabled', onclick: function () { enviarTachado(); } }, 'Enviar a la IA');
   var mensaje = h('div', { class: 'mensaje-ficha', role: 'status' });
@@ -3288,25 +3593,81 @@ function abrirTachado(revId, archivo) {
     var n = total(); contador.textContent = n + (n === 1 ? ' recuadro' : ' recuadros');
     deshacer.disabled = !historia.length; enviar.disabled = !confirma.checked || !paginas.length;
   }
+  // Lo que se pinta en la pantalla (NO en la copia que se envía: esa sale solo de p.base y p.recuadros, ver enviarTachado).
+  // (23-nov-2026, accesibilidad) además del recuadro a medio dibujar: la primera esquina ya puesta (una cruz) y, con el
+  // foco en la página, el cursor del teclado (un cuadradito con cruz)
   function pintarPagina(p, previa) {
     var cx = p.vista.getContext('2d'); cx.drawImage(p.base, 0, 0); cx.fillStyle = '#000';
     p.recuadros.forEach(function (r) { cx.fillRect(r[0], r[1], r[2], r[3]); });
+    var grosor = Math.max(2, p.vista.width / 400);
     if (previa) { cx.fillStyle = 'rgba(0,0,0,.65)'; cx.fillRect(previa[0], previa[1], previa[2], previa[3]);
-      cx.strokeStyle = '#e11d48'; cx.lineWidth = Math.max(2, p.vista.width / 400); cx.strokeRect(previa[0], previa[1], previa[2], previa[3]); }
+      cx.strokeStyle = '#e11d48'; cx.lineWidth = grosor; cx.strokeRect(previa[0], previa[1], previa[2], previa[3]); }
+    function cruz(pt, color, lado) {
+      cx.strokeStyle = color; cx.lineWidth = grosor; cx.beginPath();
+      cx.moveTo(pt[0] - lado, pt[1]); cx.lineTo(pt[0] + lado, pt[1]); cx.moveTo(pt[0], pt[1] - lado); cx.lineTo(pt[0], pt[1] + lado); cx.stroke();
+    }
+    if (p.esquina) cruz(p.esquina, '#e11d48', p.vista.width / 40);
+    if (p.conFoco && p.cursor) {
+      var l = p.vista.width / 80;
+      cruz(p.cursor, '#0B3E8F', l); cx.strokeStyle = '#0B3E8F'; cx.lineWidth = grosor; cx.strokeRect(p.cursor[0] - l, p.cursor[1] - l, 2 * l, 2 * l);
+    }
+  }
+  function caja(a, b) { return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1])]; }
+  // Un recuadro nuevo, venga del ratón, del dedo o del teclado: SIEMPRE con la misma regla de siempre (más de 6 puntos de
+  // ancho y de alto, y el mismo margen alrededor). Devuelve si se ha añadido.
+  function anadirRecuadro(p, i, c) {
+    var m = Math.max(2, p.vista.width / 600);                       // un poco de margen alrededor
+    if (!(c[2] > 6 && c[3] > 6)) return false;
+    p.recuadros.push([c[0] - m, c[1] - m, c[2] + 2 * m, c[3] + 2 * m]); historia.push(i);
+    return true;
+  }
+  // (23-nov-2026, accesibilidad) Dos toques o dos pulsaciones de Intro: la primera pone una esquina y la segunda la opuesta.
+  // Antes solo se podía arrastrar, y quien no puede arrastrar (o usa solo el teclado) no podía tachar.
+  function ponerEsquina(p, i, pt) {
+    paginas.forEach(function (o) { if (o !== p && o.esquina) { o.esquina = null; pintarPagina(o); } });   // una esquina a medias en otra página se olvida
+    if (!p.esquina) { p.esquina = pt; pintarPagina(p); anunciar('Esquina 1 puesta en la página ' + (i + 1) + '. Ahora la esquina opuesta.'); return; }
+    var c = caja(p.esquina, pt); p.esquina = null;
+    var hecho = anadirRecuadro(p, i, c);
+    pintarPagina(p); actualizar();
+    anunciar(hecho ? 'Recuadro ' + total() + ' añadido en la página ' + (i + 1) + '.' : 'Recuadro demasiado pequeño: no se ha añadido. Vuelve a poner la primera esquina.');
   }
   function prepararDibujo(p, i) {
-    var inicio = null;
+    var inicio = null, enPantalla = null;
     function punto(e) { var r = p.vista.getBoundingClientRect(); return [(e.clientX - r.left) * p.vista.width / r.width, (e.clientY - r.top) * p.vista.height / r.height]; }
-    function caja(a, b) { return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1])]; }
-    p.vista.addEventListener('pointerdown', function (e) { e.preventDefault(); inicio = punto(e); p.vista.setPointerCapture(e.pointerId); });
-    p.vista.addEventListener('pointermove', function (e) { if (inicio) pintarPagina(p, caja(inicio, punto(e))); });
+    p.vista.addEventListener('pointerdown', function (e) { e.preventDefault(); inicio = punto(e); enPantalla = [e.clientX, e.clientY]; p.vista.setPointerCapture(e.pointerId); });
+    p.vista.addEventListener('pointermove', function (e) {
+      if (inicio) pintarPagina(p, caja(inicio, punto(e)));
+      else if (p.esquina && e.pointerType === 'mouse') pintarPagina(p, caja(p.esquina, punto(e)));   // con una esquina puesta, se ve cómo quedará
+    });
     p.vista.addEventListener('pointerup', function (e) {
-      if (!inicio) return; var c = caja(inicio, punto(e)); inicio = null;
-      var m = Math.max(2, p.vista.width / 600);                       // un poco de margen alrededor
-      if (c[2] > 6 && c[3] > 6) { p.recuadros.push([c[0] - m, c[1] - m, c[2] + 2 * m, c[3] + 2 * m]); historia.push(i); }
+      if (!inicio) return; var fin = punto(e), c = caja(inicio, fin), movido = Math.hypot(e.clientX - enPantalla[0], e.clientY - enPantalla[1]); inicio = null;
+      if (movido < 6) { ponerEsquina(p, i, fin); return; }             // un toque (sin arrastrar): es una esquina
+      p.esquina = null;
+      anadirRecuadro(p, i, c);
       pintarPagina(p); actualizar();
     });
     p.vista.addEventListener('pointercancel', function () { inicio = null; pintarPagina(p); });
+    // (23-nov-2026, accesibilidad) Con el teclado: las flechas mueven el cursor un 1 % de la página (con Mayúsculas, un 5 %),
+    // Intro (o Espacio) pone una esquina y luego la opuesta, Escape cancela la esquina a medias y Retroceso deshace el último
+    p.vista.addEventListener('focus', function () { p.conFoco = true; if (!p.cursor) p.cursor = [p.vista.width / 2, p.vista.height / 2]; pintarPagina(p); });
+    p.vista.addEventListener('blur', function () { p.conFoco = false; pintarPagina(p); });
+    p.vista.addEventListener('keydown', function (e) {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      var paso = e.shiftKey ? 0.05 : 0.01, dx = 0, dy = 0;
+      if (e.key === 'ArrowLeft') dx = -1; else if (e.key === 'ArrowRight') dx = 1; else if (e.key === 'ArrowUp') dy = -1; else if (e.key === 'ArrowDown') dy = 1;
+      if (dx || dy) {
+        e.preventDefault();
+        p.cursor = [Math.min(p.vista.width, Math.max(0, p.cursor[0] + dx * paso * p.vista.width)), Math.min(p.vista.height, Math.max(0, p.cursor[1] + dy * paso * p.vista.height))];
+        pintarPagina(p, p.esquina ? caja(p.esquina, p.cursor) : null);
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault(); ponerEsquina(p, i, p.cursor.slice());
+      } else if (e.key === 'Escape' && p.esquina) {
+        e.preventDefault(); e.stopPropagation();                      // (sin esquina a medias, Escape cierra la ventana como siempre)
+        p.esquina = null; pintarPagina(p); anunciar('Esquina cancelada.');
+      } else if (e.key === 'Backspace' || e.key === 'Delete') {
+        e.preventDefault(); anunciar(deshacerUltimo() ? 'Último recuadro deshecho. Quedan ' + total() + '.' : 'No hay nada que deshacer.');
+      }
+    });
   }
   async function enviarTachado() {
     var n = total();
@@ -3335,6 +3696,9 @@ function abrirTachado(revId, archivo) {
   var cuerpo = h('div', { class: 'contenido-tachado' }, [
     h('p', { class: 'ayuda-campo' }, 'Arrastra con el ratón o el dedo para tapar en negro los datos personales: DNI o NIE, nombres de conductores, ' +
       'números de cuenta (IBAN), correos y teléfonos de personas. Lo que tapes no lo verá la IA. Los datos de las empresas (nombre, CIF, importes) déjalos a la vista.'),
+    // (23-nov-2026, accesibilidad) otras formas de dibujar el mismo recuadro, sin arrastrar
+    h('p', { class: 'ayuda-campo', id: 'ayudaTachadoTeclado' }, 'También puedes tocar una esquina y después la opuesta. Con el teclado: llega a la página con el tabulador, ' +
+      'mueve el cursor con las flechas (con Mayúsculas va más deprisa), pulsa Intro en una esquina y otra vez en la opuesta. Escape cancela la esquina y Retroceso deshace el último recuadro.'),
     h('div', { class: 'tachado-herramientas' }, [deshacer, contador]), zona,
     h('div', { class: 'pie-revision' }, [h('label', { class: 'casilla tachado-confirma', for: 'tachadoConfirma' }, [confirma,
       ' He revisado todas las páginas y he tapado todos los datos personales']), mensaje, h('div', { class: 'acciones-revision' }, [enviar])])]);
@@ -3347,7 +3711,9 @@ function abrirTachado(revId, archivo) {
     zona.textContent = '';
     lienzos.forEach(function (base, i) {
       var vista = lienzo(base.width, base.height); vista.className = 'tachado-lienzo';
-      vista.setAttribute('aria-label', 'Página ' + (i + 1) + ': arrastra para tapar');
+      // (23-nov-2026, accesibilidad) la página se alcanza con el tabulador, se anuncia como imagen y dice cómo tapar con el teclado
+      vista.setAttribute('role', 'img'); vista.setAttribute('tabindex', '0'); vista.setAttribute('aria-describedby', 'ayudaTachadoTeclado');
+      vista.setAttribute('aria-label', 'Página ' + (i + 1) + ' de ' + lienzos.length + ': arrastra, toca dos esquinas o usa las flechas e Intro para tapar');
       var p = { base: base, vista: vista, recuadros: [] }; paginas.push(p);
       pintarPagina(p); prepararDibujo(p, i);
       zona.appendChild(h('figure', { class: 'tachado-pagina' }, [vista, h('figcaption', {}, 'Página ' + (i + 1) + ' de ' + lienzos.length)]));
@@ -3387,28 +3753,81 @@ function existe(archivo) {
 }
 
 // Aviso breve abajo de la pantalla (por ejemplo, tras marcar un documento como revisado)
-function avisoBreve(texto) {
-  var viejo = document.getElementById('avisoBreve'); if (viejo) viejo.remove();
-  var aviso = h('div', { id: 'avisoBreve', class: 'aviso-flotante', role: 'status' }, [h('span', { class: 'punto ok' }), texto]);
+// (23-nov-2026, accesibilidad) Antes duraba 3,5 s (poco para leer «Ojo: … parece repetido») y era una región viva creada ya
+// con el texto (a menudo no se leía). Ahora: lo lee la región viva fija (anunciar), se queda 8 s como mínimo, no se va
+// mientras el ratón está encima o tiene el foco, tiene «Cerrar aviso» y los «Ojo…» llevan el punto amarillo.
+var SEGUNDOS_AVISO = 8;
+function avisoBreve(texto, tipo) {
+  var viejo = document.getElementById('avisoBreve'); if (viejo) { if (viejo.__parar) viejo.__parar(); viejo.remove(); }
+  var esAviso = tipo === 'aviso' || /^Ojo/.test(String(texto || '')), temporizador = null, encima = false;
+  var cerrar = h('button', { type: 'button', class: 'aviso-cerrar', 'aria-label': 'Cerrar aviso', title: 'Cerrar aviso', onclick: function () { quitar(true); } }, '×');
+  var aviso = h('div', { id: 'avisoBreve', class: 'aviso-flotante' }, [h('span', { class: 'punto ' + (esAviso ? 'aviso' : 'ok'), 'aria-hidden': 'true' }), h('span', { class: 'aviso-texto' }, texto), cerrar]);
+  function quitar(ahora) {
+    clearTimeout(temporizador); if (!aviso.isConnected) return;
+    var teniaFoco = aviso.contains(document.activeElement);
+    if (ahora) aviso.remove(); else { aviso.classList.add('saliendo'); setTimeout(function () { aviso.remove(); }, 400); }
+    if (teniaFoco && focoPerdido() && document.getElementById('modal').classList.contains('abierto')) { var c = document.querySelector('#caja .cerrar-modal'); if (c) c.focus(); }
+  }
+  function programar() { clearTimeout(temporizador); temporizador = setTimeout(function () { if (!encima) quitar(false); }, SEGUNDOS_AVISO * 1000); }
+  aviso.__parar = function () { clearTimeout(temporizador); };
+  aviso.addEventListener('mouseenter', function () { encima = true; clearTimeout(temporizador); });
+  aviso.addEventListener('mouseleave', function () { encima = aviso.contains(document.activeElement); if (!encima) programar(); });
+  aviso.addEventListener('focusin', function () { encima = true; clearTimeout(temporizador); });
+  aviso.addEventListener('focusout', function () { setTimeout(function () { encima = aviso.matches(':hover') || aviso.contains(document.activeElement); if (!encima) programar(); }, 0); });
   document.body.appendChild(aviso);
-  setTimeout(function () { aviso.classList.add('saliendo'); setTimeout(function () { aviso.remove(); }, 400); }, 3500);
+  anunciar(texto);
+  programar();
 }
-function abrirModal(titulo, contenido, extra) {
+// (23-nov-2026) «← Volver a …»: al abrir otro documento desde un enlace de la ficha (un pack, una propuesta), antes se
+// perdía la ficha de partida y había que buscarla otra vez. Ahora se apunta y la cabecera ofrece volver a ella.
+var historialFichas = [], fichaActual = null, abriendoDesdeFicha = false;
+function irAOtraFicha(titulo, empresa, hoja, id) {
+  if (fichaActual && fichaActual.id !== id) historialFichas.push(fichaActual);
+  abriendoDesdeFicha = true; abrirFichaPorId(titulo, empresa, hoja, id);
+}
+function volverAFichaAnterior() {
+  var anterior = historialFichas.pop(); if (!anterior) return;
+  if (fichaSucia && fichaSucia() && !confirm('Hay cambios sin guardar en esta ficha. ¿Volver sin guardarlos?')) { historialFichas.push(anterior); return; }
+  fichaSucia = null; abriendoDesdeFicha = true; abrirFichaPorId(anterior.titulo, anterior.empresa, anterior.hoja, anterior.id);
+}
+// pestana (opcional): lo que se pone en el título de la pestaña del navegador (si no, el tipo y el ID del documento)
+function abrirModal(titulo, contenido, extra, pestana) {
   ++secuenciaFicha; cerrarVisor(); soltarComparacion(); esconderMiniGrande();
-  if (!document.getElementById('modal').classList.contains('abierto')) focoAntesModal = document.activeElement;
+  if (!document.getElementById('modal').classList.contains('abierto')) {
+    focoAntesModal = document.activeElement;
+    // (23-nov-2026, accesibilidad) por si la fila de origen se repinta mientras la ficha está abierta: su clave y la de la de al lado
+    claveAntesModal = claveFoco(focoAntesModal); claveVecinaModal = claveFilaVecina(focoAntesModal);
+  }
   fichaSucia = null; guardandoFicha = false;
   var caja = document.getElementById('caja'); caja.textContent = ''; caja.className = 'caja';
   var cerrar = h('button', { class: 'boton cerrar-modal', onclick: cerrarModal }, 'Cerrar');
-  caja.appendChild(h('div', { class: 'cab' }, [h('h3', { id: 'tituloModal' }, titulo), extra || null, cerrar]));
+  if (!abriendoDesdeFicha) historialFichas = [];         // abierta desde una lista: empieza un camino nuevo
+  abriendoDesdeFicha = false; fichaActual = null;
+  var anterior = historialFichas[historialFichas.length - 1];
+  var atras = anterior ? h('button', { type: 'button', class: 'boton volver-ficha', 'aria-label': 'Volver a la ficha anterior: ' + anterior.id, onclick: volverAFichaAnterior }, '← Volver a ' + anterior.id) : null;
+  // (23-nov-2026, accesibilidad) el título de la ficha es un h2 (dentro hay h3); se ve igual
+  caja.appendChild(h('div', { class: 'cab' }, [atras, h('h2', { id: 'tituloModal' }, titulo), extra || null, cerrar]));
   caja.appendChild(contenido);
-  document.getElementById('modal').classList.add('abierto'); document.body.style.overflow = 'hidden'; cerrar.focus();
+  document.getElementById('modal').classList.add('abierto'); document.body.style.overflow = 'hidden';
+  fondoInerte(true);                           // (23-nov-2026, accesibilidad) lo de detrás queda inerte mientras la ficha está abierta
+  // (23-nov-2026, accesibilidad) la pestaña del navegador dice qué ficha está abierta: solo el tipo y el ID, nunca el nombre
+  tituloPagina(pestana || (titulo && titulo.getAttribute ? titulo.getAttribute('data-pestana') : null) || (typeof titulo === 'string' ? titulo : 'Ficha'));
+  cerrar.focus();
 }
 function cerrarModal() {
   if (guardandoFicha) return;
   if (fichaSucia && fichaSucia() && !confirm('Hay cambios sin guardar. ¿Cerrar sin guardarlos?')) return;
-  ++secuenciaFicha; fichaSucia = null; cerrarVisor(); soltarComparacion(); document.getElementById('modal').classList.remove('abierto'); document.body.style.overflow = '';
-  if (focoAntesModal && focoAntesModal.isConnected) focoAntesModal.focus();
+  ++secuenciaFicha; fichaSucia = null; cerrarVisor(); soltarComparacion(); historialFichas = []; fichaActual = null;
+  document.getElementById('modal').classList.remove('abierto'); document.body.style.overflow = '';
+  fondoInerte(false); tituloPagina();          // (23-nov-2026, accesibilidad) el fondo vuelve a funcionar y la pestaña dice otra vez la sección
+  // (23-nov-2026, accesibilidad) El foco vuelve a donde estaba. Si esa fila ya no existe (se repintó mientras tanto), a la
+  // misma fila repintada o a la de al lado; y se apunta la de al lado por si la fila desaparece al repintar (por ejemplo,
+  // tras «Guardar y marcar revisado» en Por revisar).
+  if (focoAntesModal && focoAntesModal.isConnected) { S.focoAlternativo = claveFilaVecina(focoAntesModal) || claveVecinaModal; focoAntesModal.focus(); }
+  else if (!devolverFoco(claveAntesModal) && !devolverFoco(claveVecinaModal)) { if (claveAntesModal) enfocarTitulo(); }
+  else S.focoAlternativo = claveFilaVecina(document.activeElement);
 }
+var claveAntesModal = null, claveVecinaModal = null;
 // Solo se cierra al pulsar en el fondo si el clic EMPEZÓ en el fondo: al seleccionar el texto de un campo y soltar el
 // ratón fuera, el navegador da el clic al fondo y la ficha se cerraba (19-nov-2026)
 var pulsadoEnElFondo = false;
@@ -3424,6 +3843,21 @@ document.addEventListener('keydown', function (e) {
   }
 });
 document.getElementById('btnActualizar').addEventListener('click', function () { cargar(true, true); });
+// (23-nov-2026, accesibilidad) «Pausar actualización automática»: el refresco de cada 30 s se puede parar (WCAG 2.2.2). Se
+// recuerda en este navegador. «Actualizar ahora» sigue funcionando con la pausa puesta.
+var CLAVE_PAUSA = 'mcd-pausa-refresco';
+try { S.pausado = localStorage.getItem(CLAVE_PAUSA) === '1'; } catch (e) { S.pausado = false; }
+function pintarPausa() {
+  var b = document.getElementById('btnPausa'), t = document.getElementById('textoRefresco');
+  if (b) b.setAttribute('aria-pressed', String(!!S.pausado));
+  if (t) t.textContent = S.pausado ? 'actualización automática en pausa' : 'se actualiza solo cada 30 segundos';
+}
+document.getElementById('btnPausa').addEventListener('click', function () {
+  S.pausado = !S.pausado;
+  try { if (S.pausado) localStorage.setItem(CLAVE_PAUSA, '1'); else localStorage.removeItem(CLAVE_PAUSA); } catch (e) { /* sin almacenamiento: vale hasta recargar */ }
+  pintarPausa(); anunciar(S.pausado ? 'Actualización automática en pausa' : 'Actualización automática en marcha: cada 30 segundos');
+});
+pintarPausa();
 prepararSubidaGlobal();
 
 // ---------------------------------------------------------------------
@@ -3473,7 +3907,9 @@ var formularioTocado = false;
 document.getElementById('vista').addEventListener('input', function (e) { if (e.target.closest && e.target.closest('.formulario, .formulario-usuario')) formularioTocado = true; });
 document.getElementById('vista').addEventListener('change', function (e) { if (e.target.closest && e.target.closest('.formulario, .formulario-usuario')) formularioTocado = true; });
 setInterval(function () {
+  if (S.pausado) return;                        // (23-nov-2026, accesibilidad) la persona lo ha puesto en pausa
   if (ocupadoConExcel() || formularioTocado) return;
-  var escribiendo = document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
+  // (23-nov-2026, accesibilidad) también con un desplegable con el foco: en Windows, cada flecha cambia su valor
+  var escribiendo = document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
   if (S.rol && !S.denegado && !document.getElementById('modal').classList.contains('abierto') && !escribiendo && !document.hidden) cargar(false);
 }, 30000);

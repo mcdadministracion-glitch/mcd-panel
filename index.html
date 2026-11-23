@@ -35,13 +35,15 @@
     --asfalto:#14171C; --asfalto-2:#232831; --asfalto-linea:#2E343E; --asfalto-texto:#C9CFD8;
     --ok:#1E6B3E; --ok-f:#E1F2E7; --sobre-ok:#FFFFFF; --aviso:#7A4F00; --aviso-f:#FFF1C7; --error:#B42318; --error-f:#FDECEA;
     --cian:#0B7A8F; --cian-suave:#DDF1F4;
+    /* (23-nov-2026, accesibilidad) borde de los campos: antes #B9C0CA (1,83:1 sobre blanco, hace falta 3:1); ahora 3,68:1 */
+    --borde-campo:#7D8693;
     color-scheme:light;
   }
   @media (prefers-color-scheme: dark) { :root { color-scheme:dark;
     --fondo:#0F1216; --panel:#181C22; --texto:#E8EBF0; --suave:#A3ACB9; --borde:#2E343E; --gris-f:#1F242C;
     --marca:#8DB4FF; --marca-fondo:#2D62C4; --marca-fuerte:#3B72D6; --marca-suave:#1A2740;
     --acento-suave:#3A3010; --ok:#7FD6A2; --ok-f:#15301F; --sobre-ok:#0B2415; --aviso:#F2C66D; --aviso-f:#33290F; --error:#F59A91; --error-f:#3A1A17;
-    --cian:#5FD0E2; --cian-suave:#10303A; --sombra:none; } }
+    --cian:#5FD0E2; --cian-suave:#10303A; --sombra:none; --borde-campo:#B9C0CA; } }
   * { box-sizing:border-box; }
   [hidden] { display:none !important; }
   html { scroll-behavior:smooth; -webkit-text-size-adjust:100%; }
@@ -50,6 +52,9 @@
   h1, h2, .rotulo { font-family:var(--letra-rotulo); font-weight:700; text-transform:uppercase; letter-spacing:.01em; }
   .sub { color:var(--suave); font-size:var(--t-s); margin:var(--e05) 0 0; max-width:70ch; }
   .oculto { position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
+  /* (23-nov-2026, accesibilidad) Solo para el lector de pantalla: no se ve, pero se lee (avisos en voz alta, ayudas de teclado).
+     No confundir con .oculto, que es para los campos de archivo. */
+  .solo-lector { position:absolute !important; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0 0 0 0); clip-path:inset(50%); white-space:nowrap; border:0; }
   button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible, label:focus-within.zona-subida,
   label:has(input.oculto:focus-visible), nav .nav-mas:focus-within { outline:3px solid var(--acento); outline-offset:2px; box-shadow:0 0 0 5px var(--asfalto); }
   .saltar { position:fixed; z-index:20; top:-100px; left:12px; padding:12px; background:var(--acento); color:var(--asfalto); font-weight:700; }
@@ -153,7 +158,9 @@
   .boton.peligro { background:var(--error-f); color:var(--error); border-color:transparent; } .boton.peligro:hover:not(:disabled) { border-color:var(--error); background:var(--error-f); }
   .boton.enlace { border:0; background:none; color:var(--marca); text-decoration:underline; text-underline-offset:3px; padding:var(--e05) 2px; min-height:0; white-space:normal; text-align:left; overflow-wrap:anywhere; min-width:0; }
   .boton.enlace:hover:not(:disabled) { background:none; text-decoration-thickness:2px; }
-  input, select, textarea { border:1px solid #B9C0CA; background:var(--panel); color:var(--texto); border-radius:var(--radio-s); padding:var(--e1) var(--e15); font:inherit; font-size:var(--t-m); min-height:44px; }
+  /* (23-nov-2026, accesibilidad) botones pequeños sueltos (miga de pan, «Abrir» de una subida, «Quitar filtros»...): al menos 32 px de alto */
+  .miga .abrir-fila, .subida .boton.enlace, .boton.enlace.suelto { min-height:32px; padding:4px 6px; }
+  input, select, textarea { border:1px solid var(--borde-campo); background:var(--panel); color:var(--texto); border-radius:var(--radio-s); padding:var(--e1) var(--e15); font:inherit; font-size:var(--t-m); min-height:44px; }
   input:hover, select:hover, textarea:hover { border-color:var(--suave); }
   input[type=checkbox] { min-height:0; width:20px; height:20px; accent-color:var(--marca-fondo); }
   .en-linea { display:flex; gap:var(--e15); flex-wrap:wrap; align-items:center; }
@@ -306,13 +313,20 @@
   .miga { display:flex; gap:var(--e1); flex-wrap:wrap; margin-bottom:var(--e15); font-size:var(--t-s); align-items:center; } .miga span { color:var(--suave); }
   .fila { display:grid; gap:var(--e2); grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); margin-bottom:var(--e3); }
   main h3 { margin:var(--e3) 0 var(--e15); font-size:var(--t-l); }
+  /* (23-nov-2026, accesibilidad) los apartados de una sección son h2 (antes h3 justo debajo del h1): se ven igual que antes */
+  main h2.subtitulo { margin:var(--e3) 0 var(--e15); font:700 var(--t-l)/1.1 var(--letra); text-transform:none; letter-spacing:normal; }
+  .tarjeta h2.subtitulo { font-size:var(--t-m); margin:0 0 var(--e1); color:var(--marca); }
+  .anio-tickets h2.cab-anio { margin:0 0 var(--e1); }
+  /* Motivo escrito debajo de una píldora (Combustible) y «Ver entero» de un texto largo (Historial) */
+  .con-nota { display:inline-grid; gap:2px; justify-items:end; } .nota-celda { color:var(--suave); font-size:var(--t-xs); white-space:normal; text-align:right; }
+  .ver-entero { display:inline; } .ver-entero > summary { display:inline; font-size:var(--t-xs); } .ver-entero[open] > summary { display:block; }
 
   /* ---------- Ventana de ficha ---------- */
   .modal { position:fixed; inset:0; background:rgba(10,14,20,.62); display:none; align-items:center; justify-content:center; padding:var(--e15); z-index:10; }
   .modal.abierto { display:flex; }
   .caja { background:var(--panel); border-radius:var(--radio); width:min(900px,100%); max-height:92vh; overflow:auto; padding:var(--e3); box-shadow:var(--sombra-alta); }
   .caja .cab { display:flex; align-items:center; gap:var(--e15); margin-bottom:var(--e2); flex-wrap:wrap; }
-  .caja .cab h3 { margin:0; font:700 var(--t-xl)/1.15 var(--letra-rotulo); flex:1 1 14em; min-width:0; overflow-wrap:anywhere; }
+  .caja .cab h2, .caja .cab h3 { margin:0; font:700 var(--t-xl)/1.15 var(--letra-rotulo); text-transform:none; letter-spacing:normal; flex:1 1 14em; min-width:0; overflow-wrap:anywhere; }
   .caja.revision-amplia { width:min(1560px,98vw); max-height:96vh; padding:0; overflow:hidden; display:flex; flex-direction:column; }
   .caja.revision-amplia > .cab { padding:var(--e15) var(--e3); margin:0; border-bottom:1px solid var(--borde); }
   .contenido-revision { min-height:0; display:flex; flex-direction:column; }
@@ -333,7 +347,7 @@
   .aviso-revisar { margin:0 0 var(--e15); padding:var(--e1) var(--e15); border-left:4px solid var(--error); background:var(--error-f); color:var(--texto); font-size:var(--t-s); }
   .campo-revisar input, .campo-revisar select, .campo-revisar textarea, .campo-revisar .valor-ficha { border:2px solid var(--error) !important; background:var(--error-f); }
   .campo-revisar label, .campo-revisar .etiqueta-ficha { color:var(--error); font-weight:600; }
-  .motivo-campo { display:block; margin-top:var(--e05); font-size:var(--t-xs); color:var(--error); }
+  .motivo-campo { display:block; margin-top:var(--e05); font-size:var(--t-s); color:var(--error); }   /* (23-nov-2026, accesibilidad) 14 px */
   /* Secciones que ve cada usuario */
   .secciones-usuario { display:flex; flex-wrap:wrap; gap:var(--e1) var(--e2); border:1px solid var(--borde); border-radius:8px; padding:var(--e1) var(--e15); margin:0; }
   .secciones-usuario legend { padding:0 var(--e05); font-weight:600; }
@@ -341,7 +355,11 @@
   /* position:relative: las hojas miden su altura (offsetTop) desde aquí, no desde la ventana; si no, un visor que queda más
      abajo (el segundo de «Comparar» en el móvil) creía que sus páginas no se veían y no las pintaba (23-nov-2026) */
   .visor-zona { position:relative; flex:1; min-height:0; overflow:auto; background:var(--gris-f); cursor:grab; overscroll-behavior:contain; touch-action:pan-x pan-y; }
-  .visor-zona.arrastrando { cursor:grabbing; user-select:none; } .visor-zona:focus-visible { outline:3px solid var(--acento); outline-offset:-3px; }
+  /* (23-nov-2026, accesibilidad) el foco del visor lleva también el anillo oscuro: el amarillo solo sobre gris claro casi no se veía (1,38:1) */
+  .visor-zona.arrastrando { cursor:grabbing; user-select:none; } .visor-zona:focus-visible { outline:3px solid var(--acento); outline-offset:-3px; box-shadow:inset 0 0 0 6px var(--asfalto); }
+  pre.visor-texto[tabindex]:focus-visible { outline:3px solid var(--acento); outline-offset:-3px; box-shadow:inset 0 0 0 6px var(--asfalto); }
+  /* (23-nov-2026, accesibilidad) la página que se tacha a mano también se puede usar con el teclado: se ve cuando tiene el foco */
+  .tachado-lienzo:focus-visible { outline:3px solid var(--acento); outline-offset:2px; box-shadow:0 0 0 5px var(--asfalto); }
   .visor-hojas { display:flex; flex-direction:column; align-items:center; gap:var(--e15); padding:var(--e15); width:max-content; min-width:100%; }
   .visor-hoja { display:block; flex:none; max-width:none; background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.2); border:0; }
   .editor-documento { padding:var(--e2) var(--e3); overflow:auto; min-width:0; }
@@ -349,7 +367,7 @@
   .seccion-ficha { min-width:0; margin:0 0 var(--e2); padding:var(--e2); border:1px solid var(--borde); border-radius:var(--radio); background:var(--panel); }
   .seccion-ficha legend { padding:0 var(--e1); font:700 var(--t-s)/1.2 var(--letra); letter-spacing:.08em; text-transform:uppercase; color:var(--suave); }
   .campos-ficha { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--e2); } .campo-ficha { min-width:0; } .campo-ancho { grid-column:1/-1; }
-  .campo-ficha label, .etiqueta-ficha { display:block; font-size:var(--t-xs); color:var(--suave); font-weight:600; margin-bottom:var(--e05); }
+  .campo-ficha label, .etiqueta-ficha { display:block; font-size:var(--t-s); color:var(--suave); font-weight:600; margin-bottom:var(--e05); }   /* (23-nov-2026, accesibilidad) 14 px */
   .campo-ficha input, .campo-ficha select, .campo-ficha textarea { width:100%; min-width:0; }
   .campo-ficha textarea { resize:vertical; line-height:1.55; min-height:96px; } .valor-ficha { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.55; }
   .resumen-importes { margin-top:var(--e2); padding:var(--e15); border-radius:var(--radio-s); font-size:var(--t-s); line-height:1.6; }
@@ -365,7 +383,7 @@
   /* Comparar dos albaranes uno al lado del otro (23-nov-2026); en el móvil, uno encima del otro */
   .comparar-lista { margin:0 0 var(--e15); } .comparar-boton { min-height:36px; padding:var(--e05) var(--e15); font-size:var(--t-xs); }
   .comparar-docs { flex:1; min-height:0; overflow:auto; padding:var(--e15) var(--e2); display:grid; gap:var(--e15); align-content:start; }
-  .comparar-cab { display:grid; gap:var(--e1); } .comparar-cab h3 { margin:0; font-size:var(--t-l); } .comparar-pregunta { margin:0; font-weight:600; }
+  .comparar-cab { display:grid; gap:var(--e1); position:sticky; top:0; z-index:3; background:var(--panel); padding:var(--e1) 0; box-shadow:0 6px 8px -8px rgba(0,0,0,.35); } .comparar-cab h3 { margin:0; font-size:var(--t-l); } .comparar-pregunta { margin:0; font-weight:600; }
   .comparar-columnas { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--e15); }
   .comparar-doc { min-width:0; display:flex; flex-direction:column; gap:var(--e1); border:1px solid var(--borde); border-radius:var(--radio); background:var(--panel); padding:var(--e15); }
   .comparar-doc h4 { margin:0; display:flex; flex-wrap:wrap; gap:var(--e1); align-items:baseline; font-size:var(--t-m); overflow-wrap:anywhere; }
@@ -392,6 +410,8 @@
   .aviso-flotante { position:fixed; left:50%; bottom:var(--e3); transform:translateX(-50%); z-index:30; display:flex; align-items:center; gap:var(--e05); width:max-content; max-width:calc(100vw - 32px);
     background:var(--asfalto); color:#fff; padding:var(--e15) var(--e2); border-radius:var(--radio-s); border-left:6px solid var(--acento); box-shadow:var(--sombra-alta); font-weight:600; transition:opacity .4s; }
   .aviso-flotante.saliendo { opacity:0; }
+  .aviso-flotante .aviso-cerrar { margin-left:var(--e1); min-width:32px; min-height:32px; border:1px solid var(--asfalto-linea); border-radius:var(--radio-s); background:none; color:#fff; font:700 var(--t-l)/1 var(--letra); cursor:pointer; }
+  .aviso-flotante .aviso-cerrar:hover { background:var(--asfalto-2); }
 
   /* ---------- Entrada ---------- */
   .acceso { max-width:440px; margin:8vh auto; padding:var(--e5) var(--e4); border-top:6px solid var(--acento); }
@@ -467,11 +487,20 @@
     .campos-ficha, .otros-datos { grid-template-columns:1fr; } .modal { padding:var(--e05); } .caja { padding:var(--e2); }
     .acceso { margin:var(--e3) auto; padding:var(--e4) var(--e3); }
   }
+  /* (23-nov-2026, accesibilidad) a 320 px (igual que un zoom del 400 %) los dos botones de subir no cabían uno al lado del otro */
+  @media (max-width:380px) { .tickets-subir { grid-template-columns:1fr; } .boton-grande b { white-space:normal; } }
+  /* (23-nov-2026, accesibilidad) en el ordenador «Subir documentos» se sigue viendo arriba del menú (en el código va tras «Por revisar») */
+  @media (min-width:961px) { nav button.nav-subir { order:-1; } }
+  /* (23-nov-2026, accesibilidad) modo de alto contraste de Windows: el botón elegido se marca con un contorno (el fondo desaparece) */
+  @media (forced-colors: active) {
+    .segmentos button.activo, .chips button.activo, nav button.activo, .hoja-opcion.activo, .pestana-ticket.activo { outline:3px solid Highlight; outline-offset:-3px; }
+  }
   /* Pantallas de hasta 1100 px (portátil pequeño, tableta, móvil): cada fila de tabla es una tarjeta con
      sus datos uno debajo de otro, así todo cabe a lo ancho. En tableta van dos tarjetas por fila. */
   @media (max-width:1100px) {
     .tabla { overflow:visible; background:none; border:0; box-shadow:none; }
-    .tabla table { display:block; } .tabla thead { display:none; }
+    /* (23-nov-2026, accesibilidad) la cabecera ya no se quita (display:none): se esconde a la vista y el lector la sigue teniendo */
+    .tabla table { display:block; } .tabla thead { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip:rect(0 0 0 0); clip-path:inset(50%); white-space:nowrap; border:0; }
     .tabla tbody { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap:var(--e15); }
     .tabla tr { display:block; background:var(--panel); border:1px solid var(--borde); border-radius:var(--radio); padding:var(--e15) var(--e2); box-shadow:var(--sombra); min-width:0; }
     .tabla tbody tr:nth-child(even) { background:var(--panel); }
@@ -526,12 +555,16 @@
 </header>
 <nav id="menu" aria-label="Secciones del panel"></nav>
 <main id="vista" tabindex="-1"><div class="cargando">Cargando…</div></main>
-<footer id="pie" hidden><span id="actualizado"></span> · se actualiza solo cada 30 segundos · <button class="boton" id="btnActualizar">Actualizar ahora</button></footer>
+<!-- (23-nov-2026, accesibilidad) «Pausar actualización automática»: el refresco de cada 30 s se puede parar -->
+<footer id="pie" hidden><span id="actualizado"></span> · <span id="textoRefresco">se actualiza solo cada 30 segundos</span> · <button class="boton" id="btnActualizar" type="button">Actualizar ahora</button><button class="boton" id="btnPausa" type="button" aria-pressed="false">Pausar actualización automática</button></footer>
 <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="tituloModal"><div class="caja" id="caja"></div></div>
+<!-- (23-nov-2026, accesibilidad) avisos que lee el lector de pantalla (fuera de #vista para que nunca se borren al repintar) -->
+<div id="anuncio" class="solo-lector" role="status" aria-live="polite"></div>
+<div id="anuncioUrgente" class="solo-lector" role="alert"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=v6179f8f"></script>
+<script src="app.js?v=v1470644"></script>
 </body>
 </html>
