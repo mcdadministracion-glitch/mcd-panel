@@ -1763,7 +1763,7 @@ function fichaTicket(t) {
     h('section', { class: 'vista-documento' }, [h('div', { class: 'cab-documento' }, [h('h3', {}, 'Foto del ticket')]), visor]),
     h('section', { class: 'editor-documento' }, [h('div', { class: 'resumen-ficha' }, [h('span', { class: 'pill marca' }, t.categoria), pillEstado(t.estado)]),
       t.observaciones ? h('p', { class: 'ayuda-campo' }, t.observaciones) : null,
-      /Posible repetido de (TCK-\d+)/.test(t.observaciones || '') ? h('p', { class: 'ayuda-campo' }, ['El otro ticket: ', enlaceDocumento(/Posible repetido de (TCK-\d+)/.exec(t.observaciones)[1], 'tickets')]) : null,
+      bloqueTicketRepetido(t, editable),            // (23-nov-2026) «Comparar con TCK-…», como en los albaranes
       t.categoria === 'Combustible' ? h('p', { class: 'ayuda-campo' }, [(t.estacion ? 'Estación: ' + t.estacion + ' · ' : '') +
         (t.empresa ? 'Empresa: ' + t.empresa : 'Fondo común: esperando la factura de la gasolinera'),
         t.empresa && t.factura_id_doc ? ' · Su factura: ' : null, t.empresa && t.factura_id_doc ? enlaceDocumento(t.factura_id_doc, 'facturas') : null]) : null,
@@ -1800,17 +1800,8 @@ function fichaTicket(t) {
   abrirModal(tituloFicha('Ticket', 'tickets', t), cuerpo);
   document.getElementById('caja').classList.add('revision-amplia');
   fichaSucia = function () { return editable && Object.keys(cambios()).length > 0; };
-  // Foto: originales/AAAA-MM/<id>_<archivo> (el mes en que se leyó)
-  var numero = secuenciaFicha, d0 = new Date(t.creado_en || Date.now());
-  var meses = [0, -1].map(function (k) { var x = new Date(d0.getFullYear(), d0.getMonth() + k, 1); return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0'); });
-  async function buscarFoto() {
-    for (var m of meses) {
-      var l = await sb.storage.from('documentos').list('originales/' + m, { limit: 5, search: t.id_doc + '_' });
-      var x = !l.error && (l.data || []).filter(function (o) { return o.id && o.name.indexOf(t.id_doc + '_') === 0; })[0];
-      if (x) return { ruta: 'originales/' + m + '/' + x.name, nombre: x.name };
-    }
-    return null;
-  }
+  // Foto: originales/AAAA-MM/<id>_<archivo> (el mes en que se leyó), con fotoDelTicket (la usa también «Comparar»)
+  var numero = secuenciaFicha;
   async function verFoto(foto) {
     await rpc('panel_registrar_acceso_archivo', { p_id: t.id_doc, p_tipo: 'original', p_accion: 'Ver documento' });
     var url = await urlFirmada(foto.ruta);
@@ -1818,11 +1809,11 @@ function fichaTicket(t) {
     crearVisor(visor, url, foto.nombre);
   }
   (async function () {
-    var foto = await buscarFoto();
+    var foto = await fotoDelTicket(t);
     if (numero !== secuenciaFicha) return;
-    if (foto) return verFoto(foto);
+    if (foto.enWeb) return verFoto(foto);
     // Ya no está en la web: se puede traer del ordenador
-    avisoEnElOrdenador(visor, { tipo: 'original', id_doc: t.id_doc, mes: meses[0] }, buscarFoto, function (traida) {
+    avisoEnElOrdenador(visor, foto.pedido, foto.buscar, function (traida) {
       if (numero === secuenciaFicha) verFoto(traida).catch(function () {});
     });
   })().catch(function () { if (numero === secuenciaFicha) { visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, 'La foto no está disponible ahora mismo.')); } });
@@ -3174,49 +3165,60 @@ function volverDeLaComparacion() {
   if (foco && foco.isConnected) foco.focus();
 }
 // op: { empresa, foco, este: { id, fila, papel }, otro: { id, fila, papel }, respuesta: { pregunta, si(), no() } o null }
+// (23-nov-2026) También sirve para TICKETS («Posible repetido de TCK-0001»). Opcionales:
+//   hoja ('albaranes' si no se dice, o 'tickets'), campos (los datos del resumen; por defecto CAMPOS_COMPARAR),
+//   titulo, volverTexto, localizar(doc) -> promesa de { archivo, tipo } (dónde está el archivo de cada uno),
+//   respuesta.botones: [{ texto, clase, confirmar, ocupado, hacer() }] en vez de si/no/repetido.
 function abrirComparacion(op) {
   var caja = document.getElementById('caja'), fichaAbierta = caja && caja.querySelector('.contenido-revision');
   if (!fichaAbierta) return;
   soltarComparacion();
+  var hoja = op.hoja || 'albaranes', campos = op.campos || CAMPOS_COMPARAR;
   var visores = [], mia = { foco: op.foco };
   var aviso = h('div', { class: 'mensaje-ficha', role: 'status', 'aria-live': 'polite' });
-  var volver = h('button', { type: 'button', class: 'boton comparar-volver', onclick: volverDeLaComparacion }, '← Volver a la ficha');
+  var volver = h('button', { type: 'button', class: 'boton comparar-volver', onclick: volverDeLaComparacion }, op.volverTexto || '← Volver a la ficha');
   var acciones = [];
   if (op.respuesta) {
+    // Las respuestas de los packs (Sí / No / Es el mismo papel repetido), o las que traiga quien abre la comparación
+    var lista = op.respuesta.botones || [
+      { texto: 'Sí, va con este', clase: 'boton principal', ocupado: 'Juntando…', hacer: op.respuesta.si },
+      { texto: 'No va con este', clase: 'boton', ocupado: 'Guardando…', hacer: op.respuesta.no }]
+      // (23-nov-2026) Dos fotos del MISMO papel: no es otra hoja del pack, es un repetido. Se descarta uno (queda en el historial)
+      .concat(op.respuesta.repetido ? [{ texto: op.respuesta.repetidoTexto, clase: 'boton', confirmar: op.respuesta.repetidoPregunta,
+        ocupado: 'Descartando el repetido…', hacer: op.respuesta.repetido }] : []);
     var botones = [];
-    var contestar = function (que) {
-      if (que === 'repetido' && !confirm(op.respuesta.repetidoPregunta)) return;
-      botones.forEach(function (b) { b.disabled = true; }); aviso.className = 'mensaje-ficha';
-      aviso.textContent = que === 'si' ? 'Juntando…' : que === 'repetido' ? 'Descartando el repetido…' : 'Guardando…';
-      op.respuesta[que]().catch(function (e) {
+    var contestar = function (b) {
+      var pregunta = typeof b.confirmar === 'function' ? b.confirmar() : b.confirmar;     // la pregunta, o nada que preguntar
+      if (pregunta && !confirm(pregunta)) return;
+      botones.forEach(function (x) { x.disabled = true; }); aviso.className = 'mensaje-ficha';
+      aviso.textContent = b.ocupado || 'Guardando…';
+      b.hacer().catch(function (e) {
         if (comparacion !== mia) return;
-        botones.forEach(function (b) { b.disabled = false; }); aviso.className = 'mensaje-ficha fallo'; aviso.textContent = mensajeError(e);
+        botones.forEach(function (x) { x.disabled = false; }); aviso.className = 'mensaje-ficha fallo'; aviso.textContent = mensajeError(e);
       });
     };
-    var si = h('button', { type: 'button', class: 'boton principal', onclick: function () { contestar('si'); } }, 'Sí, va con este');
-    var no = h('button', { type: 'button', class: 'boton', onclick: function () { contestar('no'); } }, 'No va con este');
-    botones.push(si, no);
-    // (23-nov-2026) Dos fotos del MISMO papel: no es otra hoja del pack, es un repetido. Se descarta uno (queda en el historial)
-    if (op.respuesta.repetido) botones.push(h('button', { type: 'button', class: 'boton', onclick: function () { contestar('repetido'); } }, op.respuesta.repetidoTexto));
+    lista.forEach(function (b) { botones.push(h('button', { type: 'button', class: b.clase || 'boton', onclick: function () { contestar(b); } }, b.texto)); });
     acciones.push.apply(acciones, botones);
   }
   acciones.push(volver);
   function columna(doc) {
-    var titulo = h('span', { class: 'comparar-nombre' }, etiquetaDocumento('albaranes', doc.fila, doc.id));
+    var titulo = h('span', { class: 'comparar-nombre' }, etiquetaDocumento(hoja, doc.fila, doc.id));
     // (23-nov-2026, accesibilidad) «Cargando…» y «No se encuentra» van en un párrafo aparte: un dd sin su dt no es válido
     var avisoDatos = h('p', { class: 'sub' }, 'Cargando sus datos…');
     var datos = h('dl', { class: 'comparar-datos', hidden: 'hidden' });
     var visor = h('div', { class: 'visor-documento comparar-visor' }, h('p', { class: 'vacio' }, 'Buscando el archivo del documento…'));
     doc.pintar = function (otraFila) {             // el resumen, con «igual» donde los dos dicen lo mismo
       datos.textContent = '';
-      if (!doc.fila) { datos.hidden = true; avisoDatos.hidden = false; avisoDatos.textContent = 'No se encuentra este albarán (puede que ya no exista).'; return; }
+      if (!doc.fila) { datos.hidden = true; avisoDatos.hidden = false; avisoDatos.textContent = hoja === 'tickets' ? 'No se encuentra este ticket (puede que ya no exista).' : 'No se encuentra este albarán (puede que ya no exista).'; return; }
       avisoDatos.hidden = true; datos.hidden = false;
-      titulo.textContent = ''; titulo.appendChild(etiquetaDocumento('albaranes', doc.fila, doc.id));
-      CAMPOS_COMPARAR.forEach(function (c) {
+      titulo.textContent = ''; titulo.appendChild(etiquetaDocumento(hoja, doc.fila, doc.id));
+      campos.forEach(function (c) {
         var v = texto(doc.fila[c[0]]).trim(), w = otraFila ? texto(otraFila[c[0]]).trim() : '';
         var igual = v && w && v.replace(/\s+/g, ' ').toLowerCase() === w.replace(/\s+/g, ' ').toLowerCase();
+        // c[2]: cómo se enseña (euros, litros); la comparación se hace con el dato tal cual
+        var visto = !v ? '' : c[0] === 'fecha' ? fecha(v) : c[2] === 'euros' && isFinite(Number(v)) ? euros(Number(v)) : c[2] === 'litros' && isFinite(Number(v)) ? litros(Number(v)) : v;
         datos.appendChild(h('dt', {}, c[1]));
-        datos.appendChild(h('dd', { class: igual ? 'coincide' : '' }, [(c[0] === 'fecha' ? fecha(v) : v) || '—',
+        datos.appendChild(h('dd', { class: igual ? 'coincide' : '' }, [visto || '—',
           igual ? h('span', { class: 'igual', title: 'Los dos documentos dicen lo mismo' }, ' = igual') : null]));
       });
     };
@@ -3226,10 +3228,13 @@ function abrirComparacion(op) {
   }
   function sinVista(visor, t) { if (comparacion !== mia) return; visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, t || 'La vista previa no está disponible.')); }
   // El archivo de cada uno: el original (o la copia tachada si no hay original), como en la ficha y apuntado en el historial
+  var localizar = op.localizar || function (doc) {
+    return localizarArchivos(op.empresa, hoja, doc.id).then(function (d) { return { tipo: d.original ? 'original' : 'tachado', archivo: d.original || d.tachado }; });
+  };
   function verArchivo(doc) {
-    localizarArchivos(op.empresa, 'albaranes', doc.id).then(function (d) {
+    localizar(doc).then(function (d) {
       if (comparacion !== mia) return;
-      var tipo = d.original ? 'original' : 'tachado', archivo = d.original || d.tachado;
+      var tipo = d.tipo, archivo = d.archivo;
       if (!archivo) { sinVista(doc.visor, 'No hay archivo guardado para este documento.'); return; }
       (function mostrar(archivo) {
         if (!archivo.enWeb) { avisoEnElOrdenador(doc.visor, archivo.pedido, archivo.buscar, function (traido) { if (comparacion === mia) mostrar(traido); }); return; }
@@ -3243,7 +3248,7 @@ function abrirComparacion(op) {
   }
   var este = Object.assign({}, op.este), otro = Object.assign({}, op.otro);
   var vista = h('section', { class: 'comparar-docs', 'aria-label': 'Comparar ' + este.id + ' con ' + otro.id }, [
-    h('div', { class: 'comparar-cab' }, [h('h3', {}, 'Comparar los dos papeles'),
+    h('div', { class: 'comparar-cab' }, [h('h3', {}, op.titulo || 'Comparar los dos papeles'),
       op.respuesta ? h('p', { class: 'comparar-pregunta' }, op.respuesta.pregunta) : null,
       h('div', { class: 'en-linea comparar-acciones' }, acciones), aviso]),
     h('div', { class: 'comparar-columnas' }, [columna(este), columna(otro)])]);
@@ -3254,12 +3259,63 @@ function abrirComparacion(op) {
   comparacion = mia;
   fichaAbierta.hidden = true; caja.classList.add('comparando'); caja.appendChild(vista); volver.focus();
   // Los datos completos del otro (de la ficha solo se sabe su nombre)
+  // (los tickets no tienen empresa fija: se buscan solo por su ID). El archivo del otro se busca cuando ya se tienen
+  // sus datos (el de un ticket depende del mes en que se leyó)
   este.pintar(null);
-  consulta(sb.from('albaranes').select('*').eq('empresa', op.empresa).eq('id_doc', otro.id).maybeSingle()).then(function (r) {
+  var q = sb.from(hoja).select('*').eq('id_doc', otro.id); if (hoja !== 'tickets') q = q.eq('empresa', op.empresa);
+  consulta(q.maybeSingle()).then(function (r) {
     if (comparacion !== mia) return;
     otro.fila = r.data || null; otro.pintar(este.fila); este.pintar(otro.fila);
-  }).catch(function () { if (comparacion === mia) { otro.fila = null; otro.pintar(null); } });
-  verArchivo(este); verArchivo(otro);
+  }).catch(function () { if (comparacion === mia) { otro.fila = null; otro.pintar(null); } })
+    .then(function () { if (comparacion === mia) verArchivo(otro); });
+  verArchivo(este);
+}
+
+// (23-nov-2026) Comparar un ticket «Posible repetido de TCK-0001» con ese otro ticket: los datos que importan para
+// saber si es el mismo gasto. c[2]: cómo se enseña el dato
+var CAMPOS_COMPARAR_TICKET = [['fecha', 'Fecha'], ['hora', 'Hora'], ['comercio', 'Comercio'], ['nif', 'NIF del comercio'], ['total', 'Total', 'euros'],
+  ['cuota_iva', 'IVA', 'euros'], ['litros', 'Litros', 'litros'], ['matricula', 'Matrícula'], ['numero', 'Número del ticket'], ['forma_pago', 'Forma de pago'], ['categoria', 'Categoría']];
+// La foto de un ticket: originales/AAAA-MM/<id>_<archivo> (el mes en que se leyó o el anterior). Si ya no está en la
+// web, se dice cómo pedirla al ordenador ({ enWeb: false, pedido, buscar })
+function fotoDelTicket(t) {
+  var d0 = new Date(t.creado_en || Date.now());
+  var meses = [0, -1].map(function (k) { var x = new Date(d0.getFullYear(), d0.getMonth() + k, 1); return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0'); });
+  async function buscar() {
+    for (var m of meses) {
+      var l = await sb.storage.from('documentos').list('originales/' + m, { limit: 5, search: t.id_doc + '_' });
+      var x = !l.error && (l.data || []).filter(function (o) { return o.id && o.name.indexOf(t.id_doc + '_') === 0; })[0];
+      if (x) return { ruta: 'originales/' + m + '/' + x.name, nombre: x.name, enWeb: true };
+    }
+    return null;
+  }
+  return buscar().then(function (f) { return f || { enWeb: false, pedido: { tipo: 'original', id_doc: t.id_doc, mes: meses[0] }, buscar: buscar }; });
+}
+// El bloque de la ficha del ticket: «Posible repetido de TCK-0001», enlace al otro y «Comparar con TCK-0001».
+// Revisor o Administrador contestan desde la comparación (con las mismas funciones del servidor que la ficha);
+// un Lector solo compara.
+function bloqueTicketRepetido(t, editable) {
+  var m = /Posible repetido de (TCK-\d+)\s*(\([^)]*\))?/.exec(texto(t.observaciones));
+  if (!m) return null;
+  var otro = m[1], motivo = m[2] ? m[2].slice(1, -1) : '';
+  var contesta = editable && t.estado === 'Revisar';
+  function terminar(textoAviso) { fichaSucia = null; cerrarModal(); avisoBreve(textoAviso); cargar(false); }
+  var boton = h('button', { type: 'button', class: 'boton comparar-boton', title: 'Ver los dos tickets uno al lado del otro', onclick: function (e) {
+    abrirComparacion({ hoja: 'tickets', campos: CAMPOS_COMPARAR_TICKET, foco: e.currentTarget, titulo: 'Comparar los dos tickets', volverTexto: '← Volver al ticket',
+      localizar: function (doc) { return doc.fila ? fotoDelTicket(doc.fila).then(function (f) { return { tipo: 'original', archivo: f }; }) : Promise.resolve({ archivo: null }); },
+      este: { id: t.id_doc, fila: t, papel: 'Este ticket' }, otro: { id: otro, fila: null, papel: 'El otro ticket' },
+      respuesta: !contesta ? null : { pregunta: '¿Es el mismo ticket repetido?' + (motivo ? ' Motivo del programa: ' + motivo + '.' : ''), botones: [
+        { texto: 'Es el mismo ticket: descartar este', clase: 'boton peligro', ocupado: 'Descartando…',
+          confirmar: '¿Descartar ' + idConNombre('tickets', t, t.id_doc) + '?\n\nEs el mismo ticket que ' + otro + ', que se queda como está. El descarte queda en el historial.',
+          hacer: function () { return rpc('panel_descartar_ticket', { p_id: t.id_doc }).then(function () { terminar('Ticket ' + t.id_doc + ' descartado: era el mismo que ' + otro); }); } },
+        { texto: 'No, son dos gastos distintos', clase: 'boton revisar', ocupado: 'Guardando…',
+          // Lo escrito en la ficha y sin guardar se perdería: se pregunta antes
+          confirmar: function () { return fichaSucia && fichaSucia() ? 'Hay cambios sin guardar en la ficha del ticket y se perderán. ¿Marcarlo como revisado sin ellos?' : null; },
+          hacer: function () { return rpc('panel_guardar_ticket', { p_id: t.id_doc, p_cambios: {}, p_revisado: true }).then(function () { terminar('Ticket ' + t.id_doc + ' revisado: es un gasto distinto de ' + otro); }); } }] } });
+  } }, 'Comparar con ' + otro);
+  return h('div', { class: 'propuesta-pack ticket-repetido' }, [
+    h('p', {}, [h('b', {}, 'Posible repetido de ' + otro), motivo ? h('span', { class: 'sub' }, ' (' + motivo + ')') : null]),
+    h('p', { class: 'ayuda-campo' }, ['El otro ticket: ', enlaceDocumento(otro, 'tickets')]),
+    h('div', { class: 'en-linea comparar-lista' }, [boton])]);
 }
 
 // En la ficha de un albarán: decir si en realidad es una orden de carga (o al revés). Solo quien puede revisar.
