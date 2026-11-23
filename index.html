@@ -261,6 +261,8 @@
   .mini { position:relative; display:inline-flex; flex:none; align-items:center; justify-content:center; width:34px; height:46px; margin-right:var(--e1); vertical-align:middle;
     border:1px solid var(--borde); border-radius:3px; background:var(--gris-f); overflow:hidden; }
   .mini::before { content:attr(data-siglas); font:700 9px/1 var(--letra); color:var(--suave); letter-spacing:.04em; }
+  .fila-elegir { display:flex; align-items:center; gap:var(--e1); flex-wrap:wrap; }
+  .fila-elegir .comparar-boton { font-size:.85em; padding:2px 8px; }
   .mini img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; object-position:top; background:#fff; }
   #miniGrande { position:fixed; z-index:30; max-width:160px; max-height:160px; border:1px solid var(--borde); border-radius:var(--radio-s); background:#fff; box-shadow:var(--sombra-alta); pointer-events:none; }
   /* Nombre legible de un documento y, al lado, su ID interno en pequeño */
@@ -530,6 +532,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=vc9f2b98"></script>
+<script src="app.js?v=v6179f8f"></script>
 </body>
 </html>

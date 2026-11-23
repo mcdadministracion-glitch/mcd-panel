@@ -1902,9 +1902,14 @@ function ponerMiniaturas(raiz) {
 }
 // Al pasar el ratón por una miniatura se ve a su tamaño (160 puntos como mucho)
 var miniGrande = null;
+// (23-nov-2026) Antes solo se escondía al sacar el ratón de la miniatura. Al pulsar la fila se abre la ficha encima, la
+// miniatura desaparece sin que el navegador avise de que el ratón ha salido y la imagen grande se quedaba flotando.
+// Ahora se esconde también al pasar por cualquier otra cosa, al pulsar, con el teclado, al desplazar y al abrir una ficha.
+function esconderMiniGrande() { if (miniGrande) miniGrande.hidden = true; }
+['mousedown', 'keydown', 'scroll', 'wheel', 'blur'].forEach(function (ev) { window.addEventListener(ev, esconderMiniGrande, true); });
 document.addEventListener('mouseover', function (e) {
   var caja = e.target && e.target.closest ? e.target.closest('.mini') : null, img = caja && caja.querySelector('img');
-  if (!img) return;
+  if (!img || !caja.isConnected) { esconderMiniGrande(); return; }
   if (!miniGrande) { miniGrande = h('img', { id: 'miniGrande', alt: '', 'aria-hidden': 'true' }); document.body.appendChild(miniGrande); }
   var r = caja.getBoundingClientRect();
   miniGrande.src = img.src; miniGrande.hidden = false;
@@ -2796,7 +2801,7 @@ function seccionPack(empresa, id, fila, editable) {
     function pareceId(x) { return /^[A-Za-z]{2,}-[A-Za-z0-9]+$/.test(x); }
     function escritos(campo) { return campo.value.split(/[\s,;]+/).map(function (x) { return x.trim(); }).filter(Boolean); }
     function cargarCandidatos() {              // los demás albaranes sueltos de la empresa; primero los que llegaron más cerca de este
-      if (!pedido) pedido = consulta(sb.from('albaranes').select(COLUMNAS_NOMBRE_ALBARAN + ',referencias').eq('empresa', empresa).order('id_doc', { ascending: false }).limit(400)).then(function (r) {
+      if (!pedido) pedido = consulta(sb.from('albaranes').select(COLUMNAS_NOMBRE_ALBARAN + ',referencias,referencia_facturacion,codigo_conductor,nif,matricula').eq('empresa', empresa).order('id_doc', { ascending: false }).limit(400)).then(function (r) {
         candidatos = (r.data || []).filter(function (x) { return x.id_doc !== id && ['Descartado', 'Duplicado', 'Anexo'].indexOf(x.estado || '') < 0; })
           .sort(function (a, b) { return Math.abs(numeroId(a.id_doc) - numeroId(id)) - Math.abs(numeroId(b.id_doc) - numeroId(id)); });
         candidatos.forEach(function (x) { conocidos[x.id_doc] = x; });
@@ -2805,7 +2810,7 @@ function seccionPack(empresa, id, fila, editable) {
       return pedido;
     }
     function coincide(x, buscado) {
-      return [x.id_doc, x.num_albaran, x.nombre, x.destino, x.origen, x.referencias].some(function (v) { return texto(v).toLowerCase().indexOf(buscado) >= 0; });
+      return [x.id_doc, x.num_albaran, x.nombre, x.destino, x.origen, x.referencias, x.referencia_facturacion, x.codigo_conductor].some(function (v) { return texto(v).toLowerCase().indexOf(buscado) >= 0; });
     }
     function pintarElegir(ul, campo, varios) {
       var buscado = campo.value.trim().toLowerCase(), todas = candidatos.filter(function (x) { return !buscado || coincide(x, buscado); }), filas = todas.slice(0, 8);
@@ -2820,7 +2825,8 @@ function seccionPack(empresa, id, fila, editable) {
           if (!varios) { elegido = x.id_doc; return; }
           if (entrada.checked) marcados[x.id_doc] = true; else delete marcados[x.id_doc];
         });
-        ul.appendChild(h('li', {}, h('label', { class: 'casilla' }, [entrada, cajaMiniatura('albaranes', x.id_doc), etiquetaDocumento('albaranes', x, x.id_doc)])));
+        ul.appendChild(h('li', { class: 'fila-elegir' }, [h('label', { class: 'casilla' }, [entrada, cajaMiniatura('albaranes', x.id_doc), etiquetaDocumento('albaranes', x, x.id_doc)]),
+          comparar(x.id_doc, 'Este albarán', 'El otro albarán')]));
       });
       ponerMiniaturas(ul);
       if (todas.length > filas.length) ul.appendChild(h('li', { class: 'sub' }, 'Hay ' + (todas.length - filas.length) + ' más: escribe su número, el nombre o el destino para encontrarlo.'));
@@ -2878,7 +2884,8 @@ function seccionPack(empresa, id, fila, editable) {
 // ---------------------------------------------------------------------
 var comparacion = null;                     // la comparación abierta: { soltar(), foco }
 var CAMPOS_COMPARAR = [['num_albaran', 'Número'], ['fecha', 'Fecha'], ['nombre', 'Cliente o proveedor'], ['nif', 'NIF'],
-  ['origen', 'Origen'], ['destino', 'Destino'], ['matricula', 'Matrícula'], ['referencias', 'Otras referencias']];
+  ['origen', 'Origen'], ['destino', 'Destino'], ['matricula', 'Matrícula'], ['codigo_conductor', 'Código del conductor'],
+  ['referencia_facturacion', 'Referencia de facturación'], ['referencias', 'Otras referencias']];
 // Quita la comparación sin tocar la ficha (al abrir otra ventana, al cerrar la ficha o al contestar)
 function soltarComparacion() { if (comparacion) { var c = comparacion; comparacion = null; c.soltar(); } }
 // «Volver a la ficha»: quita la comparación y devuelve el foco al botón que la abrió
@@ -3387,7 +3394,7 @@ function avisoBreve(texto) {
   setTimeout(function () { aviso.classList.add('saliendo'); setTimeout(function () { aviso.remove(); }, 400); }, 3500);
 }
 function abrirModal(titulo, contenido, extra) {
-  ++secuenciaFicha; cerrarVisor(); soltarComparacion();
+  ++secuenciaFicha; cerrarVisor(); soltarComparacion(); esconderMiniGrande();
   if (!document.getElementById('modal').classList.contains('abierto')) focoAntesModal = document.activeElement;
   fichaSucia = null; guardandoFicha = false;
   var caja = document.getElementById('caja'); caja.textContent = ''; caja.className = 'caja';
