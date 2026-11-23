@@ -336,7 +336,9 @@
   .secciones-usuario { display:flex; flex-wrap:wrap; gap:var(--e1) var(--e2); border:1px solid var(--borde); border-radius:8px; padding:var(--e1) var(--e15); margin:0; }
   .secciones-usuario legend { padding:0 var(--e05); font-weight:600; }
   .secciones-usuario .ayuda-campo { flex-basis:100%; margin:0; }
-  .visor-zona { flex:1; min-height:0; overflow:auto; background:var(--gris-f); cursor:grab; overscroll-behavior:contain; touch-action:pan-x pan-y; }
+  /* position:relative: las hojas miden su altura (offsetTop) desde aquí, no desde la ventana; si no, un visor que queda más
+     abajo (el segundo de «Comparar» en el móvil) creía que sus páginas no se veían y no las pintaba (23-nov-2026) */
+  .visor-zona { position:relative; flex:1; min-height:0; overflow:auto; background:var(--gris-f); cursor:grab; overscroll-behavior:contain; touch-action:pan-x pan-y; }
   .visor-zona.arrastrando { cursor:grabbing; user-select:none; } .visor-zona:focus-visible { outline:3px solid var(--acento); outline-offset:-3px; }
   .visor-hojas { display:flex; flex-direction:column; align-items:center; gap:var(--e15); padding:var(--e15); width:max-content; min-width:100%; }
   .visor-hoja { display:block; flex:none; max-width:none; background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.2); border:0; }
@@ -358,6 +360,19 @@
   .lista-pack li { display:flex; gap:var(--e15); align-items:baseline; flex-wrap:wrap; }
   .lista-pack .boton.enlace { padding:0; font-weight:700; }
   .fila-pack { margin-top:var(--e15); } .fila-pack input[type=text] { flex:1 1 200px; min-width:0; }
+  /* Comparar dos albaranes uno al lado del otro (23-nov-2026); en el móvil, uno encima del otro */
+  .comparar-lista { margin:0 0 var(--e15); } .comparar-boton { min-height:36px; padding:var(--e05) var(--e15); font-size:var(--t-xs); }
+  .comparar-docs { flex:1; min-height:0; overflow:auto; padding:var(--e15) var(--e2); display:grid; gap:var(--e15); align-content:start; }
+  .comparar-cab { display:grid; gap:var(--e1); } .comparar-cab h3 { margin:0; font-size:var(--t-l); } .comparar-pregunta { margin:0; font-weight:600; }
+  .comparar-columnas { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--e15); }
+  .comparar-doc { min-width:0; display:flex; flex-direction:column; gap:var(--e1); border:1px solid var(--borde); border-radius:var(--radio); background:var(--panel); padding:var(--e15); }
+  .comparar-doc h4 { margin:0; display:flex; flex-wrap:wrap; gap:var(--e1); align-items:baseline; font-size:var(--t-m); overflow-wrap:anywhere; }
+  .comparar-datos { display:grid; grid-template-columns:auto minmax(0,1fr); gap:var(--e05) var(--e15); margin:0; font-size:var(--t-s); }
+  .comparar-datos dt { color:var(--suave); font-weight:600; } .comparar-datos dd { margin:0; overflow-wrap:anywhere; }
+  .comparar-datos .igual { color:var(--ok); font-size:var(--t-xs); font-weight:600; }
+  .comparar-visor { flex:none; height:68vh; min-height:320px; border:1px solid var(--borde); border-radius:var(--radio-s); background:var(--gris-f); overflow:hidden; }
+  .caja.comparando > .cab > .boton:not(.cerrar-modal) { display:none; }      /* «Ampliar formulario» no tiene sentido aquí */
+  @media (max-width:760px) { .comparar-columnas { grid-template-columns:1fr; } .comparar-visor { height:60vh; } .comparar-docs { padding:var(--e1); } }
   /* Lista para elegir albaranes con casillas (en vez de escribir sus ID) */
   .elegir-pack { list-style:none; margin:var(--e1) 0 0; padding:var(--e05); display:grid; gap:2px; border:1px solid var(--borde); border-radius:var(--radio-s); background:var(--panel); max-height:260px; overflow:auto; }
   .elegir-pack li.sub { padding:var(--e1); margin:0; }
@@ -515,6 +530,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=va0c06e7"></script>
+<script src="app.js?v=vc9f2b98"></script>
 </body>
 </html>

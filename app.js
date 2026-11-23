@@ -275,7 +275,8 @@ var COLUMNAS_EXCEL = {
   albaranes: [['empresa', 'Empresa'], ['tipo_albaran', 'Tipo'], ['num_albaran', 'Número de albarán'], ['fecha', 'Fecha', FECHA], ['nif', 'NIF'], ['nombre', 'Cliente / proveedor'],
     ['matricula', 'Matrícula'], ['origen', 'Origen'], ['destino', 'Destino'], ['concepto', 'Concepto'], ['importe', 'Importe (€)', EUR],
     ['estado_factura', 'Facturación'], ['factura_vinculada', 'Factura vinculada'], ['dias_sin_factura', 'Días sin factura'], ['estado', 'Estado'],
-    ['va_con', 'Va con (pack)'], ['referencias', 'Otras referencias'], ['observaciones', 'Observaciones'], ['id_doc', 'ID interno']]
+    ['va_con', 'Va con (pack)'], ['referencias', 'Otras referencias'], ['codigo_conductor', 'Código del conductor'], ['referencia_facturacion', 'Referencia de facturación'],
+    ['observaciones', 'Observaciones'], ['id_doc', 'ID interno']]
 };
 var TITULO_EXCEL = { facturas: 'Facturas', albaranes: 'Albaranes' };
 var bibliotecaExcel;
@@ -1409,6 +1410,7 @@ var GRUPOS_TICKET = [['comidas', 'Comidas', ['Comida']], ['peajes', 'Peajes', ['
 var MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 function grupoTicket(t) { var g = GRUPOS_TICKET.filter(function (x) { return x[2].indexOf(t.categoria) >= 0; })[0]; return g ? g[0] : 'otros'; }
 function sumaTotal(lista) { return lista.reduce(function (s, t) { return s + (Number(t.total) || 0); }, 0); }
+function sumaCampo(lista, campo) { return lista.reduce(function (s, t) { var n = Number(t[campo]); return s + (isFinite(n) ? n : 0); }, 0); }
 function vTickets(v, d) {
   if (puedeSubir()) v.appendChild(tarjetaSubir());   // la misma subida que en Inicio: el sistema separa tickets y facturas
 
@@ -1457,7 +1459,7 @@ function vTickets(v, d) {
       var cols = [['anio', 'Año'], ['mes', 'Mes'], ['fecha', 'Fecha', FECHA], ['comercio', 'Comercio'], ['nif', 'NIF'], ['categoria', 'Categoría'], ['concepto', 'Concepto'],
         ['base_imponible', 'Base (€)', EUR], ['iva_porcentaje', 'IVA (%)', PCT], ['cuota_iva', 'IVA (€)', EUR], ['total', 'Total (€)', EUR],
         ['forma_pago', 'Forma de pago'], ['matricula', 'Matrícula'], ['litros', 'Litros'], ['estacion', 'Estación'], ['empresa', 'Empresa'],
-        ['estado', 'Estado'], ['observaciones', 'Observaciones'], ['id_doc', 'Número']];
+        ['hora', 'Hora'], ['numero', 'Nº del ticket'], ['estado', 'Estado'], ['observaciones', 'Observaciones'], ['id_doc', 'Número']];
       var hj = libro.addWorksheet(grupo[1], { views: [{ state: 'frozen', ySplit: 1 }] });
       hj.columns = cols.map(function (c) { return { header: c[1], key: c[0], width: /comercio|concepto|observ|estacion/.test(c[0]) ? 32 : c[0] === 'anio' ? 8 : 14,
         style: c[2] === EUR ? { numFmt: '#,##0.00 "€"' } : c[2] === FECHA ? { numFmt: 'dd/mm/yyyy' } : {} }; });
@@ -1502,6 +1504,10 @@ function vTickets(v, d) {
   if (grupo[0] === 'gasolina') v.appendChild(h('p', { class: 'sub' }, [S.gasTck === 'otras' ? 'Gasolineras que no son ' + NOMBRE_GASOLINERA_TABLA + ': no se comparan con la tabla de precios. ' : '',
     'Sin empresa = fondo común: cada ticket pasa solo a su empresa cuando llega la factura de la gasolinera. También se ven en ',
     h('button', { type: 'button', class: 'boton enlace', onclick: function () { irA('combustible'); } }, 'Combustible'), ', comparados con la tabla de precios.']));
+  // IVA que no se puede deducir (21-nov-2026): tickets sin el NIF de la empresa (nota de tickets.py)
+  var sinNif = lista.filter(function (t) { return t.estado !== 'Descartado' && /^IVA no deducible con este ticket/m.test(texto(t.observaciones).split(/;\s*/).join('\n')); });
+  if (sinNif.length) v.appendChild(h('p', { class: 'sub aviso-iva', role: 'note' }, 'IVA que no se puede deducir: ' + sinNif.length + ' ticket' + (sinNif.length === 1 ? '' : 's') +
+    ' sin el NIF de la empresa' + (sumaCampo(sinNif, 'cuota_iva') ? ' (' + euros(sumaCampo(sinNif, 'cuota_iva')) + ' de IVA)' : '') + '. Pide factura con el NIF para poder deducirlo.'));
   if (!lista.length) { v.appendChild(h('div', { class: 'tarjeta vacio' }, d.tickets.length ? 'No hay tickets de ' + (grupo[0] === 'gasolina' ? (S.gasTck === 'otras' ? 'otras gasolineras' : NOMBRE_GASOLINERA_TABLA) : grupo[1].toLowerCase()) + ' en este periodo.' : 'Todavía no hay tickets en este periodo. Haz una foto para subir el primero.')); return; }
 
   // Por AÑO y, dentro, por MES (lo más reciente primero; el último mes, abierto)
@@ -1539,7 +1545,7 @@ function vTickets(v, d) {
 function fichaTicket(t) {
   var editable = S.rol === 'Revisor' || S.rol === 'Administrador';
   var campos = [['fecha', 'Fecha', 'date'], ['comercio', 'Comercio'], ['nif', 'NIF del comercio'], ['categoria', 'Categoría', 'cat'], ['concepto', 'Concepto'],
-    ['base_imponible', 'Base (€)'], ['iva_porcentaje', 'IVA (%)'], ['cuota_iva', 'IVA (€)'], ['total', 'Total (€)'], ['forma_pago', 'Forma de pago'], ['matricula', 'Matrícula'], ['litros', 'Litros']];
+    ['base_imponible', 'Base (€)'], ['iva_porcentaje', 'IVA (%)'], ['cuota_iva', 'IVA (€)'], ['total', 'Total (€)'], ['forma_pago', 'Forma de pago'], ['matricula', 'Matrícula'], ['litros', 'Litros'], ['hora', 'Hora'], ['numero', 'Número del ticket']];
   var entradas = {}, rejilla = h('div', { class: 'campos-ficha' });
   campos.forEach(function (c) {
     var valor = t[c[0]] === null || t[c[0]] === undefined ? '' : String(t[c[0]]).slice(0, c[2] === 'date' ? 10 : 300);
@@ -1936,11 +1942,13 @@ function sinVistaPrevia(visor) {
   visor.appendChild(h('p', { class: 'vacio' }, 'Este tipo de archivo no tiene vista previa en el panel. Puedes continuar revisando los datos'
     + (S.rol === 'Administrador' ? ' o pulsar «Descargar» para abrirlo en el ordenador.' : '.')));
 }
-function crearVisor(visor, url, nombre) {
-  cerrarVisor();
+// aparte (23-nov-2026): para «Comparar» hacen falta dos visores a la vez. Uno «aparte» no cierra el de la ficha ni lo
+// cierra el de la ficha: lo cierra quien lo pidió con el objeto que se devuelve (su .cerrar()).
+function crearVisor(visor, url, nombre, aparte) {
+  if (!aparte) cerrarVisor();
   var esImagen = /\.(jpe?g|png|webp|gif|bmp)$/i.test(nombre), esPdf = /\.pdf$/i.test(nombre);
   visor.textContent = '';
-  if (!esImagen && !esPdf) { if (TIPOS_TEXTO_VISOR.test(nombre)) vistaComoTexto(visor, url, nombre); else sinVistaPrevia(visor); return; }
+  if (!esImagen && !esPdf) { if (TIPOS_TEXTO_VISOR.test(nombre)) vistaComoTexto(visor, url, nombre); else sinVistaPrevia(visor); return null; }
   var zoom = 1, vivo = true, hojas = [], pdf = null, turno = 0, temporizador = null, arrastre = null, pellizco = null;
   var claveGiro = 'mcd-giro:' + nombre, giro = 0;
   try { giro = (Number(localStorage.getItem(claveGiro)) || 0) % 360; } catch (e) { giro = 0; }      // sin almacenamiento: derecho
@@ -2025,7 +2033,7 @@ function crearVisor(visor, url, nombre) {
     vivo = false; clearTimeout(temporizador); if (observador) observador.disconnect();
     if (pdf) { try { var fin = pdf.destroy(); if (fin && fin.catch) fin.catch(function () {}); } catch (e) { /* ya estaba cerrado */ } pdf = null; }
   } };
-  visorAbierto = este;
+  if (!aparte) visorAbierto = este;
   if (observador) observador.observe(zona);
   zona.addEventListener('scroll', pintarLuego);
   // Ctrl + rueda (o el gesto de pellizco del panel táctil del portátil): acerca y aleja donde está el cursor
@@ -2103,6 +2111,7 @@ function crearVisor(visor, url, nombre) {
       noDisponible();
     }
   })();
+  return este;
 }
 // Ruta de un archivo tal como se apunta en el Historial: sin caracteres de control ni de cambio de sentido del
 // texto y de 160 letras como mucho (la base de datos no admite otra cosa, 19-nov-2026)
@@ -2579,7 +2588,7 @@ var CAMPOS_FICHA = {
              ['Cobro o pago', ['estado_cobro_pago', 'importe_cobrado_pagado', 'fecha_cobro_pago']],
              ['Notas de revisión', ['observaciones']]],
   albaranes: [['Datos del albarán', ['tipo_albaran', 'num_albaran', 'fecha', 'nif', 'nombre', 'matricula']],
-              ['Servicio y vinculación', ['origen', 'destino', 'concepto', 'importe', 'num_factura']],
+              ['Servicio y vinculación', ['origen', 'destino', 'concepto', 'importe', 'num_factura', 'codigo_conductor', 'referencia_facturacion']],
               ['Notas de revisión', ['observaciones']]],
   revision: [['Motivo de revisión', ['motivo']]]
 };
@@ -2590,7 +2599,7 @@ var ETIQUETAS = { num_factura: 'Número de factura', num_albaran: 'Número de al
   observaciones: 'Observaciones', motivo: 'Motivo de revisión', id_doc: 'ID', empresa: 'Empresa', tipo_factura: 'Tipo (emitida o recibida)', tipo_albaran: 'Tipo (emitido o recibido)', estado: 'Estado', albaranes: 'Albaranes citados',
   comprobacion_albaranes: 'Comprobación de albaranes', estado_factura: 'Estado de facturación', factura_vinculada: 'Factura vinculada', dias_sin_factura: 'Días sin factura',
   posible_factura: 'Posible factura', categoria_gasto: 'Categoría de gasto', creado_en: 'Registrado', actualizado_en: 'Última modificación', fecha_alta: 'Fecha de alta',
-  clase: 'Clase (orden_carga = orden de carga)', va_con: 'Va con (pack)', referencias: 'Otras referencias (pedido, CMR…)', propuesta_pack: 'Pack propuesto por el programa', pack_rechazado: 'Packs rechazados', archivo_original: 'Archivo original', hash_sha256: 'Huella del archivo', tokens_entrada: 'Tokens de entrada', tokens_salida: 'Tokens de salida', coste_eur: 'Coste IA (€)' };
+  clase: 'Clase (orden_carga = orden de carga)', va_con: 'Va con (pack)', referencias: 'Otras referencias (pedido, CMR…)', codigo_conductor: 'Código del conductor (3 cifras)', referencia_facturacion: 'Referencia de facturación del cliente', propuesta_pack: 'Pack propuesto por el programa', pack_rechazado: 'Packs rechazados', archivo_original: 'Archivo original', hash_sha256: 'Huella del archivo', tokens_entrada: 'Tokens de entrada', tokens_salida: 'Tokens de salida', coste_eur: 'Coste IA (€)' };
 var fichaSucia = null, guardandoFicha = false, focoAntesModal = null, secuenciaFicha = 0;
 
 // Qué casillas hay que mirar (20-nov-2026): sale de los avisos que el programa escribe en Observaciones.
@@ -2607,6 +2616,7 @@ var AVISOS_CASILLA = [
   [/vencimiento anterior/, ['fecha_vencimiento'], [], 'Vence antes de la fecha de la factura'],
   [/plazo de pago de \d+ dias/, ['fecha_vencimiento'], [], 'Más de 60 días de plazo de pago (máximo legal)'],
   [/sin linea aparte de revision por gasoleo/, ['total'], [], 'Falta la línea aparte de gasóleo'],
+  [/subida de precio/, ['base_imponible'], [], 'Más caro que otras veces con este proveedor'],
   [/sin nif|nif del cliente\/proveedor no valido/, ['nif'], ['nif'], 'NIF que falta o no es válido'],
   [/sin numero de documento/, ['#numero'], ['#numero'], 'Falta el número'],
   [/mismo numero que/, ['#numero'], ['#numero'], 'Número repetido'],
@@ -2676,8 +2686,17 @@ function seccionPack(empresa, id, fila, editable) {
   function fallo(e) { aviso.className = 'mensaje-ficha fallo'; aviso.textContent = mensajeError(e); }
   function terminar(texto) { fichaSucia = null; guardandoFicha = false; cerrarModal(); avisoBreve(texto); cargar(false); }
   function conEnter(campo, boton) { campo.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); boton.click(); } }); }
+  // (23-nov-2026) «Comparar con…»: abre los dos documentos uno al lado del otro SIN cerrar esta ficha (antes, pulsar el
+  // otro albarán cerraba este y no había forma de verlos juntos). respuesta: los botones Sí/No de una propuesta, si los hay.
+  function comparar(otro, papelEste, papelOtro, respuesta) {
+    return h('button', { type: 'button', class: 'boton comparar-boton', title: 'Ver los dos documentos uno al lado del otro', onclick: function (e) {
+      abrirComparacion({ empresa: empresa, foco: e.currentTarget, respuesta: editable ? respuesta || null : null,
+        este: { id: id, fila: fila, papel: papelEste }, otro: { id: otro, fila: conocidos[otro], papel: papelOtro } });
+    } }, 'Comparar con ' + otro);
+  }
   if (fila.estado === 'Anexo' && fila.va_con) {
     caja.appendChild(h('p', { class: 'ayuda-campo' }, ['Este papel va con el albarán ', abrir(fila.va_con), ', que es el que se factura. No cuenta como albarán aparte ni espera su propia factura.']));
+    var botonesAnexo = [comparar(fila.va_con, 'Este papel (anexo)', 'Su albarán principal')];
     if (editable) {
       var soltar = h('button', { type: 'button', class: 'boton', onclick: function () {
         if (!confirm('¿Soltar ' + id + (propio ? ' (' + propio + ')' : '') + ' del pack de ' + conNombre(fila.va_con) + '?\n\nVolverá a contar como un albarán aparte y a esperar su propia factura.')) return;
@@ -2685,8 +2704,9 @@ function seccionPack(empresa, id, fila, editable) {
         rpc('panel_soltar_albaran', { p_empresa: empresa, p_id: id }).then(function () { terminar('Albarán ' + id + ' suelto del pack'); })
           .catch(function (e) { soltar.disabled = false; fallo(e); });
       } }, 'Soltar del pack');
-      caja.appendChild(h('div', { class: 'en-linea' }, [soltar]));
+      botonesAnexo.unshift(soltar);
     }
+    caja.appendChild(h('div', { class: 'en-linea' }, botonesAnexo));
     caja.appendChild(aviso);
     return caja;
   }
@@ -2696,23 +2716,33 @@ function seccionPack(empresa, id, fila, editable) {
     var motivo = propuesta.slice(principalPropuesto.length).replace(/^\s*·\s*/, '').split(principalPropuesto).join('ese albarán');
     var bloque = h('div', { class: 'propuesta-pack' }, [h('p', {}, [h('b', {}, 'Propuesta del programa: '), '¿este papel va con el albarán ', abrir(principalPropuesto), '?',
       motivo ? h('span', { class: 'sub' }, ' Motivo: ' + motivo + '.') : null])]);
+    // Las dos respuestas, iguales desde la ficha y desde «Comparar»: devuelven la promesa (el error lo enseña quien llama)
+    var juntarConPropuesto = function () {
+      var destino = conNombre(principalPropuesto);
+      return rpc('panel_juntar_albaran', { p_empresa: empresa, p_id: id, p_principal: principalPropuesto }).then(function () { terminar('Albarán ' + id + ' va ahora con ' + destino); });
+    };
+    var rechazarPropuesto = function () {
+      var rechazado = conNombre(principalPropuesto);
+      return rpc('panel_rechazar_pack', { p_empresa: empresa, p_id: id }).then(function () { terminar('Anotado: ' + id + ' no va con ' + rechazado + ' (no se volverá a proponer)'); });
+    };
+    var botonesPropuesta = [comparar(principalPropuesto, 'Este papel', 'El albarán propuesto', {
+      pregunta: '¿Este papel va con el albarán propuesto?' + (motivo ? ' Motivo del programa: ' + motivo + '.' : ''), si: juntarConPropuesto, no: rechazarPropuesto })];
     if (editable) {
       var si = h('button', { type: 'button', class: 'boton principal', onclick: function () {
         si.disabled = no.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Juntando…';
-        var destino = conNombre(principalPropuesto);
-        rpc('panel_juntar_albaran', { p_empresa: empresa, p_id: id, p_principal: principalPropuesto }).then(function () { terminar('Albarán ' + id + ' va ahora con ' + destino); })
-          .catch(function (e) { si.disabled = no.disabled = false; fallo(e); });
+        juntarConPropuesto().catch(function (e) { si.disabled = no.disabled = false; fallo(e); });
       } }, 'Sí, va con ese');
       var no = h('button', { type: 'button', class: 'boton', onclick: function () {
         si.disabled = no.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Guardando…';
-        var rechazado = conNombre(principalPropuesto);
-        rpc('panel_rechazar_pack', { p_empresa: empresa, p_id: id }).then(function () { terminar('Anotado: ' + id + ' no va con ' + rechazado + ' (no se volverá a proponer)'); })
-          .catch(function (e) { si.disabled = no.disabled = false; fallo(e); });
+        rechazarPropuesto().catch(function (e) { si.disabled = no.disabled = false; fallo(e); });
       } }, 'No va con ese');
-      bloque.appendChild(h('div', { class: 'en-linea' }, [si, no]));
+      botonesPropuesta.unshift(si, no);
     }
+    bloque.appendChild(h('div', { class: 'en-linea' }, botonesPropuesta));
     caja.appendChild(bloque);
   }
+  // Fila de botones «Comparar con…» debajo de una lista de papeles (fuera de la lista: cada papel sigue siendo un solo botón)
+  function filaComparar(botones) { return botones.length ? h('div', { class: 'en-linea comparar-lista' }, [h('span', { class: 'sub' }, 'Verlo al lado de este:')].concat(botones)) : null; }
   var lista = h('ul', { class: 'lista-pack', 'aria-label': 'Anexos de este albarán' }, h('li', { class: 'sub' }, 'Buscando sus anexos…'));
   var propuestos = h('div', { class: 'propuesta-pack', hidden: 'hidden' });
   function pintarPropuestos() {
@@ -2723,6 +2753,17 @@ function seccionPack(empresa, id, fila, editable) {
       propuestos.appendChild(h('p', {}, h('b', {}, 'El programa propone que vayan con este albarán:')));
       var lista2 = h('ul', { class: 'lista-pack' }, filas.map(function (x) { return h('li', {}, abrir(x.id_doc, x)); }));
       propuestos.appendChild(lista2);
+      // Desde «Comparar» también se contesta cada propuesta; al terminar se vuelve a esta ficha con el pack al día
+      function yaContestado(texto) {
+        soltarComparacion(); aviso.className = 'mensaje-ficha exito'; aviso.textContent = texto;
+        pintarAnexos(); pintarPropuestos(); cargar(false);
+      }
+      propuestos.appendChild(filaComparar(filas.map(function (x) {
+        return comparar(x.id_doc, 'Este albarán (el principal)', 'Papel propuesto', {
+          pregunta: '¿Este papel va con este albarán?' + (/ · /.test(x.propuesta_pack || '') ? ' Motivo del programa: ' + String(x.propuesta_pack).split(' · ').slice(1).join(' · ') + '.' : ''),
+          si: function () { return rpc('panel_juntar_albaran', { p_empresa: empresa, p_id: x.id_doc, p_principal: id }).then(function () { yaContestado('Añadido al pack: ' + x.id_doc + '.'); }); },
+          no: function () { return rpc('panel_rechazar_pack', { p_empresa: empresa, p_id: x.id_doc }).then(function () { yaContestado('Anotado: ' + x.id_doc + ' no va con este albarán (no se volverá a proponer).'); }); } });
+      })));
       if (!editable) return;
       var todos = h('button', { type: 'button', class: 'boton principal', onclick: function () {
         todos.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Juntando…';
@@ -2738,13 +2779,16 @@ function seccionPack(empresa, id, fila, editable) {
   }
   function pintarAnexos(antes) {            // antes: se espera a que también estén las propuestas, para que todo salga a la vez
     return Promise.all([consulta(sb.from('albaranes').select(COLUMNAS_NOMBRE_ALBARAN).eq('empresa', empresa).eq('va_con', id).order('id_doc')), antes]).then(function (rs) {
-      var filas = rs[0].data || []; lista.textContent = '';
+      var filas = rs[0].data || []; lista.textContent = ''; compararAnexos.textContent = '';
       if (!filas.length) lista.appendChild(h('li', { class: 'sub' }, 'Va solo: no tiene anexos.'));
       filas.forEach(function (x) { lista.appendChild(h('li', {}, abrir(x.id_doc, x))); });
+      var fila2 = filaComparar(filas.map(function (x) { return comparar(x.id_doc, 'Este albarán (el principal)', 'Su anexo'); }));
+      if (fila2) compararAnexos.appendChild(fila2);
       return filas.length;
-    }).catch(function () { lista.textContent = ''; lista.appendChild(h('li', { class: 'sub' }, 'No se han podido cargar los anexos.')); return 0; });
+    }).catch(function () { lista.textContent = ''; compararAnexos.textContent = ''; lista.appendChild(h('li', { class: 'sub' }, 'No se han podido cargar los anexos.')); return 0; });
   }
-  caja.appendChild(lista); caja.appendChild(propuestos); pintarAnexos(pintarPropuestos());
+  var compararAnexos = h('div', { class: 'comparar-anexos' });
+  caja.appendChild(lista); caja.appendChild(compararAnexos); caja.appendChild(propuestos); pintarAnexos(pintarPropuestos());
   if (editable && ['Descartado', 'Duplicado'].indexOf(fila.estado || '') < 0) {
     // Para juntar papeles ya no hay que saberse los ID: se buscan por número, nombre o destino y se marcan en una lista.
     // (Quien se sepa el ID puede seguir escribiéndolo: VTX-0040, VTX-0049.)
@@ -2822,6 +2866,104 @@ function seccionPack(empresa, id, fila, editable) {
   }
   caja.appendChild(aviso);
   return caja;
+}
+
+// ---------------------------------------------------------------------
+// COMPARAR DOS ALBARANES (23-nov-2026)
+// Desde la ficha de un albarán, «Comparar con VTX-0069» enseña los dos documentos uno al lado del otro (uno encima
+// del otro en el móvil), cada uno con su visor (zoom, páginas y giro) y un resumen de sus datos. La ficha NO se cierra:
+// se esconde mientras tanto y «Volver a la ficha» (o Escape) la deja como estaba, con lo que se hubiera escrito.
+// Si es una propuesta del programa, se contesta desde aquí con las MISMAS funciones del servidor que en la ficha.
+// Todo lo que viene de los documentos se pinta como texto (h() usa createTextNode), nunca como HTML.
+// ---------------------------------------------------------------------
+var comparacion = null;                     // la comparación abierta: { soltar(), foco }
+var CAMPOS_COMPARAR = [['num_albaran', 'Número'], ['fecha', 'Fecha'], ['nombre', 'Cliente o proveedor'], ['nif', 'NIF'],
+  ['origen', 'Origen'], ['destino', 'Destino'], ['matricula', 'Matrícula'], ['referencias', 'Otras referencias']];
+// Quita la comparación sin tocar la ficha (al abrir otra ventana, al cerrar la ficha o al contestar)
+function soltarComparacion() { if (comparacion) { var c = comparacion; comparacion = null; c.soltar(); } }
+// «Volver a la ficha»: quita la comparación y devuelve el foco al botón que la abrió
+function volverDeLaComparacion() {
+  var foco = comparacion && comparacion.foco; soltarComparacion();
+  if (foco && foco.isConnected) foco.focus();
+}
+// op: { empresa, foco, este: { id, fila, papel }, otro: { id, fila, papel }, respuesta: { pregunta, si(), no() } o null }
+function abrirComparacion(op) {
+  var caja = document.getElementById('caja'), fichaAbierta = caja && caja.querySelector('.contenido-revision');
+  if (!fichaAbierta) return;
+  soltarComparacion();
+  var visores = [], mia = { foco: op.foco };
+  var aviso = h('div', { class: 'mensaje-ficha', role: 'status', 'aria-live': 'polite' });
+  var volver = h('button', { type: 'button', class: 'boton comparar-volver', onclick: volverDeLaComparacion }, '← Volver a la ficha');
+  var acciones = [];
+  if (op.respuesta) {
+    var contestar = function (acepta) {
+      si.disabled = no.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = acepta ? 'Juntando…' : 'Guardando…';
+      (acepta ? op.respuesta.si() : op.respuesta.no()).catch(function (e) {
+        if (comparacion !== mia) return;
+        si.disabled = no.disabled = false; aviso.className = 'mensaje-ficha fallo'; aviso.textContent = mensajeError(e);
+      });
+    };
+    var si = h('button', { type: 'button', class: 'boton principal', onclick: function () { contestar(true); } }, 'Sí, va con este');
+    var no = h('button', { type: 'button', class: 'boton', onclick: function () { contestar(false); } }, 'No va con este');
+    acciones.push(si, no);
+  }
+  acciones.push(volver);
+  function columna(doc) {
+    var titulo = h('span', { class: 'comparar-nombre' }, etiquetaDocumento('albaranes', doc.fila, doc.id));
+    var datos = h('dl', { class: 'comparar-datos' }, h('dd', { class: 'sub' }, 'Cargando sus datos…'));
+    var visor = h('div', { class: 'visor-documento comparar-visor' }, h('p', { class: 'vacio' }, 'Buscando el archivo del documento…'));
+    doc.pintar = function (otraFila) {             // el resumen, con «igual» donde los dos dicen lo mismo
+      datos.textContent = '';
+      if (!doc.fila) { datos.appendChild(h('dd', { class: 'sub' }, 'No se encuentra este albarán (puede que ya no exista).')); return; }
+      titulo.textContent = ''; titulo.appendChild(etiquetaDocumento('albaranes', doc.fila, doc.id));
+      CAMPOS_COMPARAR.forEach(function (c) {
+        var v = texto(doc.fila[c[0]]).trim(), w = otraFila ? texto(otraFila[c[0]]).trim() : '';
+        var igual = v && w && v.replace(/\s+/g, ' ').toLowerCase() === w.replace(/\s+/g, ' ').toLowerCase();
+        datos.appendChild(h('dt', {}, c[1]));
+        datos.appendChild(h('dd', { class: igual ? 'coincide' : '' }, [(c[0] === 'fecha' ? fecha(v) : v) || '—',
+          igual ? h('span', { class: 'igual', title: 'Los dos documentos dicen lo mismo' }, ' = igual') : null]));
+      });
+    };
+    doc.visor = visor;
+    return h('section', { class: 'comparar-doc', 'aria-label': doc.papel + ' ' + doc.id }, [
+      h('h4', {}, [h('span', { class: 'pill marca' }, doc.papel), titulo]), datos, visor]);
+  }
+  function sinVista(visor, t) { if (comparacion !== mia) return; visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, t || 'La vista previa no está disponible.')); }
+  // El archivo de cada uno: el original (o la copia tachada si no hay original), como en la ficha y apuntado en el historial
+  function verArchivo(doc) {
+    localizarArchivos(op.empresa, 'albaranes', doc.id).then(function (d) {
+      if (comparacion !== mia) return;
+      var tipo = d.original ? 'original' : 'tachado', archivo = d.original || d.tachado;
+      if (!archivo) { sinVista(doc.visor, 'No hay archivo guardado para este documento.'); return; }
+      (function mostrar(archivo) {
+        if (!archivo.enWeb) { avisoEnElOrdenador(doc.visor, archivo.pedido, archivo.buscar, function (traido) { if (comparacion === mia) mostrar(traido); }); return; }
+        sinVista(doc.visor, 'Abriendo…');
+        rpc('panel_registrar_acceso_archivo', { p_id: doc.id, p_tipo: tipo, p_accion: 'Ver documento' }).then(function () { return urlFirmada(archivo.ruta); }).then(function (url) {
+          if (comparacion !== mia) return;
+          var v = crearVisor(doc.visor, url, archivo.nombre, true); if (v) visores.push(v);
+        }).catch(function () { sinVista(doc.visor); });
+      })(archivo);
+    }).catch(function () { sinVista(doc.visor); });
+  }
+  var este = Object.assign({}, op.este), otro = Object.assign({}, op.otro);
+  var vista = h('section', { class: 'comparar-docs', 'aria-label': 'Comparar ' + este.id + ' con ' + otro.id }, [
+    h('div', { class: 'comparar-cab' }, [h('h3', {}, 'Comparar los dos papeles'),
+      op.respuesta ? h('p', { class: 'comparar-pregunta' }, op.respuesta.pregunta) : null,
+      h('div', { class: 'en-linea comparar-acciones' }, acciones), aviso]),
+    h('div', { class: 'comparar-columnas' }, [columna(este), columna(otro)])]);
+  mia.soltar = function () {
+    visores.forEach(function (v) { v.cerrar(); }); visores = [];
+    vista.remove(); fichaAbierta.hidden = false; caja.classList.remove('comparando');
+  };
+  comparacion = mia;
+  fichaAbierta.hidden = true; caja.classList.add('comparando'); caja.appendChild(vista); volver.focus();
+  // Los datos completos del otro (de la ficha solo se sabe su nombre)
+  este.pintar(null);
+  consulta(sb.from('albaranes').select('*').eq('empresa', op.empresa).eq('id_doc', otro.id).maybeSingle()).then(function (r) {
+    if (comparacion !== mia) return;
+    otro.fila = r.data || null; otro.pintar(este.fila); este.pintar(otro.fila);
+  }).catch(function () { if (comparacion === mia) { otro.fila = null; otro.pintar(null); } });
+  verArchivo(este); verArchivo(otro);
 }
 
 // En la ficha de un albarán: decir si en realidad es una orden de carga (o al revés). Solo quien puede revisar.
@@ -3245,7 +3387,7 @@ function avisoBreve(texto) {
   setTimeout(function () { aviso.classList.add('saliendo'); setTimeout(function () { aviso.remove(); }, 400); }, 3500);
 }
 function abrirModal(titulo, contenido, extra) {
-  ++secuenciaFicha; cerrarVisor();
+  ++secuenciaFicha; cerrarVisor(); soltarComparacion();
   if (!document.getElementById('modal').classList.contains('abierto')) focoAntesModal = document.activeElement;
   fichaSucia = null; guardandoFicha = false;
   var caja = document.getElementById('caja'); caja.textContent = ''; caja.className = 'caja';
@@ -3257,7 +3399,7 @@ function abrirModal(titulo, contenido, extra) {
 function cerrarModal() {
   if (guardandoFicha) return;
   if (fichaSucia && fichaSucia() && !confirm('Hay cambios sin guardar. ¿Cerrar sin guardarlos?')) return;
-  ++secuenciaFicha; fichaSucia = null; cerrarVisor(); document.getElementById('modal').classList.remove('abierto'); document.body.style.overflow = '';
+  ++secuenciaFicha; fichaSucia = null; cerrarVisor(); soltarComparacion(); document.getElementById('modal').classList.remove('abierto'); document.body.style.overflow = '';
   if (focoAntesModal && focoAntesModal.isConnected) focoAntesModal.focus();
 }
 // Solo se cierra al pulsar en el fondo si el clic EMPEZÓ en el fondo: al seleccionar el texto de un campo y soltar el
@@ -3267,7 +3409,7 @@ document.getElementById('modal').addEventListener('pointerdown', function (e) { 
 document.getElementById('modal').addEventListener('click', function (e) { if (e.target.id === 'modal' && pulsadoEnElFondo) cerrarModal(); pulsadoEnElFondo = false; });
 document.addEventListener('keydown', function (e) {
   if (!document.getElementById('modal').classList.contains('abierto')) return;
-  if (e.key === 'Escape') { e.preventDefault(); cerrarModal(); }
+  if (e.key === 'Escape') { e.preventDefault(); if (comparacion) volverDeLaComparacion(); else cerrarModal(); }   // comparando: Escape vuelve a la ficha
   if (e.key === 'Tab') {
     var el = [].slice.call(document.getElementById('caja').querySelectorAll('button,input,select,textarea,a[href],summary,iframe,[tabindex="0"]')).filter(function (x) { return !x.disabled && x.getClientRects().length; });
     var primero = el[0], ultimo = el[el.length - 1];
