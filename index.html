@@ -150,7 +150,8 @@
     border-radius:var(--radio-s); padding:var(--e1) var(--e2); font:600 var(--t-s)/1.2 var(--letra); min-height:44px; cursor:pointer; text-decoration:none; white-space:nowrap;
     transition:background-color .12s, border-color .12s; }
   .boton:hover:not(:disabled) { background:var(--marca-suave); border-color:var(--marca); } .boton:active:not(:disabled) { transform:translateY(1px); }
-  .boton:disabled { opacity:.55; cursor:wait; }
+  /* (25-nov-2026) Un botón apagado no está «esperando»: el círculo azul solo sale mientras de verdad se guarda (aria-busy) */
+  .boton:disabled { opacity:.55; cursor:default; } .boton[aria-busy=true] { cursor:progress; }
   .boton.principal { background:var(--marca-fondo); color:#fff; border-color:var(--marca-fondo); }
   .boton.principal:hover:not(:disabled) { background:var(--marca-fuerte); border-color:var(--marca-fuerte); }
   .boton.descarga { color:var(--ok); border-color:var(--ok-f); } .boton.descarga:hover:not(:disabled) { background:var(--ok-f); border-color:var(--ok); }
@@ -310,6 +311,7 @@
   .abrir-fila { color:var(--marca); background:none; border:0; padding:0; font:inherit; font-weight:700; text-align:left; cursor:pointer; font-variant-numeric:tabular-nums; }
   .abrir-fila:hover { text-decoration:underline; text-underline-offset:3px; }
   .paginacion { display:flex; gap:var(--e15); align-items:center; justify-content:center; margin-top:var(--e2); color:var(--suave); font-size:var(--t-s); }
+  .paginacion-arriba { margin:0 0 var(--e15); justify-content:flex-end; } @media (max-width:760px) { .paginacion-arriba { display:none; } }
   .miga { display:flex; gap:var(--e1); flex-wrap:wrap; margin-bottom:var(--e15); font-size:var(--t-s); align-items:center; } .miga span { color:var(--suave); }
   .fila { display:grid; gap:var(--e2); grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); margin-bottom:var(--e3); }
   main h3 { margin:var(--e3) 0 var(--e15); font-size:var(--t-l); }
@@ -328,6 +330,7 @@
   .caja .cab { display:flex; align-items:center; gap:var(--e15); margin-bottom:var(--e2); flex-wrap:wrap; }
   .caja .cab h2, .caja .cab h3 { margin:0; font:700 var(--t-xl)/1.15 var(--letra-rotulo); text-transform:none; letter-spacing:normal; flex:1 1 14em; min-width:0; overflow-wrap:anywhere; }
   .caja.revision-amplia { width:min(1560px,98vw); max-height:96vh; padding:0; overflow:hidden; display:flex; flex-direction:column; }
+  .flechas-ficha { display:flex; align-items:center; gap:var(--e1); flex:none; } .flechas-ficha .sub { white-space:nowrap; } .flecha-ficha { min-width:44px; }
   .caja.revision-amplia > .cab { padding:var(--e15) var(--e3); margin:0; border-bottom:1px solid var(--borde); }
   .contenido-revision { min-height:0; display:flex; flex-direction:column; }
   .zona-revision { display:grid; grid-template-columns:minmax(300px,1fr) minmax(420px,1fr); height:calc(96vh - 166px); min-height:240px; }
@@ -377,22 +380,28 @@
   .propuesta-pack { background:var(--acento-suave); border-radius:var(--radio-s); padding:var(--e15) var(--e2); margin:0 0 var(--e15); display:grid; gap:var(--e1); }
   .propuesta-pack p { margin:0; } .propuesta-pack .lista-pack { margin:0; }
   .lista-pack { list-style:none; margin:0 0 var(--e15); padding:0; display:grid; gap:var(--e05); }
-  .lista-pack li { display:flex; gap:var(--e15); align-items:baseline; flex-wrap:wrap; }
+  .lista-pack li { display:flex; gap:var(--e15); align-items:center; flex-wrap:wrap; }
   .lista-pack .boton.enlace { padding:0; font-weight:700; }
   .fila-pack { margin-top:var(--e15); } .fila-pack input[type=text] { flex:1 1 200px; min-width:0; }
   /* Comparar dos albaranes uno al lado del otro (23-nov-2026); en el móvil, uno encima del otro */
-  .comparar-lista { margin:0 0 var(--e15); } .comparar-boton { min-height:36px; padding:var(--e05) var(--e15); font-size:var(--t-xs); }
-  .comparar-docs { flex:1; min-height:0; overflow:auto; padding:var(--e15) var(--e2); display:grid; gap:var(--e15); align-content:start; }
-  .comparar-cab { display:grid; gap:var(--e1); position:sticky; top:0; z-index:3; background:var(--panel); padding:var(--e1) 0; box-shadow:0 6px 8px -8px rgba(0,0,0,.35); } .comparar-cab h3 { margin:0; font-size:var(--t-l); } .comparar-pregunta { margin:0; font-weight:600; }
+  .comparar-lista { margin:0 0 var(--e15); } .comparar-boton:not(.principal) { min-height:36px; padding:var(--e05) var(--e15); font-size:var(--t-xs); }
+  .comparar-docs { flex:1; min-height:0; overflow:auto; padding:0 var(--e2) var(--e15); display:grid; gap:var(--e15); align-content:start; }
+  .comparar-cab { display:grid; gap:var(--e1); position:sticky; top:0; z-index:3; background:var(--panel); padding:var(--e15) 0 var(--e1); box-shadow:0 6px 8px -8px rgba(0,0,0,.35); }
+  .comparar-titulo { display:flex; flex-wrap:wrap; align-items:center; gap:var(--e15); } .comparar-titulo h3 { margin:0; font-size:var(--t-l); } .comparar-motivo { margin:0; }
+  .comparar-acciones { display:flex; flex-wrap:wrap; gap:var(--e1); } .comparar-acciones:empty { display:none; }
+  .comparar-opcion { flex:1 1 200px; display:grid; gap:2px; text-align:center; justify-items:center; align-content:center; padding:var(--e1) var(--e15); white-space:normal; line-height:1.3; }
+  .comparar-opcion b { font-size:var(--t-m); } .comparar-opcion small { font-size:var(--t-xs); font-weight:400; }
+  .comparar-quedarse, .comparar-atras { display:none; } .eligiendo .comparar-atras { display:inline-flex; } .eligiendo .comparar-volver { display:none; } .comparar-quedarse { width:100%; } .eligiendo .comparar-quedarse { display:block; } .eligiendo .comparar-doc { border-color:var(--marca); }
   .comparar-columnas { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--e15); }
   .comparar-doc { min-width:0; display:flex; flex-direction:column; gap:var(--e1); border:1px solid var(--borde); border-radius:var(--radio); background:var(--panel); padding:var(--e15); }
-  .comparar-doc h4 { margin:0; display:flex; flex-wrap:wrap; gap:var(--e1); align-items:baseline; font-size:var(--t-m); overflow-wrap:anywhere; }
-  .comparar-datos { display:grid; grid-template-columns:auto minmax(0,1fr); gap:var(--e05) var(--e15); margin:0; font-size:var(--t-s); }
-  .comparar-datos dt { color:var(--suave); font-weight:600; } .comparar-datos dd { margin:0; overflow-wrap:anywhere; }
-  .comparar-datos .igual { color:var(--ok); font-size:var(--t-xs); font-weight:600; }
+  .comparar-doc h4 { margin:0; display:flex; gap:var(--e1); align-items:baseline; font-size:var(--t-m); overflow-wrap:anywhere; } .comparar-doc h4 .pill { flex:none; } .comparar-nombre { min-width:0; flex:1; } @media (min-width:761px) { .comparar-doc h4 { min-height:3.1em; } }
+  .comparar-datos { font-size:var(--t-s); } .comparar-tabla + .comparar-tabla { margin-top:var(--e15); } .comparar-datos p { margin:0; } .comparar-iguales { color:var(--ok); font-weight:600; } .comparar-datos summary { cursor:pointer; padding:var(--e1) 0; }
+  .comparar-tabla { width:100%; border-collapse:collapse; table-layout:fixed; } .comparar-tabla caption { text-align:left; font-weight:700; padding-bottom:var(--e05); }
+  .comparar-tabla th, .comparar-tabla td { text-align:left; padding:var(--e05) var(--e1); border-bottom:1px solid var(--borde); overflow-wrap:anywhere; vertical-align:top; } .comparar-tabla th:first-child { width:22%; color:var(--suave); }
+  .comparar-tabla.cambia td { background:var(--aviso-f); color:var(--texto); font-weight:600; }
   .comparar-visor { flex:none; height:68vh; min-height:320px; border:1px solid var(--borde); border-radius:var(--radio-s); background:var(--gris-f); overflow:hidden; }
   .caja.comparando > .cab > .boton:not(.cerrar-modal) { display:none; }      /* «Ampliar formulario» no tiene sentido aquí */
-  @media (max-width:760px) { .comparar-columnas { grid-template-columns:1fr; } .comparar-visor { height:60vh; } .comparar-docs { padding:var(--e1); } }
+  @media (max-width:760px) { .comparar-columnas { grid-template-columns:1fr; } .comparar-visor { height:60vh; } .comparar-docs { padding:0 var(--e1) var(--e1); } .comparar-cab { gap:var(--e05); } .comparar-opcion { flex-basis:100%; padding:var(--e05) var(--e1); } .comparar-titulo h3 { font-size:var(--t-m); } }
   /* Lista para elegir albaranes con casillas (en vez de escribir sus ID) */
   .elegir-pack { list-style:none; margin:var(--e1) 0 0; padding:var(--e05); display:grid; gap:2px; border:1px solid var(--borde); border-radius:var(--radio-s); background:var(--panel); max-height:260px; overflow:auto; }
   .elegir-pack li.sub { padding:var(--e1); margin:0; }
@@ -407,6 +416,12 @@
   .modo-documento .zona-revision { grid-template-columns:1fr; } .modo-documento .editor-documento { display:none; }
   .aviso-total { max-width:520px; margin:var(--e6) auto; }
   .aviso-total h3 { font:700 var(--t-xl)/1.2 var(--letra-rotulo); text-transform:uppercase; margin-bottom:var(--e1); }
+  .pregunta { position:fixed; inset:0; z-index:40; display:flex; align-items:center; justify-content:center; padding:var(--e2); background:rgba(10,14,20,.62); }
+  .pregunta-caja { background:var(--panel); color:var(--texto); border-radius:var(--radio); box-shadow:var(--sombra-alta); width:min(460px,100%); max-height:90vh; overflow:auto; padding:var(--e3); display:grid; gap:var(--e15); }
+  .pregunta-caja h2 { margin:0; text-transform:none; letter-spacing:normal; font-size:var(--t-l); line-height:1.35; overflow-wrap:anywhere; } .pregunta-caja p { margin:0; color:var(--suave); line-height:1.5; overflow-wrap:anywhere; }
+  .pregunta-botones { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:var(--e1); margin-top:var(--e1); } @media (max-width:480px) { .pregunta-botones .boton { flex:1 1 100%; } }
+  .todo-revisado { text-align:center; padding:var(--e3); display:grid; gap:var(--e15); justify-items:center; font-size:var(--t-l); } .todo-revisado p { margin:0; }
+  .sugerir-fecha { justify-self:start; min-height:32px; text-align:left; }
   .aviso-flotante { position:fixed; left:50%; bottom:var(--e3); transform:translateX(-50%); z-index:30; display:flex; align-items:center; gap:var(--e05); width:max-content; max-width:calc(100vw - 32px);
     background:var(--asfalto); color:#fff; padding:var(--e15) var(--e2); border-radius:var(--radio-s); border-left:6px solid var(--acento); box-shadow:var(--sombra-alta); font-weight:600; transition:opacity .4s; }
   .aviso-flotante.saliendo { opacity:0; }
@@ -565,6 +580,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=v9953a05"></script>
+<script src="app.js?v=v5368003"></script>
 </body>
 </html>

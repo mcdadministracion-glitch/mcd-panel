@@ -147,7 +147,15 @@ function mensajeError(e) {
 // Peticiones a las funciones del servidor: devuelven el dato o lanzan un error con texto claro
 function rpc(fn, args) {
   if (/^panel_(guardar|descartar|juntar|soltar|rechazar|reintentar|clase)/.test(fn)) DOCUMENTOS_VISTOS = {};   // van a cambiar datos: los nombres se vuelven a pedir
-  return sb.rpc(fn, args || {}).then(function (r) { if (r.error) throw new Error(r.error.message); return r.data; });
+  return conLimite(sb.rpc(fn, args || {}).then(function (r) { if (r.error) throw new Error(r.error.message); return r.data; }));
+}
+// (25-nov-2026) Si el servidor no contesta, se dice a los 30 segundos en vez de dejar la pantalla esperando para siempre
+var LIMITE_SERVIDOR = 30000;
+function conLimite(promesa) {
+  return new Promise(function (bien, mal) {
+    var t = setTimeout(function () { mal(new Error('El servidor no contesta. Comprueba la conexión y vuelve a intentarlo; si era un cambio, actualiza la página antes para ver si se ha guardado.')); }, LIMITE_SERVIDOR);
+    promesa.then(function (x) { clearTimeout(t); bien(x); }, function (e) { clearTimeout(t); mal(e); });
+  });
 }
 function consulta(q) { return q.then(function (r) { if (r.error) throw new Error(r.error.message); return r; }); }
 
@@ -173,7 +181,8 @@ function claveFoco(el) {
   return e ? e.getAttribute('data-foco') : null;
 }
 // Si el control ya no está (o está desactivado), se prueba con los de "otras" (por ejemplo, la otra flecha de la paginación)
-var FOCO_ALTERNATIVO = { 'pag-ant': ['pag-sig', 'pag-texto'], 'pag-sig': ['pag-ant', 'pag-texto'] };
+var FOCO_ALTERNATIVO = { 'pag-ant': ['pag-sig', 'pag-texto'], 'pag-sig': ['pag-ant', 'pag-texto'],
+  'pag-ant-arriba': ['pag-sig-arriba', 'pag-texto-arriba'], 'pag-sig-arriba': ['pag-ant-arriba', 'pag-texto-arriba'] };
 function devolverFoco(clave, cursor) {
   if (!clave) return false;
   var claves = [clave].concat(FOCO_ALTERNATIVO[clave] || []);
@@ -810,7 +819,7 @@ function pantallaAcceso(modo, aviso) {
 function salir() {
   // Sin almohadilla ni datos de sesión en la consulta: un enlace viejo no vuelve a meter otra sesión al recargar
   function recargar() { location.replace(location.pathname + consultaSinSesion(location.search)); }
-  function noSalio() { alert('No se ha podido cerrar la sesión. Comprueba la conexión a internet y vuelve a pulsar «Salir».'); }
+  function noSalio() { avisar('No se ha podido cerrar la sesión. Comprueba la conexión a internet y vuelve a pulsar «Salir».'); }
   sb.auth.signOut().then(function (r) {
     if (r && r.error) { noSalio(); return; }
     ++secuenciaCarga; S.rol = null; S.datos = null; S.denegado = false; recargar();
@@ -867,6 +876,7 @@ function cargar(mostrarCargando, conservarBarra) {
     if (solicitud.vista === 'inicio') { if (d.diasAvisoAlbaran) DIAS_AVISO_ALBARAN = d.diasAvisoAlbaran; MINIATURAS = !!(d.servicio && d.servicio.miniaturas); pintarCabecera(d); S.pendientes = contarPendientes(d); pintarMenu(); }
     if (solicitud.vista === 'revision') { S.pendientes = contarDocumentosRevision(d); pintarMenu(); }
     pintar();
+    if (S.alPintar) { var trasPintar = S.alPintar; S.alPintar = null; trasPintar(); }      // flechas de la ficha: fin de página
     var tablaActual = desplazamiento && vista.querySelector('.tabla');
     if (tablaActual) { tablaActual.scrollLeft = desplazamiento[0]; tablaActual.scrollTop = desplazamiento[1]; }
     // (23-nov-2026, accesibilidad) Tras un filtro, una página o «Actualizar ahora», se dice qué ha salido («Facturas: 50 facturas»)
@@ -878,7 +888,7 @@ function cargar(mostrarCargando, conservarBarra) {
     document.getElementById('actualizado').textContent = solicitud.vista === 'inicio' && d.hora ? 'Datos de Inicio a las ' + hora(d.hora) : 'Consulta recibida a las ' + new Date().toLocaleTimeString('es-ES');
   }).catch(function (e) {
     if (solicitud.numero !== secuenciaCarga) return;
-    S.firmaDatos = null; mostrarError(e);
+    S.firmaDatos = null; S.alPintar = null; mostrarError(e);
   });
 }
 // (23-nov-2026, accesibilidad) Lo que hace falta comparar para saber si la pantalla ha cambiado (ver cargar)
@@ -1293,10 +1303,15 @@ function barraFiltros(v, d, opcionesEstado) {
 function paginacion(c, d) {
   if (d.total <= d.tamano) return;
   // (23-nov-2026, accesibilidad) data-foco: tras cambiar de página el foco sigue en la flecha (o en la otra, si esta se desactiva)
-  var anterior = h('button', { class: 'boton', 'data-foco': 'pag-ant', onclick: function () { S.pagina = d.pagina - 1; cargar(true, true); window.scrollTo(0, 0); } }, '← Anterior');
-  var siguiente = h('button', { class: 'boton', 'data-foco': 'pag-sig', onclick: function () { S.pagina = d.pagina + 1; cargar(true, true); window.scrollTo(0, 0); } }, 'Siguiente →');
-  anterior.disabled = d.pagina <= 1; siguiente.disabled = d.pagina * d.tamano >= d.total;
-  c.appendChild(h('div', { class: 'paginacion', role: 'group', 'aria-label': 'Páginas' }, [anterior, h('span', { 'data-foco': 'pag-texto', tabindex: '-1' }, 'Página ' + d.pagina + ' de ' + Math.ceil(d.total / d.tamano)), siguiente]));
+  // (25-nov-2026) En el ordenador «Anterior» y «Siguiente» salen también encima de la tabla, sin tener que bajar
+  function barra(donde) {
+    var anterior = h('button', { class: 'boton', 'data-foco': 'pag-ant' + donde, onclick: function () { S.pagina = d.pagina - 1; cargar(true, true); window.scrollTo(0, 0); } }, '← Anterior');
+    var siguiente = h('button', { class: 'boton', 'data-foco': 'pag-sig' + donde, onclick: function () { S.pagina = d.pagina + 1; cargar(true, true); window.scrollTo(0, 0); } }, 'Siguiente →');
+    anterior.disabled = d.pagina <= 1; siguiente.disabled = d.pagina * d.tamano >= d.total;
+    return h('div', { class: 'paginacion' + (donde ? ' paginacion-arriba' : ''), role: 'group', 'aria-label': donde ? 'Páginas (arriba)' : 'Páginas' }, [anterior,
+      h('span', { 'data-foco': 'pag-texto' + donde, tabindex: '-1' }, 'Página ' + d.pagina + ' de ' + Math.ceil(d.total / d.tamano)), siguiente]);
+  }
+  c.insertBefore(barra('-arriba'), c.firstChild); c.appendChild(barra(''));
 }
 function contadorTabla(d, tipo) { return !d.total ? '0 ' + tipo : d.total <= d.tamano ? d.total + ' ' + tipo : ((d.pagina - 1) * d.tamano + 1) + '–' + Math.min(d.pagina * d.tamano, d.total) + ' de ' + d.total + ' ' + tipo; }
 function vFacturas(v, d) {
@@ -1305,7 +1320,7 @@ function vFacturas(v, d) {
   var c = document.getElementById('cuerpo'), conTipo = !S.sentido;
   var quien = S.sentido === 'emitidos' ? 'Cliente' : S.sentido === 'recibidos' ? 'Proveedor' : 'Cliente / proveedor';
   tabla(c, ['Nº factura', 'Fecha', { t: quien, largo: 1 }, 'Empresa'].concat(conTipo ? ['Tipo'] : [], [{ t: 'Total', num: 1 }, 'Vence', 'Estado']), d.filas.map(function (f) {
-    return { clave: f.empresa + '|' + f.id_doc, mini: { hoja: 'facturas', id: f.id_doc }, abrir: function () { ficha('Factura', f, { empresa: f.empresa, hoja: 'facturas' }); },
+    return { clave: f.empresa + '|' + f.id_doc, mini: { hoja: 'facturas', id: f.id_doc }, porRevisar: porMirar(f), abrir: function () { ficha('Factura', f, { empresa: f.empresa, hoja: 'facturas' }); },
       celdas: [numeroOSinNumero(f.num_factura, f.id_doc), fecha(f.fecha), f.nombre, f.empresa].concat(conTipo ? [f.tipo_factura || 'Sin indicar'] : [],
         [{ t: euros(f.total), num: 1 }, vence(f.fecha_vencimiento), pillEstado(f.estado)]) };
   }), 'Factura');
@@ -1347,7 +1362,7 @@ function vAlbaranes(v, d) {
     }));
   }
   tabla(c, ['Nº albarán', 'Fecha', { t: quien, largo: 1 }, 'Empresa'].concat(conTipo ? ['Tipo'] : [], ['Ruta', { t: 'Importe', num: 1 }, 'Factura']), d.filas.map(function (f) {
-    return { clave: f.empresa + '|' + f.id_doc, mini: { hoja: 'albaranes', id: f.id_doc }, abrir: function () { ficha('Albarán', f, { empresa: f.empresa, hoja: 'albaranes' }); },
+    return { clave: f.empresa + '|' + f.id_doc, mini: { hoja: 'albaranes', id: f.id_doc }, porRevisar: porMirar(f), abrir: function () { ficha('Albarán', f, { empresa: f.empresa, hoja: 'albaranes' }); },
       celdas: [numeroConPack(f, (d.anexos || {})[f.empresa + '|' + f.id_doc]), fecha(f.fecha), f.nombre, f.empresa].concat(conTipo ? [f.tipo_albaran || 'Sin indicar'] : [],
         [[f.origen, f.destino].filter(Boolean).join(' → '), { t: euros(f.importe), num: 1 },
         f.factura_vinculada ? pillFactura(f) : f.estado_factura === 'PENDIENTE DE FACTURA' ? pillEsperaFactura(f) : pillVaCon(f)]) };
@@ -1718,11 +1733,11 @@ function vTickets(v, d) {
   function fila(t) {
     var comunes = [t.fecha ? fecha(t.fecha) : '—'];
     var mini = { hoja: 'tickets', id: t.id_doc, huella: t.hash_sha256 };
-    if (grupo[0] === 'gasolina') return { clave: 'tck-' + t.id_doc, mini: mini, abrir: function () { fichaTicket(t); }, celdas: comunes.concat([
+    if (grupo[0] === 'gasolina') return { clave: 'tck-' + t.id_doc, mini: mini, porRevisar: porMirar(t), abrir: function () { fichaTicket(t); }, celdas: comunes.concat([
       (S.gasTck === 'otras' ? [t.comercio, t.estacion].filter(Boolean).join(' · ') : t.estacion || t.comercio) || '—', t.matricula || '—', { t: litros(t.litros), num: 1 },
       { t: t.total === null || t.total === undefined ? '—' : euros(t.total), num: 1 },
       t.empresa ? h('span', { class: 'pill ok' }, t.empresa) : h('span', { class: 'pill', title: 'Esperando la factura de la gasolinera' }, 'Fondo común'), pillEstado(t.estado)]) };
-    return { clave: 'tck-' + t.id_doc, mini: mini, abrir: function () { fichaTicket(t); }, celdas: comunes.concat([t.comercio || '—'], grupo[0] === 'otros' ? [t.categoria] : [],
+    return { clave: 'tck-' + t.id_doc, mini: mini, porRevisar: porMirar(t), abrir: function () { fichaTicket(t); }, celdas: comunes.concat([t.comercio || '—'], grupo[0] === 'otros' ? [t.categoria] : [],
       [{ t: t.total === null || t.total === undefined ? '—' : euros(t.total), num: 1 }, { t: t.cuota_iva === null || t.cuota_iva === undefined ? '—' : euros(t.cuota_iva), num: 1 },
        t.forma_pago || '—', pillEstado(t.estado)]) };
   }
@@ -1777,7 +1792,7 @@ function fichaTicket(t) {
     catch (e) { mensaje.className = 'mensaje-ficha fallo'; mensaje.textContent = e.message; campoConError(entradas[campoMal], 'mensajeFicha'); return; }
     mensaje.className = 'mensaje-ficha'; mensaje.textContent = 'Guardando…';
     rpc('panel_guardar_ticket', { p_id: t.id_doc, p_cambios: enviar, p_revisado: !!revisado }).then(function () {
-      if (revisado) { fichaSucia = null; cerrarModal(); avisoBreve('Ticket ' + t.id_doc + ' revisado'); }
+      if (revisado) { fichaSucia = null; trasRevisar('Ticket ' + t.id_doc + ' revisado'); }
       else {
         // Lo guardado pasa a ser el punto de partida: así un segundo «Guardar» dice "No hay cambios" y, si se
         // vuelve a escribir algo, al cerrar se sigue preguntando (antes se dejaba de avisar)
@@ -1789,9 +1804,9 @@ function fichaTicket(t) {
   }
   var pie = h('div', { class: 'pie-revision' }, [h('span', { class: 'cambios-ficha' }, editable ? 'Corrige lo que haga falta y guarda.' : 'Consulta de solo lectura'), mensaje]);
   if (editable) pie.appendChild(h('div', { class: 'acciones-revision' }, [
-    h('button', { type: 'button', class: 'boton peligro', onclick: function () {
-      if (!confirm('¿Descartar este ticket?')) return;
-      rpc('panel_descartar_ticket', { p_id: t.id_doc }).then(function () { fichaSucia = null; cerrarModal(); avisoBreve('Ticket ' + t.id_doc + ' descartado'); cargar(false); })
+    h('button', { type: 'button', class: 'boton peligro', onclick: async function () {
+      if (!await confirmar('¿Descartar este ticket?\n\nDeja de contar. Queda apuntado en el historial y se puede recuperar.', { si: 'Descartar', peligro: true })) return;
+      rpc('panel_descartar_ticket', { p_id: t.id_doc }).then(function () { fichaSucia = null; trasRevisar('Ticket ' + t.id_doc + ' descartado'); cargar(false); })
         .catch(function (e) { mensaje.className = 'mensaje-ficha fallo'; mensaje.textContent = mensajeError(e); });
     } }, 'Descartar'),
     h('button', { type: 'button', class: 'boton principal', onclick: function () { guardar(false); } }, 'Guardar cambios'),
@@ -1973,8 +1988,8 @@ function urlFirmada(ruta) {
 // principal de su pack, un repetido...), al pulsarlo se abre ese otro directamente.
 // ---------------------------------------------------------------------
 var VIVO = function (x) { return ['Descartado', 'Duplicado'].indexOf(x.estado || '') < 0; };
-function abrirDocumento(id, hoja, empresa) {
-  if (fichaSucia && fichaSucia() && !confirm('Hay cambios sin guardar en esta ficha. ¿Abrir el otro documento sin guardarlos?')) return;
+async function abrirDocumento(id, hoja, empresa) {
+  if (fichaSucia && fichaSucia() && !await confirmar('Hay cambios sin guardar en esta ficha. ¿Abrir el otro documento sin guardarlos?', { si: 'Seguir sin guardar', peligro: true })) return;
   fichaSucia = null;
   function abrir(queHoja, queEmpresa) {
     if (queHoja === 'tickets') { abrirDesdeHistorial({ hoja: 'tickets', id_doc: id }); return; }
@@ -2341,7 +2356,7 @@ function descargar(ruta, nombre) {
     .then(function (r) {
       if (r.error) throw new Error(r.error.message);
       var url = URL.createObjectURL(r.data), a = h('a', { href: url, download: nombre }); document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
-    }).catch(function (e) { alert(mensajeError(e)); });
+    }).catch(function (e) { avisar(mensajeError(e)); });
 }
 
 // ---------------------------------------------------------------------
@@ -2355,14 +2370,18 @@ function vNegocio(v, d) {
     h('button', { class: 'boton', 'data-foco': 'neg-consultar', onclick: function () { S.empresa = empresa.value; S.mes = mes.value || mesActual(); cargar(true); } }, 'Consultar')]));
   // (23-nov-2026, accesibilidad) los apartados son h2 (antes se saltaba de h1 a h3); se ven igual (clase subtitulo)
   v.appendChild(h('h2', { class: 'subtitulo' }, 'Avisos de vencimientos y facturas periódicas'));
-  tabla(v, ['Tipo', 'Documento', 'Aviso', 'Fecha'], d.avisos.map(function (a) { return { celdas: [a.tipo, a.id, a.texto, fecha(a.fecha)] }; }));
+  tabla(v, ['Tipo', 'Documento', 'Aviso', 'Fecha'], d.avisos.map(function (a) {
+    return { clave: 'venc-' + a.tipo + '-' + a.id, celdas: [a.tipo, a.id || '—', a.texto, fecha(a.fecha)],      // (25-nov-2026) se pulsa y abre la factura (las periódicas que faltan no tienen documento)
+      abrir: a.id ? function () { abrirFichaPorId('Factura', S.empresa, 'facturas', a.id); } : null };
+  }), 'Factura');
   v.appendChild(h('h2', { class: 'subtitulo' }, 'Coste sin IVA por camión'));
   v.appendChild(h('p', { class: 'sub' }, 'Solo se asigna el coste cuando las líneas cuadran con la base. Los importes sin matrícula quedan "Sin asignar".'));
   tabla(v, ['Matrícula', { t: 'Base', num: 1 }], d.costes.map(function (c) { return { celdas: [c.matricula, { t: euros(c.base), num: 1 }] }; }));
   v.appendChild(h('h2', { class: 'subtitulo' }, 'Cobros y pagos del mes'));
   tabla(v, ['ID', 'Factura', 'Tipo', 'Estado', { t: 'Total', num: 1 }, { t: 'Abonado', num: 1 }, 'Vence'], d.pagos.map(function (p) {
-    return { celdas: [p.id, p.numero, p.tipo, p.estado, { t: euros(p.total), num: 1 }, { t: euros(p.abonado), num: 1 }, vence(p.vence)] };
-  }));
+    return { clave: 'pago-' + p.id, abrir: function () { abrirFichaPorId('Factura', S.empresa, 'facturas', p.id); },
+      celdas: [p.id, p.numero, p.tipo, p.estado, { t: euros(p.total), num: 1 }, { t: euros(p.abonado), num: 1 }, vence(p.vence)] };
+  }), 'Factura');
   pintarCaducidades(v, d.caducidades, empresa);
   if (S.rol === 'Administrador') {
     v.appendChild(h('h2', { class: 'subtitulo' }, 'Reglas de facturas periódicas'));
@@ -2417,10 +2436,10 @@ function pintarCaducidades(v, lista, selectorEmpresa) {
         editando.id = c.id; tipo.value = c.tipo; ref.value = c.referencia; vence.value = String(c.vence || '').slice(0, 10); nota.value = c.nota || '';
         titulo.textContent = 'Cambiar ' + c.tipo + ' · ' + c.referencia; cancelar.hidden = false; ref.focus();
       } }, 'Cambiar'),
-      h('button', { class: 'boton', type: 'button', 'aria-label': 'Quitar ' + c.tipo + ' ' + c.referencia, onclick: function () {
-        if (!confirm('¿Quitar ' + c.tipo + ' · ' + c.referencia + '?\n\nDeja de avisarse. Queda apuntado en el historial.')) return;
+      h('button', { class: 'boton', type: 'button', 'aria-label': 'Quitar ' + c.tipo + ' ' + c.referencia, onclick: async function () {
+        if (!await confirmar('¿Quitar ' + c.tipo + ' · ' + c.referencia + '?\n\nDeja de avisarse. Queda apuntado en el historial.', { si: 'Quitar', peligro: true })) return;
         rpc('panel_quitar_caducidad', { p_id: c.id }).then(function () { cargar(true); avisoBreve('Quitada'); })
-          .catch(function (e) { alert(mensajeError(e)); });
+          .catch(function (e) { avisar(mensajeError(e)); });
       } }, 'Quitar')]);
     return { celdas: [c.tipo, c.referencia, fecha(c.vence), estadoCaducidad(Number(c.dias)), c.nota || '', acciones] };
   }));
@@ -2793,6 +2812,7 @@ function textoVisible(el) {
 }
 // nombre (opcional): cómo se llama la tabla para el lector de pantalla. Si no se da, se usa el título que va justo
 // antes (h2/h3) o, si no hay, el nombre de la sección.
+function porMirar(f) { return f.estado === 'Revisar' || f.estado === 'Duplicado'; }
 function tabla(contenedor, columnas, filas, tituloFicha, nombre) {
   if (!filas.length) { contenedor.appendChild(h('div', { class: 'tarjeta vacio' }, 'No hay datos que mostrar.')); return; }
   function clases(c) { return [c.num ? 'num' : '', c.largo ? 'largo' : ''].join(' ').trim(); }
@@ -2808,11 +2828,12 @@ function tabla(contenedor, columnas, filas, tituloFicha, nombre) {
     }));
     var mini = f.mini ? cajaMiniatura(f.mini.hoja, f.mini.id, f.mini.huella) : null;      // la miniatura va delante, en la primera celda
     if (f.abrir) {
-      tr.addEventListener('click', f.abrir);
+      var abrirFila = function () { prepararCamino(tr); f.abrir(); };
+      tr._abrirFila = f.abrir; tr._porRevisar = !!f.porRevisar; tr._claveDoc = f.mini ? f.mini.hoja + '|' + f.mini.id : f.clave; tr.addEventListener('click', abrirFila);
       var celda = tr.cells[0], contenido = textoVisible(celda), titulo = f.tituloFicha || tituloFicha || 'elemento';
       // (23-nov-2026, accesibilidad) data-foco: al repintar, el foco vuelve a esta misma fila (por su ID, no por su posición)
       var clave = f.clave || (f.mini ? f.mini.hoja + '|' + f.mini.id : contenido);
-      var boton = h('button', { type: 'button', class: 'abrir-fila', 'data-foco': 'fila-' + clave, 'aria-label': 'Abrir ' + titulo + (contenido ? ': ' + contenido : ''), onclick: function (e) { e.stopPropagation(); f.abrir(); } });
+      var boton = h('button', { type: 'button', class: 'abrir-fila', 'data-foco': 'fila-' + clave, 'aria-label': 'Abrir ' + titulo + (contenido ? ': ' + contenido : ''), onclick: function (e) { e.stopPropagation(); abrirFila(); } });
       if (mini) boton.appendChild(mini);
       while (celda.firstChild) boton.appendChild(celda.firstChild);
       celda.appendChild(boton);
@@ -2894,6 +2915,14 @@ var DUDOSO_CASILLA = { 'tipo de documento': ['#tipo'], 'numero': ['#numero'], 'f
   'quien lo recibe': ['nombre', 'nif'], 'importes': ['base_imponible', 'cuota_iva', 'total', 'importe'], 'vencimiento': ['fecha_vencimiento'],
   'matricula': ['matricula'], 'origen o destino': ['origen', 'destino'] };
 function sinTildes(t) { return texto(t).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); }
+// (25-nov-2026, petición de la persona) Documento sin fecha: se SUGIERE la de subida. No se pone sola (podría no ser la buena):
+// se pulsa, se mira y se guarda.
+function sugerirFecha(fila, entrada, alCambiar) {
+  var subida = /^\d{4}-\d{2}-\d{2}/.test(texto(fila.creado_en)) ? fechaLocalIso(new Date(fila.creado_en)) : '';
+  if (!subida || !entrada || entrada.value) return null;
+  var b = h('button', { type: 'button', class: 'boton enlace sugerir-fecha', onclick: function () { entrada.value = subida; b.remove(); alCambiar(); entrada.focus(); } }, 'Sin fecha. Usar la de subida: ' + fecha(subida));
+  return b;
+}
 function casillasARevisar(hoja, fila) {
   var marcas = {};
   if (!fila || ['facturas', 'albaranes'].indexOf(hoja) < 0 || ['Revisar', 'Duplicado'].indexOf(fila.estado) < 0) return marcas;
@@ -2901,7 +2930,8 @@ function casillasARevisar(hoja, fila) {
     c = c === '#numero' ? NUMERO[hoja] : c === '#tipo' ? (hoja === 'facturas' ? 'tipo_factura' : 'tipo_albaran') : c;
     if (!(marcas[c] = marcas[c] || []).some(function (x) { return x === porque; })) marcas[c].push(porque);
   }
-  texto(fila.observaciones).split(/;\s*/).forEach(function (aviso) {
+  // (25-nov-2026) «Líneas: … (base, IVA y total sí cuadran)» es una nota: no hay nada que corregir y no se pinta en rojo
+  texto(fila.observaciones).replace(/Líneas: [^()]*\(base, IVA y total sí cuadran\)/g, '').split(/;\s*/).forEach(function (aviso) {
     var t = sinTildes(aviso);
     AVISOS_CASILLA.forEach(function (r) { if (r[0].test(t)) (hoja === 'facturas' ? r[1] : r[2]).forEach(function (c) { poner(c, r[3]); }); });
     var dudosos = /^lectura dudosa \(([^)]*)\)/.exec(t);
@@ -2924,8 +2954,8 @@ function seccionPack(empresa, id, fila, editable) {
   function abrir(otro, datos) {
     if (datos) conocidos[otro] = datos;
     var nombre = h('span', {}, etiquetaDocumento('albaranes', conocidos[otro], otro));
-    var boton = h('button', { type: 'button', class: 'boton enlace', onclick: function () {
-      if (fichaSucia && fichaSucia() && !confirm('Hay cambios sin guardar en esta ficha. ¿Abrir el otro albarán sin guardarlos?')) return;
+    var boton = h('button', { type: 'button', class: 'boton enlace', onclick: async function () {
+      if (fichaSucia && fichaSucia() && !await confirmar('Hay cambios sin guardar en esta ficha. ¿Abrir el otro albarán sin guardarlos?', { si: 'Seguir sin guardar', peligro: true })) return;
       fichaSucia = null; irAOtraFicha('Albarán', empresa, 'albaranes', otro);
     } }, [cajaMiniatura('albaranes', otro), nombre]);
     if (!conocidos[otro]) buscarDocumentos([otro], ['albaranes']).then(function (vistos) {
@@ -2938,23 +2968,51 @@ function seccionPack(empresa, id, fila, editable) {
   function fallo(e) { aviso.className = 'mensaje-ficha fallo'; aviso.textContent = mensajeError(e); }
   function terminar(texto) { fichaSucia = null; guardandoFicha = false; cerrarModal(); avisoBreve(texto); cargar(false); }
   function conEnter(campo, boton) { campo.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); boton.click(); } }); }
-  // (23-nov-2026) «Comparar con…»: abre los dos documentos uno al lado del otro SIN cerrar esta ficha (antes, pulsar el
-  // otro albarán cerraba este y no había forma de verlos juntos). respuesta: los botones Sí/No de una propuesta, si los hay.
-  function comparar(otro, papelEste, papelOtro, respuesta) {
-    return h('button', { type: 'button', class: 'boton comparar-boton', title: 'Ver los dos documentos uno al lado del otro', onclick: function (e) {
+  // «Comparar»: abre los dos documentos uno al lado del otro SIN cerrar esta ficha, y desde ahí se decide (25-nov-2026:
+  // antes había que elegir entre varios botones en la ficha y otra vez en la comparación).
+  function comparar(otro, respuesta, rotulo) {
+    return h('button', { type: 'button', class: 'boton comparar-boton' + (rotulo ? ' principal' : ''), 'aria-label': (rotulo || 'Comparar') + ' con ' + otro, title: 'Ver los dos documentos uno al lado del otro', onclick: function (e) {
       abrirComparacion({ empresa: empresa, foco: e.currentTarget, respuesta: editable ? respuesta || null : null,
-        este: { id: id, fila: fila, papel: papelEste }, otro: { id: otro, fila: conocidos[otro], papel: papelOtro } });
-    } }, 'Comparar con ' + otro);
+        este: { id: id, fila: fila }, otro: { id: otro, fila: conocidos[otro] } });
+    } }, rotulo || 'Comparar');
+  }
+  var propuesta = String(fila.propuesta_pack || ''), principalPropuesto = propuesta.split(' · ')[0].trim();
+  function sinInstruccion(m) { return m.replace(/: si es el mismo papel, pulsa «[^»]*»/, ''); }       // packs.py la escribe para la ficha de antes
+  // (25-nov-2026) Qué albarán es el principal (el que se factura): se elige al juntar («al revés») y se puede cambiar después
+  function cambiarPrincipal(nuevo, viejo) {
+    return { texto: 'Cambiar el principal', ayuda: nuevo + ' pasa a ser el que se factura y ' + viejo + ' va con él', hacer: function () {
+      return rpc('panel_cambiar_principal', { p_empresa: empresa, p_nuevo: nuevo }).then(function () { terminar('Ahora el principal es ' + nuevo + '; ' + viejo + ' va con él'); });
+    } };
+  }
+  function alReves(anexo, principal) {
+    return { texto: 'Van juntos, al revés', ayuda: anexo + ' acompaña a ' + principal, hacer: function () {
+      return rpc('panel_juntar_albaran', { p_empresa: empresa, p_id: anexo, p_principal: principal }).then(function () { terminar('Albarán ' + anexo + ' va ahora con ' + principal); });
+    } };
+  }
+  // «Es repetido»: se queda uno y el otro se descarta (queda en el historial). alSeguir: qué hacer si se queda ESTE
+  function descartarUno(queda, sobra, alSeguir) {
+    return rpc('panel_descartar', { p_empresa: empresa, p_hoja: 'albaranes', p_id: sobra }).then(function (r) {
+      var sueltos = r && r.anexos_sueltos ? ' Se han soltado los papeles que iban con él (' + r.anexos_sueltos + ').' : '';
+      var dicho = 'Descartado ' + sobra + ': era el mismo papel que ' + queda + '.' + sueltos;
+      // Si el que se queda tenía propuesto ir con el descartado, esa propuesta ya no vale (si falla, el programa la quita en su vuelta)
+      var limpiar = queda === id && principalPropuesto === sobra ? rpc('panel_rechazar_pack', { p_empresa: empresa, p_id: id }).catch(function () {}) : Promise.resolve();
+      return limpiar.then(function () { if (alSeguir && sobra !== id) alSeguir(dicho); else terminar(dicho); });
+    });
   }
   if (fila.estado === 'Anexo' && fila.va_con) {
     caja.appendChild(h('p', { class: 'ayuda-campo' }, ['Este papel va con el albarán ', abrir(fila.va_con), ', que es el que se factura. No cuenta como albarán aparte ni espera su propia factura.']));
-    var botonesAnexo = [comparar(fila.va_con, 'Este papel (anexo)', 'Su albarán principal')];
+    var soltarDelPack = function () {
+      return rpc('panel_soltar_albaran', { p_empresa: empresa, p_id: id }).then(function () { terminar('Albarán ' + id + ' suelto del pack'); });
+    };
+    var botonesAnexo = [comparar(fila.va_con, { pregunta: 'Ahora van juntos. ¿Está bien?', cierra: true,
+      juntos: { texto: 'Sí, van juntos', ayuda: 'No se cambia nada', hacer: null },
+      reves: esOrdenDeCarga(fila) ? null : cambiarPrincipal(id, fila.va_con),
+      distintos: { texto: 'No, separarlos', ayuda: id + ' vuelve a ser un albarán aparte', hacer: soltarDelPack }, repetido: descartarUno })];
     if (editable) {
-      var soltar = h('button', { type: 'button', class: 'boton', onclick: function () {
-        if (!confirm('¿Soltar ' + id + (propio ? ' (' + propio + ')' : '') + ' del pack de ' + conNombre(fila.va_con) + '?\n\nVolverá a contar como un albarán aparte y a esperar su propia factura.')) return;
+      var soltar = h('button', { type: 'button', class: 'boton', onclick: async function () {
+        if (!await confirmar('¿Soltar ' + id + (propio ? ' (' + propio + ')' : '') + ' del pack de ' + conNombre(fila.va_con) + '?\n\nVolverá a contar como un albarán aparte y a esperar su propia factura.', { si: 'Soltar' })) return;
         soltar.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Soltando…';
-        rpc('panel_soltar_albaran', { p_empresa: empresa, p_id: id }).then(function () { terminar('Albarán ' + id + ' suelto del pack'); })
-          .catch(function (e) { soltar.disabled = false; fallo(e); });
+        soltarDelPack().catch(function (e) { soltar.disabled = false; fallo(e); });
       } }, 'Soltar del pack');
       botonesAnexo.unshift(soltar);
     }
@@ -2962,70 +3020,41 @@ function seccionPack(empresa, id, fila, editable) {
     caja.appendChild(aviso);
     return caja;
   }
-  // Propuesta del programa (packs.py): este papel podría ir con otro albarán
-  var propuesta = String(fila.propuesta_pack || ''), principalPropuesto = propuesta.split(' · ')[0].trim();
+  // Propuesta del programa (packs.py): un solo botón, se ven los dos y se decide mirándolos
   if (propuesta && principalPropuesto) {
-    var motivo = propuesta.slice(principalPropuesto.length).replace(/^\s*·\s*/, '').split(principalPropuesto).join('ese albarán');
-    var bloque = h('div', { class: 'propuesta-pack' }, [h('p', {}, [h('b', {}, 'Propuesta del programa: '), '¿este papel va con el albarán ', abrir(principalPropuesto), '?',
-      motivo ? h('span', { class: 'sub' }, ' Motivo: ' + motivo + '.') : null])]);
-    // Las dos respuestas, iguales desde la ficha y desde «Comparar»: devuelven la promesa (el error lo enseña quien llama)
-    var juntarConPropuesto = function () {
-      var destino = conNombre(principalPropuesto);
-      return rpc('panel_juntar_albaran', { p_empresa: empresa, p_id: id, p_principal: principalPropuesto }).then(function () { terminar('Albarán ' + id + ' va ahora con ' + destino); });
-    };
-    var rechazarPropuesto = function () {
-      var rechazado = conNombre(principalPropuesto);
-      return rpc('panel_rechazar_pack', { p_empresa: empresa, p_id: id }).then(function () { terminar('Anotado: ' + id + ' no va con ' + rechazado + ' (no se volverá a proponer)'); });
-    };
-    var preguntaRepetido = '¿Es una foto repetida del MISMO papel que ' + principalPropuesto + '?\n\nEste (' + id + ') se descarta: deja de contar y queda apuntado en el historial. ' +
-      'Antes, mira que no tenga algún dato que el otro no tenga (código del conductor, referencia…).';
-    var descartarRepetido = function () {
-      return rpc('panel_descartar', { p_empresa: empresa, p_hoja: 'albaranes', p_id: id }).then(function () { terminar('Descartado ' + id + ': era una foto repetida de ' + conNombre(principalPropuesto)); });
-    };
-    var botonesPropuesta = [comparar(principalPropuesto, 'Este papel', 'El albarán propuesto', {
-      pregunta: '¿Este papel va con el albarán propuesto?' + (motivo ? ' Motivo del programa: ' + motivo + '.' : ''), si: juntarConPropuesto, no: rechazarPropuesto,
-      repetido: descartarRepetido, repetidoTexto: 'Es el mismo papel repetido: descartar este (' + id + ')', repetidoPregunta: preguntaRepetido })];
-    if (editable) {
-      var si = h('button', { type: 'button', class: 'boton principal', onclick: function () {
-        si.disabled = no.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Juntando…';
-        juntarConPropuesto().catch(function (e) { si.disabled = no.disabled = false; fallo(e); });
-      } }, 'Sí, va con ese');
-      var no = h('button', { type: 'button', class: 'boton', onclick: function () {
-        si.disabled = no.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Guardando…';
-        rechazarPropuesto().catch(function (e) { si.disabled = no.disabled = false; fallo(e); });
-      } }, 'No va con ese');
-      var rep = h('button', { type: 'button', class: 'boton', onclick: function () {
-        if (!confirm(preguntaRepetido)) return;
-        si.disabled = no.disabled = rep.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Descartando el repetido…';
-        descartarRepetido().catch(function (e) { si.disabled = no.disabled = rep.disabled = false; fallo(e); });
-      } }, 'Es el mismo papel repetido');
-      botonesPropuesta.unshift(si, no, rep);
-    }
-    bloque.appendChild(h('div', { class: 'en-linea' }, botonesPropuesta));
-    caja.appendChild(bloque);
+    var motivo = sinInstruccion(propuesta.slice(principalPropuesto.length).replace(/^\s*·\s*/, '').split(principalPropuesto).join('ese albarán'));
+    caja.appendChild(h('div', { class: 'propuesta-pack' }, [h('p', {}, [h('b', {}, 'Propuesta del programa: '), '¿este papel tiene que ver con el albarán ', abrir(principalPropuesto), '?',
+      motivo ? h('span', { class: 'sub' }, ' Motivo: ' + motivo + '.') : null]),
+      h('div', { class: 'en-linea' }, [comparar(principalPropuesto, { pregunta: '¿Qué son estos dos papeles?', motivo: motivo, cierra: true,
+        juntos: { texto: 'Van juntos', ayuda: id + ' acompaña a ' + principalPropuesto, hacer: function () {
+          var destino = conNombre(principalPropuesto);
+          return rpc('panel_juntar_albaran', { p_empresa: empresa, p_id: id, p_principal: principalPropuesto }).then(function () { terminar('Albarán ' + id + ' va ahora con ' + destino); });
+        } },
+        distintos: { texto: 'No tienen que ver', ayuda: 'No se vuelve a proponer', hacer: function () {
+          var rechazado = conNombre(principalPropuesto);
+          return rpc('panel_rechazar_pack', { p_empresa: empresa, p_id: id }).then(function () { terminar('Anotado: ' + id + ' no va con ' + rechazado + ' (no se volverá a proponer)'); });
+        } }, reves: alReves(principalPropuesto, id), repetido: descartarUno }, editable ? 'Comparar y decidir' : '')])]));
   }
-  // Fila de botones «Comparar con…» debajo de una lista de papeles (fuera de la lista: cada papel sigue siendo un solo botón)
-  function filaComparar(botones) { return botones.length ? h('div', { class: 'en-linea comparar-lista' }, [h('span', { class: 'sub' }, 'Verlo al lado de este:')].concat(botones)) : null; }
   var lista = h('ul', { class: 'lista-pack', 'aria-label': 'Anexos de este albarán' }, h('li', { class: 'sub' }, 'Buscando sus anexos…'));
   var propuestos = h('div', { class: 'propuesta-pack', hidden: 'hidden' });
+  // Contestado en la comparación: se vuelve a esta ficha con el pack al día
+  function trasComparar(dicho) {
+    soltarComparacion(); aviso.className = 'mensaje-ficha exito'; aviso.textContent = dicho;
+    pintarAnexos(); pintarPropuestos(); cargar(false);
+  }
   function pintarPropuestos() {
     return consulta(sb.from('albaranes').select(COLUMNAS_NOMBRE_ALBARAN + ',propuesta_pack').eq('empresa', empresa).ilike('propuesta_pack', id + ' ·%').order('id_doc')).then(function (r) {
       var filas = (r.data || []).filter(function (x) { return ['Descartado', 'Duplicado', 'Anexo'].indexOf(x.estado || '') < 0; });
       propuestos.textContent = ''; propuestos.hidden = !filas.length;
       if (!filas.length) return;
       propuestos.appendChild(h('p', {}, h('b', {}, 'El programa propone que vayan con este albarán:')));
-      var lista2 = h('ul', { class: 'lista-pack' }, filas.map(function (x) { return h('li', {}, abrir(x.id_doc, x)); }));
-      propuestos.appendChild(lista2);
-      // Desde «Comparar» también se contesta cada propuesta; al terminar se vuelve a esta ficha con el pack al día
-      function yaContestado(texto) {
-        soltarComparacion(); aviso.className = 'mensaje-ficha exito'; aviso.textContent = texto;
-        pintarAnexos(); pintarPropuestos(); cargar(false);
-      }
-      propuestos.appendChild(filaComparar(filas.map(function (x) {
-        return comparar(x.id_doc, 'Este albarán (el principal)', 'Papel propuesto', {
-          pregunta: '¿Este papel va con este albarán?' + (/ · /.test(x.propuesta_pack || '') ? ' Motivo del programa: ' + String(x.propuesta_pack).split(' · ').slice(1).join(' · ') + '.' : ''),
-          si: function () { return rpc('panel_juntar_albaran', { p_empresa: empresa, p_id: x.id_doc, p_principal: id }).then(function () { yaContestado('Añadido al pack: ' + x.id_doc + '.'); }); },
-          no: function () { return rpc('panel_rechazar_pack', { p_empresa: empresa, p_id: x.id_doc }).then(function () { yaContestado('Anotado: ' + x.id_doc + ' no va con este albarán (no se volverá a proponer).'); }); } });
+      propuestos.appendChild(h('ul', { class: 'lista-pack' }, filas.map(function (x) {
+        var porQue = sinInstruccion(String(x.propuesta_pack || '').split(' · ').slice(1).join(' · '));
+        return h('li', {}, [abrir(x.id_doc, x), comparar(x.id_doc, { pregunta: '¿Qué son estos dos papeles?', motivo: porQue,
+          juntos: { texto: 'Van juntos', ayuda: x.id_doc + ' acompaña a ' + id, hacer: function () { return rpc('panel_juntar_albaran', { p_empresa: empresa, p_id: x.id_doc, p_principal: id }).then(function () { trasComparar('Añadido al pack: ' + x.id_doc + '.'); }); } },
+          reves: alReves(id, x.id_doc),
+          distintos: { texto: 'No tienen que ver', ayuda: 'No se vuelve a proponer', hacer: function () { return rpc('panel_rechazar_pack', { p_empresa: empresa, p_id: x.id_doc }).then(function () { trasComparar('Anotado: ' + x.id_doc + ' no va con este albarán (no se volverá a proponer).'); }); } },
+          repetido: function (queda, sobra) { return descartarUno(queda, sobra, trasComparar); } })]);
       })));
       if (!editable) return;
       var todos = h('button', { type: 'button', class: 'boton principal', onclick: function () {
@@ -3037,21 +3066,23 @@ function seccionPack(empresa, id, fila, editable) {
           .catch(function (e) { aviso.className = 'mensaje-ficha fallo'; aviso.textContent = (hechos.length ? 'Añadido: ' + hechos.join(', ') + '. ' : '') + mensajeError(e); })
           .then(function () { pintarAnexos(); pintarPropuestos(); cargar(false); });
       } }, 'Juntarlos todos');
-      propuestos.appendChild(h('div', { class: 'en-linea' }, [todos, h('span', { class: 'sub' }, 'Si alguno no va, ábrelo y pulsa «No va con ese».')]));
+      propuestos.appendChild(h('div', { class: 'en-linea' }, [todos, h('span', { class: 'sub' }, 'Si alguno no va, pulsa «Comparar» y elige «No tienen que ver».')]));
     }).catch(function () { propuestos.hidden = true; });
   }
   function pintarAnexos(antes) {            // antes: se espera a que también estén las propuestas, para que todo salga a la vez
     return Promise.all([consulta(sb.from('albaranes').select(COLUMNAS_NOMBRE_ALBARAN).eq('empresa', empresa).eq('va_con', id).order('id_doc')), antes]).then(function (rs) {
-      var filas = rs[0].data || []; lista.textContent = ''; compararAnexos.textContent = '';
+      var filas = rs[0].data || []; lista.textContent = '';
       if (!filas.length) lista.appendChild(h('li', { class: 'sub' }, 'Va solo: no tiene anexos.'));
-      filas.forEach(function (x) { lista.appendChild(h('li', {}, abrir(x.id_doc, x))); });
-      var fila2 = filaComparar(filas.map(function (x) { return comparar(x.id_doc, 'Este albarán (el principal)', 'Su anexo'); }));
-      if (fila2) compararAnexos.appendChild(fila2);
+      filas.forEach(function (x) {
+        lista.appendChild(h('li', {}, [abrir(x.id_doc, x), comparar(x.id_doc, { pregunta: 'Ahora van juntos. ¿Está bien?',
+          juntos: { texto: 'Sí, van juntos', ayuda: 'No se cambia nada', hacer: null }, reves: esOrdenDeCarga(x) ? null : cambiarPrincipal(x.id_doc, id),
+          distintos: { texto: 'No, separarlos', ayuda: x.id_doc + ' vuelve a ser un albarán aparte', hacer: function () { return rpc('panel_soltar_albaran', { p_empresa: empresa, p_id: x.id_doc }).then(function () { trasComparar('Albarán ' + x.id_doc + ' suelto del pack.'); }); } },
+          repetido: function (queda, sobra) { return descartarUno(queda, sobra, trasComparar); } })]));
+      });
       return filas.length;
-    }).catch(function () { lista.textContent = ''; compararAnexos.textContent = ''; lista.appendChild(h('li', { class: 'sub' }, 'No se han podido cargar los anexos.')); return 0; });
+    }).catch(function () { lista.textContent = ''; lista.appendChild(h('li', { class: 'sub' }, 'No se han podido cargar los anexos.')); return 0; });
   }
-  var compararAnexos = h('div', { class: 'comparar-anexos' });
-  caja.appendChild(lista); caja.appendChild(compararAnexos); caja.appendChild(propuestos); pintarAnexos(pintarPropuestos());
+  caja.appendChild(lista); caja.appendChild(propuestos); pintarAnexos(pintarPropuestos());
   if (editable && ['Descartado', 'Duplicado'].indexOf(fila.estado || '') < 0) {
     // Para juntar papeles ya no hay que saberse los ID: se buscan por número, nombre o destino y se marcan en una lista.
     // (Quien se sepa el ID puede seguir escribiéndolo: VTX-0040, VTX-0049.)
@@ -3093,7 +3124,15 @@ function seccionPack(empresa, id, fila, editable) {
           if (entrada.checked) marcados[x.id_doc] = true; else delete marcados[x.id_doc];
         });
         ul.appendChild(h('li', { class: 'fila-elegir' }, [h('label', { class: 'casilla' }, [entrada, cajaMiniatura('albaranes', x.id_doc), etiquetaDocumento('albaranes', x, x.id_doc)]),
-          comparar(x.id_doc, 'Este albarán', 'El otro albarán')]));
+          comparar(x.id_doc, { pregunta: '¿Qué son estos dos papeles?', cierra: !varios,
+            juntos: { texto: 'Van juntos', ayuda: (varios ? x.id_doc : id) + ' acompaña a ' + (varios ? id : x.id_doc), hacer: function () {
+              return rpc('panel_juntar_albaran', { p_empresa: empresa, p_id: varios ? x.id_doc : id, p_principal: varios ? id : x.id_doc }).then(function () {
+                if (!varios) { terminar('Albarán ' + id + ' va ahora con ' + conNombre(x.id_doc)); return; }
+                delete marcados[x.id_doc]; pedido = null; cargados = false; verLista(ul, campo, false); trasComparar('Añadido al pack: ' + x.id_doc + '.');
+              });
+            } },
+            reves: alReves(varios ? id : x.id_doc, varios ? x.id_doc : id),
+            repetido: function (queda, sobra) { return descartarUno(queda, sobra, function (dicho) { pedido = null; cargados = false; verLista(ul, campo, false); trasComparar(dicho); }); } })]));
       });
       ponerMiniaturas(ul);
       if (todas.length > filas.length) ul.appendChild(h('li', { class: 'sub' }, 'Hay ' + (todas.length - filas.length) + ' más: escribe su número, el nombre o el destino para encontrarlo.'));
@@ -3164,67 +3203,98 @@ function volverDeLaComparacion() {
   var foco = comparacion && comparacion.foco; soltarComparacion();
   if (foco && foco.isConnected) foco.focus();
 }
-// op: { empresa, foco, este: { id, fila, papel }, otro: { id, fila, papel }, respuesta: { pregunta, si(), no() } o null }
-// (23-nov-2026) También sirve para TICKETS («Posible repetido de TCK-0001»). Opcionales:
-//   hoja ('albaranes' si no se dice, o 'tickets'), campos (los datos del resumen; por defecto CAMPOS_COMPARAR),
-//   titulo, volverTexto, localizar(doc) -> promesa de { archivo, tipo } (dónde está el archivo de cada uno),
-//   respuesta.botones: [{ texto, clase, confirmar, ocupado, hacer() }] en vez de si/no/repetido.
+// (25-nov-2026, petición de la persona: más fácil) Una sola pregunta y botones que dicen qué hace cada uno; si es un
+// repetido, se pulsa «Me quedo con este» sobre el bueno. De los datos solo se enseña lo que CAMBIA (lo demás, plegado).
+// op: { empresa, foco, este: { id, fila }, otro: { id, fila }, respuesta o null }
+//   respuesta: { pregunta, motivo, cierra (la ficha se cierra al contestar),
+//                juntos / reves / distintos: { texto, ayuda, hacer() } (hacer null = no cambia nada: solo vuelve), repetido(queda, sobra) }
+//   hoja ('albaranes' si no se dice, o 'tickets'), campos (por defecto CAMPOS_COMPARAR), volverTexto,
+//   localizar(doc) -> promesa de { archivo, tipo } (dónde está el archivo de cada uno)
 function abrirComparacion(op) {
   var caja = document.getElementById('caja'), fichaAbierta = caja && caja.querySelector('.contenido-revision');
   if (!fichaAbierta) return;
   soltarComparacion();
-  var hoja = op.hoja || 'albaranes', campos = op.campos || CAMPOS_COMPARAR;
+  var hoja = op.hoja || 'albaranes', campos = op.campos || CAMPOS_COMPARAR, r = op.respuesta;
   var visores = [], mia = { foco: op.foco };
   var aviso = h('div', { class: 'mensaje-ficha', role: 'status', 'aria-live': 'polite' });
   var volver = h('button', { type: 'button', class: 'boton comparar-volver', onclick: volverDeLaComparacion }, op.volverTexto || '← Volver a la ficha');
-  var acciones = [];
-  if (op.respuesta) {
-    // Las respuestas de los packs (Sí / No / Es el mismo papel repetido), o las que traiga quien abre la comparación
-    var lista = op.respuesta.botones || [
-      { texto: 'Sí, va con este', clase: 'boton principal', ocupado: 'Juntando…', hacer: op.respuesta.si },
-      { texto: 'No va con este', clase: 'boton', ocupado: 'Guardando…', hacer: op.respuesta.no }]
-      // (23-nov-2026) Dos fotos del MISMO papel: no es otra hoja del pack, es un repetido. Se descarta uno (queda en el historial)
-      .concat(op.respuesta.repetido ? [{ texto: op.respuesta.repetidoTexto, clase: 'boton', confirmar: op.respuesta.repetidoPregunta,
-        ocupado: 'Descartando el repetido…', hacer: op.respuesta.repetido }] : []);
-    var botones = [];
-    var contestar = function (b) {
-      var pregunta = typeof b.confirmar === 'function' ? b.confirmar() : b.confirmar;     // la pregunta, o nada que preguntar
-      if (pregunta && !confirm(pregunta)) return;
-      botones.forEach(function (x) { x.disabled = true; }); aviso.className = 'mensaje-ficha';
-      aviso.textContent = b.ocupado || 'Guardando…';
-      b.hacer().catch(function (e) {
-        if (comparacion !== mia) return;
-        botones.forEach(function (x) { x.disabled = false; }); aviso.className = 'mensaje-ficha fallo'; aviso.textContent = mensajeError(e);
-      });
-    };
-    lista.forEach(function (b) { botones.push(h('button', { type: 'button', class: b.clase || 'boton', onclick: function () { contestar(b); } }, b.texto)); });
-    acciones.push.apply(acciones, botones);
+  var pregunta = h('h3', {}, r ? r.pregunta : 'Los dos, uno al lado del otro');
+  var motivo = r && r.motivo ? h('p', { class: 'sub comparar-motivo' }, 'Motivo del programa: ' + r.motivo.replace(/\.$/, '') + '.') : null;
+  var acciones = h('div', { class: 'comparar-acciones' });
+  // Eligiendo con cuál se queda, «← Atrás» ocupa el sitio de «Volver»: un solo botón para dar marcha atrás
+  var atras = h('button', { type: 'button', class: 'boton comparar-atras', onclick: function () { preguntar(); acciones.querySelector('button').focus(); } }, '← Atrás');
+  function opcion(clase, textoBoton, ayuda, hacer) {
+    return h('button', { type: 'button', class: 'boton comparar-opcion ' + clase, onclick: hacer }, [h('b', {}, textoBoton), h('small', {}, ayuda)]);
   }
-  acciones.push(volver);
-  function columna(doc) {
+  async function contestar(hacer, ocupado) {
+    if (!hacer) { volverDeLaComparacion(); return; }
+    // Lo escrito en la ficha y sin guardar se perdería al cerrarla
+    if (r.cierra && fichaSucia && fichaSucia() && !await confirmar('Hay cambios sin guardar en la ficha y se perderán. ¿Seguir sin ellos?', { si: 'Seguir sin guardar', peligro: true })) return;
+    if (comparacion !== mia) return;
+    var botones = vista.querySelectorAll('.comparar-opcion, .comparar-quedarse, .comparar-atras');
+    botones.forEach(function (b) { b.disabled = true; }); aviso.className = 'mensaje-ficha'; aviso.textContent = ocupado;
+    hacer().catch(function (e) {
+      if (comparacion !== mia) return;
+      botones.forEach(function (b) { b.disabled = false; }); aviso.className = 'mensaje-ficha fallo'; aviso.textContent = mensajeError(e);
+    });
+  }
+  function preguntar() {                         // paso 1: qué son estos dos
+    acciones.textContent = ''; vista.classList.remove('eligiendo'); pregunta.textContent = r.pregunta; if (motivo) motivo.hidden = false;
+    if (r.juntos) acciones.appendChild(opcion('principal', r.juntos.texto, r.juntos.ayuda, function () { contestar(r.juntos.hacer, 'Juntando…'); }));
+    if (r.reves) acciones.appendChild(opcion('', r.reves.texto, r.reves.ayuda, function () { contestar(r.reves.hacer, 'Guardando…'); }));
+    if (r.repetido) acciones.appendChild(opcion(r.juntos ? '' : 'principal', 'Es repetido', 'Eliges cuál te quedas y el otro se descarta', elegir));
+    if (r.distintos) acciones.appendChild(opcion('', r.distintos.texto, r.distintos.ayuda, function () { contestar(r.distintos.hacer, 'Guardando…'); }));
+  }
+  function elegir() {                            // paso 2, solo si es repetido: con cuál se queda
+    acciones.textContent = ''; aviso.textContent = ''; pregunta.textContent = '¿Con cuál te quedas? El otro se descarta'; if (motivo) motivo.hidden = true;
+    vista.classList.add('eligiendo');            // enseña «Me quedo con este» encima de cada documento
+    vista.querySelector('.comparar-quedarse').focus();
+  }
+  function columna(doc, contrario, rotulo) {
     var titulo = h('span', { class: 'comparar-nombre' }, etiquetaDocumento(hoja, doc.fila, doc.id));
-    // (23-nov-2026, accesibilidad) «Cargando…» y «No se encuentra» van en un párrafo aparte: un dd sin su dt no es válido
-    var avisoDatos = h('p', { class: 'sub' }, 'Cargando sus datos…');
-    var datos = h('dl', { class: 'comparar-datos', hidden: 'hidden' });
+    var pista = h('span', { class: 'pill ok', hidden: 'hidden' }, 'Trae más datos');
     var visor = h('div', { class: 'visor-documento comparar-visor' }, h('p', { class: 'vacio' }, 'Buscando el archivo del documento…'));
-    doc.pintar = function (otraFila) {             // el resumen, con «igual» donde los dos dicen lo mismo
-      datos.textContent = '';
-      if (!doc.fila) { datos.hidden = true; avisoDatos.hidden = false; avisoDatos.textContent = hoja === 'tickets' ? 'No se encuentra este ticket (puede que ya no exista).' : 'No se encuentra este albarán (puede que ya no exista).'; return; }
-      avisoDatos.hidden = true; datos.hidden = false;
-      titulo.textContent = ''; titulo.appendChild(etiquetaDocumento(hoja, doc.fila, doc.id));
-      campos.forEach(function (c) {
-        var v = texto(doc.fila[c[0]]).trim(), w = otraFila ? texto(otraFila[c[0]]).trim() : '';
-        var igual = v && w && v.replace(/\s+/g, ' ').toLowerCase() === w.replace(/\s+/g, ' ').toLowerCase();
-        // c[2]: cómo se enseña (euros, litros); la comparación se hace con el dato tal cual
-        var visto = !v ? '' : c[0] === 'fecha' ? fecha(v) : c[2] === 'euros' && isFinite(Number(v)) ? euros(Number(v)) : c[2] === 'litros' && isFinite(Number(v)) ? litros(Number(v)) : v;
-        datos.appendChild(h('dt', {}, c[1]));
-        datos.appendChild(h('dd', { class: igual ? 'coincide' : '' }, [visto || '—',
-          igual ? h('span', { class: 'igual', title: 'Los dos documentos dicen lo mismo' }, ' = igual') : null]));
-      });
+    doc.visor = visor; doc.pista = pista;
+    doc.titular = function () {
+      titulo.textContent = ''; titulo.appendChild(doc.fila || !doc.cargado ? etiquetaDocumento(hoja, doc.fila, doc.id)
+        : document.createTextNode(hoja === 'tickets' ? 'No se encuentra este ticket (puede que ya no exista).' : 'No se encuentra este albarán (puede que ya no exista).'));
     };
-    doc.visor = visor;
-    return h('section', { class: 'comparar-doc', 'aria-label': doc.papel + ' ' + doc.id }, [
-      h('h4', {}, [h('span', { class: 'pill marca' }, doc.papel), titulo]), avisoDatos, datos, visor]);
+    return h('section', { class: 'comparar-doc', 'aria-label': rotulo + ' ' + doc.id }, [
+      h('h4', {}, [h('span', { class: 'pill marca' }, rotulo), titulo, pista]),
+      r && r.repetido ? h('button', { type: 'button', class: 'boton principal comparar-quedarse', 'aria-label': 'Me quedo con este, ' + doc.id, onclick: function () {
+        contestar(function () { return r.repetido(doc.id, contrario.id); }, 'Descartando ' + contrario.id + '…');
+      } }, 'Me quedo con este') : null, visor]);
+  }
+  // Lo que cambia entre los dos (y, plegado, lo que coincide). Nombres y lugares: igual si uno dice lo mismo y algo más
+  function comoTexto(v) { return sinTildes(texto(v)).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+  function mismoDato(campo, v, w) {
+    var a = comoTexto(v), b = comoTexto(w); if (a === b) return true;
+    if (!a || !b || ['nombre', 'origen', 'destino', 'comercio'].indexOf(campo) < 0) return false;
+    var pa = a.split(' '), pb = b.split(' '), corto = pa.length <= pb.length ? pa : pb, largo = corto === pa ? pb : pa;
+    return corto.every(function (x) { return largo.indexOf(x) >= 0; });
+  }
+  function visto(c, v) {                         // c[2]: cómo se enseña (euros, litros); la comparación se hace con el dato tal cual
+    v = texto(v).trim();
+    return !v ? '—' : c[0] === 'fecha' ? fecha(v) : c[2] === 'euros' && isFinite(Number(v)) ? euros(Number(v)) : c[2] === 'litros' && isFinite(Number(v)) ? litros(Number(v)) : v;
+  }
+  var datos = h('div', { class: 'comparar-datos' }, h('p', { class: 'sub' }, 'Cargando sus datos…'));
+  function pintarDatos() {
+    datos.textContent = ''; este.titular(); otro.titular();
+    if (!este.fila || !otro.fila) return;
+    var hay = campos.filter(function (c) { return texto(este.fila[c[0]]).trim() || texto(otro.fila[c[0]]).trim(); });
+    var cambian = hay.filter(function (c) { return !mismoDato(c[0], este.fila[c[0]], otro.fila[c[0]]); });
+    var iguales = hay.filter(function (c) { return cambian.indexOf(c) < 0; });
+    function llenos(doc) { return hay.filter(function (c) { return texto(doc.fila[c[0]]).trim(); }).length; }
+    este.pista.hidden = !(llenos(este) > llenos(otro)); otro.pista.hidden = !(llenos(otro) > llenos(este));
+    function cuadro(lista, titulo, clase) {
+      return h('table', { class: 'comparar-tabla ' + clase }, [h('caption', {}, titulo),
+        h('thead', {}, h('tr', {}, [h('th', { scope: 'col' }, 'Dato'), h('th', { scope: 'col' }, 'Este'), h('th', { scope: 'col' }, 'El otro')])),
+        h('tbody', {}, lista.map(function (c) { return h('tr', {}, [h('th', { scope: 'row' }, c[1]), h('td', {}, visto(c, este.fila[c[0]])), h('td', {}, visto(c, otro.fila[c[0]]))]); }))]);
+    }
+    // Una línea dice qué cambia y, al pulsarla, se ven los datos: así los dos papeles quedan arriba. Con uno o dos cambios ya sale abierta
+    var resumen = cambian.length ? 'Cambia: ' + cambian.map(function (c) { return c[1].toLowerCase(); }).join(', ') : 'Todos los datos leídos son iguales';
+    datos.appendChild(h('details', { open: cambian.length && cambian.length <= 2 ? 'open' : null }, [h('summary', { class: cambian.length ? '' : 'comparar-iguales' }, resumen),
+      cambian.length ? cuadro(cambian, 'Lo que cambia', 'cambia') : null, iguales.length ? cuadro(iguales, 'Lo que coincide', 'igual') : null]));
   }
   function sinVista(visor, t) { if (comparacion !== mia) return; visor.textContent = ''; visor.appendChild(h('p', { class: 'vacio' }, t || 'La vista previa no está disponible.')); }
   // El archivo de cada uno: el original (o la copia tachada si no hay original), como en la ficha y apuntado en el historial
@@ -3248,10 +3318,9 @@ function abrirComparacion(op) {
   }
   var este = Object.assign({}, op.este), otro = Object.assign({}, op.otro);
   var vista = h('section', { class: 'comparar-docs', 'aria-label': 'Comparar ' + este.id + ' con ' + otro.id }, [
-    h('div', { class: 'comparar-cab' }, [h('h3', {}, op.titulo || 'Comparar los dos papeles'),
-      op.respuesta ? h('p', { class: 'comparar-pregunta' }, op.respuesta.pregunta) : null,
-      h('div', { class: 'en-linea comparar-acciones' }, acciones), aviso]),
-    h('div', { class: 'comparar-columnas' }, [columna(este), columna(otro)])]);
+    h('div', { class: 'comparar-cab' }, [h('div', { class: 'comparar-titulo' }, [volver, atras, pregunta]), motivo, acciones, aviso]),
+    datos, h('div', { class: 'comparar-columnas' }, [columna(este, otro, 'Este'), columna(otro, este, 'El otro')])]);
+  if (r) preguntar();
   mia.soltar = function () {
     visores.forEach(function (v) { v.cerrar(); }); visores = [];
     vista.remove(); fichaAbierta.hidden = false; caja.classList.remove('comparando');
@@ -3261,12 +3330,12 @@ function abrirComparacion(op) {
   // Los datos completos del otro (de la ficha solo se sabe su nombre)
   // (los tickets no tienen empresa fija: se buscan solo por su ID). El archivo del otro se busca cuando ya se tienen
   // sus datos (el de un ticket depende del mes en que se leyó)
-  este.pintar(null);
+  este.cargado = true; este.titular();
   var q = sb.from(hoja).select('*').eq('id_doc', otro.id); if (hoja !== 'tickets') q = q.eq('empresa', op.empresa);
-  consulta(q.maybeSingle()).then(function (r) {
+  consulta(q.maybeSingle()).then(function (x) {
     if (comparacion !== mia) return;
-    otro.fila = r.data || null; otro.pintar(este.fila); este.pintar(otro.fila);
-  }).catch(function () { if (comparacion === mia) { otro.fila = null; otro.pintar(null); } })
+    otro.fila = x.data || null; otro.cargado = true; pintarDatos();
+  }).catch(function () { if (comparacion === mia) { otro.fila = null; otro.cargado = true; pintarDatos(); } })
     .then(function () { if (comparacion === mia) verArchivo(otro); });
   verArchivo(este);
 }
@@ -3298,20 +3367,24 @@ function bloqueTicketRepetido(t, editable) {
   if (!m) return null;
   var otro = m[1], motivo = m[2] ? m[2].slice(1, -1) : '';
   var contesta = editable && t.estado === 'Revisar';
+  // ¿Está en Revisar SOLO por parecer repetido? (las notas que no son un problema no cuentan)
+  var soloPorRepetido = texto(t.observaciones).split(/;\s*/).every(function (x) { return !x || /^(Posible repetido|IVA no deducible|pide factura|Ticket de surtidor|Comprobante de surtidor)/.test(x); });
   function terminar(textoAviso) { fichaSucia = null; cerrarModal(); avisoBreve(textoAviso); cargar(false); }
-  var boton = h('button', { type: 'button', class: 'boton comparar-boton', title: 'Ver los dos tickets uno al lado del otro', onclick: function (e) {
-    abrirComparacion({ hoja: 'tickets', campos: CAMPOS_COMPARAR_TICKET, foco: e.currentTarget, titulo: 'Comparar los dos tickets', volverTexto: '← Volver al ticket',
+  var boton = h('button', { type: 'button', class: 'boton comparar-boton' + (contesta ? ' principal' : ''), 'aria-label': 'Comparar con ' + otro, title: 'Ver los dos tickets uno al lado del otro', onclick: function (e) {
+    abrirComparacion({ hoja: 'tickets', campos: CAMPOS_COMPARAR_TICKET, foco: e.currentTarget, volverTexto: '← Volver al ticket',
       localizar: function (doc) { return doc.fila ? fotoDelTicket(doc.fila).then(function (f) { return { tipo: 'original', archivo: f }; }) : Promise.resolve({ archivo: null }); },
-      este: { id: t.id_doc, fila: t, papel: 'Este ticket' }, otro: { id: otro, fila: null, papel: 'El otro ticket' },
-      respuesta: !contesta ? null : { pregunta: '¿Es el mismo ticket repetido?' + (motivo ? ' Motivo del programa: ' + motivo + '.' : ''), botones: [
-        { texto: 'Es el mismo ticket: descartar este', clase: 'boton peligro', ocupado: 'Descartando…',
-          confirmar: '¿Descartar ' + idConNombre('tickets', t, t.id_doc) + '?\n\nEs el mismo ticket que ' + otro + ', que se queda como está. El descarte queda en el historial.',
-          hacer: function () { return rpc('panel_descartar_ticket', { p_id: t.id_doc }).then(function () { terminar('Ticket ' + t.id_doc + ' descartado: era el mismo que ' + otro); }); } },
-        { texto: 'No, son dos gastos distintos', clase: 'boton revisar', ocupado: 'Guardando…',
-          // Lo escrito en la ficha y sin guardar se perdería: se pregunta antes
-          confirmar: function () { return fichaSucia && fichaSucia() ? 'Hay cambios sin guardar en la ficha del ticket y se perderán. ¿Marcarlo como revisado sin ellos?' : null; },
-          hacer: function () { return rpc('panel_guardar_ticket', { p_id: t.id_doc, p_cambios: {}, p_revisado: true }).then(function () { terminar('Ticket ' + t.id_doc + ' revisado: es un gasto distinto de ' + otro); }); } }] } });
-  } }, 'Comparar con ' + otro);
+      este: { id: t.id_doc, fila: t }, otro: { id: otro, fila: null },
+      respuesta: !contesta ? null : { pregunta: '¿Es el mismo gasto?', motivo: motivo, cierra: true,
+        repetido: function (queda, sobra) {
+          var mirarMas = sobra !== t.id_doc && !soloPorRepetido;                // si este tiene algo más que mirar, sigue en Revisar
+          return rpc('panel_descartar_ticket', { p_id: sobra }).then(function () {
+            if (sobra !== t.id_doc && !mirarMas) return rpc('panel_guardar_ticket', { p_id: t.id_doc, p_cambios: {}, p_revisado: true });
+          }).then(function () { terminar('Ticket ' + sobra + ' descartado: era el mismo que ' + queda + (mirarMas ? ' (' + queda + ' sigue por revisar)' : '')); });
+        },
+        distintos: { texto: 'Son dos gastos distintos', ayuda: 'Los dos se quedan', hacer: function () {
+          return rpc('panel_guardar_ticket', { p_id: t.id_doc, p_cambios: {}, p_revisado: true }).then(function () { terminar('Ticket ' + t.id_doc + ' revisado: es un gasto distinto de ' + otro); });
+        } } } });
+  } }, contesta ? 'Comparar y decidir' : 'Comparar');
   return h('div', { class: 'propuesta-pack ticket-repetido' }, [
     h('p', {}, [h('b', {}, 'Posible repetido de ' + otro), motivo ? h('span', { class: 'sub' }, ' (' + motivo + ')') : null]),
     h('p', { class: 'ayuda-campo' }, ['El otro ticket: ', enlaceDocumento(otro, 'tickets')]),
@@ -3328,8 +3401,8 @@ function seccionClase(empresa, id, fila, editable) {
       ? 'Este papel es una orden de carga (el encargo de hacer un porte), no un albarán: se guarda aparte, no cuenta como albarán y no espera factura. Puede ir en el pack de su albarán.'
       : 'Una orden de carga es el encargo de hacer un porte, no la prueba de la entrega. Si este papel lo es, márcalo: dejará de contar como albarán y de esperar factura.')]);
   if (editable) {
-    var boton = h('button', { type: 'button', class: 'boton', onclick: function () {
-      if (fichaSucia && fichaSucia() && !confirm('Hay cambios sin guardar en esta ficha. ¿Seguir sin guardarlos?')) return;
+    var boton = h('button', { type: 'button', class: 'boton', onclick: async function () {
+      if (fichaSucia && fichaSucia() && !await confirmar('Hay cambios sin guardar en esta ficha. ¿Seguir sin guardarlos?', { si: 'Seguir sin guardar', peligro: true })) return;
       boton.disabled = true; aviso.className = 'mensaje-ficha'; aviso.textContent = 'Guardando…';
       rpc('panel_clase_albaran', { p_empresa: empresa, p_id: id, p_orden: !orden }).then(function () {
         fichaSucia = null; guardandoFicha = false; cerrarModal();
@@ -3410,7 +3483,7 @@ function ficha(titulo, fila, contexto) {
       entrada.value = c === 'estado_cobro_pago' && !valor ? 'Pendiente' : valor; entradas[c] = entrada;
       entrada.addEventListener('input', actualizarPendientes); entrada.addEventListener('change', actualizarPendientes);
       if (marcas[c]) entrada.setAttribute('aria-invalid', 'true');
-      rejilla.appendChild(marcar(c, h('div', { class: 'campo-ficha' + (largo ? ' campo-ancho' : '') }, [h('label', { for: 'campo-' + c }, etiqueta), entrada])));
+      rejilla.appendChild(marcar(c, h('div', { class: 'campo-ficha' + (largo ? ' campo-ancho' : '') }, [h('label', { for: 'campo-' + c }, etiqueta), entrada, c === 'fecha' && hoja !== 'revision' ? sugerirFecha(fila, entrada, actualizarPendientes) : null])));
     });
     seccion.appendChild(rejilla);
     if (grupo[0] === 'Importes') seccion.appendChild(resumen);
@@ -3431,7 +3504,8 @@ function ficha(titulo, fila, contexto) {
     h('div', { class: 'resumen-ficha' }, [h('span', { class: 'pill marca' }, empresa === '_revision' ? 'Revisión' : empresa), estado]),
     h('p', { class: 'ayuda-campo' }, editable ? 'Edita directamente los campos. Al guardar se comprueban todos los cambios.' : 'Puedes consultar todos los datos y el documento. Tu rol no permite editarlos.'), formulario])]);
   var guardar = null, marcar = null, descartar = null;
-  function ocupado(v) { guardandoFicha = v; formulario.querySelectorAll('input,select,textarea').forEach(function (e) { e.disabled = v; }); if (marcar) marcar.disabled = v; if (descartar) descartar.disabled = v; actualizarPendientes(); }
+  function ocupado(v) { guardandoFicha = v; formulario.querySelectorAll('input,select,textarea').forEach(function (e) { e.disabled = v; }); if (marcar) marcar.disabled = v; if (descartar) descartar.disabled = v; actualizarPendientes();
+    [guardar, marcar].forEach(function (b) { if (b) { if (v) b.setAttribute('aria-busy', 'true'); else b.removeAttribute('aria-busy'); } }); }
   function guardarCambios(revisar) {
     if (guardandoFicha) return;
     var cambios = cambiosActuales(), esperados = { estado: base.estado === undefined ? null : base.estado }, campoMal = null;
@@ -3453,24 +3527,24 @@ function ficha(titulo, fila, contexto) {
       estado.textContent = base.estado || 'Sin estado'; estado.className = 'pill ' + (base.estado === 'Procesado' ? 'ok' : 'aviso');
       ocupado(false);
       if (revisar) {                                   // revisado: la ficha se cierra sola y se avisa abajo
-        fichaSucia = null; cerrarModal(); avisoBreve(titulo + ' ' + id + quienEs() + (/^(Factura|Revisi|Orden)/.test(titulo) ? ' revisada' : ' revisado') + (Object.keys(cambios).length ? ' y cambios guardados' : ''));
+        fichaSucia = null; trasRevisar(titulo + ' ' + id + quienEs() + (/^(Factura|Revisi|Orden)/.test(titulo) ? ' revisada' : ' revisado') + (Object.keys(cambios).length ? ' y cambios guardados' : ''));
         cargar(false); return;
       }
-      mensaje.className = 'mensaje-ficha exito'; mensaje.textContent = 'Cambios guardados.';
+      mensaje.className = 'mensaje-ficha exito'; mensaje.textContent = '✓ Cambios guardados.'; avisoBreve(titulo + ' ' + id + quienEs() + ': cambios guardados');
       cargar(false);
     }).catch(function (e) { mensaje.className = 'mensaje-ficha fallo'; mensaje.textContent = mensajeError(e); ocupado(false); });
   }
   if (editable) {
     guardar = h('button', { type: 'button', class: 'boton principal', onclick: function () { guardarCambios(false); } }, 'Guardar cambios');
     marcar = h('button', { type: 'button', class: 'boton revisar', onclick: function () { guardarCambios(true); } }, 'Guardar y marcar revisado');
-    descartar = h('button', { type: 'button', class: 'boton peligro', onclick: function () {
-      if (guardandoFicha || !confirm('¿Quieres descartar este documento? Los cambios sin guardar no se aplicarán.')) return;
+    descartar = h('button', { type: 'button', class: 'boton peligro', onclick: async function () {
+      if (guardandoFicha || !await confirmar('¿Descartar ' + titulo.toLowerCase() + ' ' + id + quienEs() + '?\n\nDeja de contar. Queda apuntado en el historial y se puede recuperar. Los cambios sin guardar no se aplicarán.', { si: 'Descartar', peligro: true }) || guardandoFicha) return;
       ocupado(true); mensaje.textContent = 'Descartando documento…';
       rpc('panel_descartar', { p_empresa: empresa, p_hoja: hoja, p_id: id }).then(function (r) {
         var sueltos = r && Number(r.anexos_sueltos) || 0;      // era el principal de un pack: sus papeles vuelven a estar sueltos
-        pendientes = 0; fichaSucia = null; guardandoFicha = false; cerrarModal();
-        avisoBreve(titulo + ' ' + id + quienEs() + ' descartado' + (sueltos ?'. Sus ' + sueltos + ' papel' + (sueltos === 1 ? '' : 'es') + ' del pack vuelve' + (sueltos === 1 ? '' : 'n') + ' a estar suelto' + (sueltos === 1 ? '' : 's') : ''));
-        cargar(true); })
+        pendientes = 0; fichaSucia = null; guardandoFicha = false;
+        trasRevisar(titulo + ' ' + id + quienEs() + ' descartado' + (sueltos ?'. Sus ' + sueltos + ' papel' + (sueltos === 1 ? '' : 'es') + ' del pack vuelve' + (sueltos === 1 ? '' : 'n') + ' a estar suelto' + (sueltos === 1 ? '' : 's') : ''));
+        cargar(!document.getElementById('modal').classList.contains('abierto')); })
         .catch(function (e) { mensaje.textContent = mensajeError(e); mensaje.className = 'mensaje-ficha fallo'; ocupado(false); });
     } }, 'Descartar');
     // Revisión manual: volver a leer el documento tal como llegó (sin tacharlo a mano)
@@ -3478,12 +3552,14 @@ function ficha(titulo, fila, contexto) {
     if (hoja === 'revision' && base.estado === 'Reintentar') {
       pie.appendChild(h('p', { class: 'ayuda-campo aviso-tachado' }, 'Ya se ha pedido volver a leerlo. En uno o dos minutos saldrá de esta lista y aparecerá como factura, albarán o ticket (o volverá aquí si sigue sin poder leerse).'));
     } else if (hoja === 'revision') {
-      releer = h('button', { type: 'button', class: 'boton', title: 'El programa lo lee otra vez tal como llegó, con el mismo tachado automático', onclick: function () {
-        if (guardandoFicha || !confirm('¿Volver a leer este documento tal como llegó?\n\nÚsalo si crees que ahora el programa lo leerá bien (por ejemplo, tras una mejora o si falló por un corte). Tarda uno o dos minutos. Si lo que falta es tapar datos personales, usa «Tachar y enviar a la IA».')) return;
+      // (25-nov-2026) Tabla de precios cuyo remitente Gmail no ha podido comprobar: solo entra si una persona la da por buena
+      var esTabla = /^Tabla de precios (en un correo|de un remitente)/.test(texto(base.motivo));
+      releer = h('button', { type: 'button', class: 'boton' + (esTabla ? ' principal' : ''), title: esTabla ? 'La da por buena y usa sus precios' : 'El programa lo lee otra vez tal como llegó, con el mismo tachado automático', onclick: async function () {
+        if (guardandoFicha || !await confirmar(esTabla ? '¿Usar los precios de esta tabla?\n\nEl programa no ha podido comprobar quién la mandó. Mira arriba que el remitente, la fecha y los precios son los de vuestra gasolinera: con ellos se comprueban los repostajes. Queda apuntado quién la dio por buena.' : '¿Volver a leer este documento tal como llegó?\n\nÚsalo si crees que ahora el programa lo leerá bien (por ejemplo, tras una mejora o si falló por un corte). Tarda uno o dos minutos. Si lo que falta es tapar datos personales, usa «Tachar y enviar a la IA».', { si: esTabla ? 'Es correcta: usarla' : 'Volver a leer' }) || guardandoFicha) return;
         ocupado(true); releer.disabled = true; mensaje.className = 'mensaje-ficha'; mensaje.textContent = 'Pidiendo que se vuelva a leer…';
-        rpc('panel_reintentar_revision', { p_rev: id }).then(function () { pendientes = 0; fichaSucia = null; guardandoFicha = false; cerrarModal(); avisoBreve(titulo + ' ' + id + ': se volverá a leer en uno o dos minutos'); cargar(true); })
+        rpc('panel_reintentar_revision', { p_rev: id }).then(function () { pendientes = 0; fichaSucia = null; guardandoFicha = false; cerrarModal(); avisoBreve(esTabla ? 'Tabla aceptada: sus precios entran en uno o dos minutos' : titulo + ' ' + id + ': se volverá a leer en uno o dos minutos'); cargar(true); })
           .catch(function (e) { mensaje.textContent = mensajeError(e); mensaje.className = 'mensaje-ficha fallo'; ocupado(false); releer.disabled = false; });
-      } }, 'Volver a leer');
+      } }, esTabla ? 'Es correcta: usar esta tabla' : 'Volver a leer');
     }
     pie.appendChild(h('div', { class: 'acciones-revision' }, (releer ? [releer] : []).concat([descartar, guardar, marcar])));
     formulario.addEventListener('submit', function (e) { e.preventDefault(); guardarCambios(false); });
@@ -3544,8 +3620,8 @@ function ficha(titulo, fila, contexto) {
     } else if (hoja === 'revision' && editable && d.original) {
       var tachable = /\.(pdf|jpe?g|png|webp|gif|bmp)$/i.test(d.original.nombre);
       panelDocumento.appendChild(h('div', { class: 'aviso-tachado' }, [      // fuera de estadoArchivo: la vista previa lo vacía al cargar
-        h('button', { type: 'button', class: 'boton principal', disabled: tachable ? null : 'disabled', onclick: function () {
-          if (fichaSucia && fichaSucia() && !confirm('Hay cambios sin guardar en la ficha. ¿Seguir sin guardarlos?')) return;
+        h('button', { type: 'button', class: 'boton principal', disabled: tachable ? null : 'disabled', onclick: async function () {
+          if (fichaSucia && fichaSucia() && !await confirmar('Hay cambios sin guardar en la ficha. ¿Seguir sin guardarlos?', { si: 'Seguir sin guardar', peligro: true })) return;
           fichaSucia = null;
           if (d.original.enWeb) { abrirTachado(id, d.original); return; }
           mostrar('original', d.original);           // primero hay que traerlo del ordenador
@@ -3727,7 +3803,8 @@ function abrirTachado(revId, archivo) {
   }
   async function enviarTachado() {
     var n = total();
-    if (!n && !confirm('No has tapado nada. ¿Seguro que este documento no tiene ningún dato personal?')) return;
+    if (!n && !await confirmar('No has tapado nada. ¿Seguro que este documento no tiene ningún dato personal?', { si: 'Enviar sin tapar nada', peligro: true })) return;
+    if (enviar.disabled) return;
     enviar.disabled = true; deshacer.disabled = true; mensaje.className = 'mensaje-ficha'; mensaje.textContent = 'Preparando la copia tachada…';
     try {
       var salida = [];
@@ -3758,6 +3835,7 @@ function abrirTachado(revId, archivo) {
     h('div', { class: 'tachado-herramientas' }, [deshacer, contador]), zona,
     h('div', { class: 'pie-revision' }, [h('label', { class: 'casilla tachado-confirma', for: 'tachadoConfirma' }, [confirma,
       ' He revisado todas las páginas y he tapado todos los datos personales']), mensaje, h('div', { class: 'acciones-revision' }, [enviar])])]);
+  camino = null;                               // tachando no se pasa a otro documento: se perdería lo tapado
   abrirModal('Tachar y enviar a la IA · ' + revId, cuerpo);
   document.getElementById('caja').classList.add('revision-amplia');
   fichaSucia = function () { return total() > 0; };
@@ -3834,6 +3912,120 @@ function avisoBreve(texto, tipo) {
   anunciar(texto);
   programar();
 }
+// (25-nov-2026, petición de la persona) Las preguntas y los avisos salen dentro de la web, no en la ventana del navegador.
+// confirmar(texto, { si, no, peligro }) -> promesa de true o false. El primer párrafo es la pregunta; el resto, la explicación.
+// Escape, pulsar fuera o «Cancelar» = no. Con peligro, el foco empieza en «Cancelar».
+var preguntaAbierta = null;
+function confirmar(textoPregunta, op) {
+  op = op || {};
+  if (preguntaAbierta) return Promise.resolve(false);       // una pregunta cada vez (dos pulsaciones seguidas)
+  return new Promise(function (decir) {
+    var antes = document.activeElement, partes = String(textoPregunta).split(/\n\n/);
+    function fin(respuesta) {
+      if (preguntaAbierta !== capa) return;
+      preguntaAbierta = null; capa.remove(); document.removeEventListener('keydown', teclas, true);
+      document.querySelectorAll('[data-inerte-pregunta]').forEach(function (x) { x.inert = false; x.removeAttribute('data-inerte-pregunta'); });
+      if (antes && antes.isConnected) antes.focus();
+      decir(respuesta);
+    }
+    var si = h('button', { type: 'button', class: 'boton ' + (op.peligro ? 'peligro' : 'principal') + ' pregunta-si', onclick: function () { fin(true); } }, op.si || 'Sí');
+    var no = op.soloAviso ? null : h('button', { type: 'button', class: 'boton pregunta-no', onclick: function () { fin(false); } }, op.no || 'Cancelar');
+    var caja = h('div', { class: 'pregunta-caja', role: 'alertdialog', 'aria-modal': 'true', 'aria-labelledby': 'preguntaTitulo', 'aria-describedby': partes.length > 1 ? 'preguntaTexto' : null }, [
+      h('h2', { id: 'preguntaTitulo' }, partes[0]), partes.length > 1 ? h('p', { id: 'preguntaTexto' }, partes.slice(1).join(' ')) : null,
+      h('div', { class: 'pregunta-botones' }, [no, si])]);
+    var capa = h('div', { class: 'pregunta', id: 'pregunta', onclick: function (e) { if (e.target === capa) fin(false); } }, caja);
+    function teclas(e) {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); fin(false); return; }
+      if (e.key !== 'Tab') return;
+      var b = [no, si].filter(Boolean), i = b.indexOf(document.activeElement);
+      e.preventDefault(); e.stopPropagation(); b[(i + (e.shiftKey ? b.length - 1 : 1)) % b.length].focus();
+    }
+    preguntaAbierta = capa; document.body.appendChild(capa); document.addEventListener('keydown', teclas, true);
+    var modal = document.getElementById('modal');              // la ficha de detrás queda inerte mientras se contesta
+    if (modal && !modal.inert) { modal.inert = true; modal.setAttribute('data-inerte-pregunta', ''); }
+    (op.peligro && no ? no : si).focus();
+  });
+}
+function avisar(textoAviso) { return confirmar(textoAviso, { soloAviso: true, si: 'Entendido' }); }
+// (25-nov-2026, petición de la persona) Flechas ‹ › en la ficha: pasan al documento anterior o siguiente de la lista desde
+// la que se abrió (Facturas, Albaranes, Por revisar, Tickets...), sin cerrar. Al llegar al final de una página se sigue
+// con la siguiente. También con las flechas del teclado, si no se está escribiendo ni moviendo el documento.
+var VISTAS_CON_CAMINO = ['facturas', 'albaranes', 'revision', 'tickets', 'combustible', 'negocio'];
+var camino = null;                          // { filas: [tr], i } de la lista desde la que se abrió la ficha
+function filasDelCamino() { return [].filter.call(document.querySelectorAll('#vista tr.abrible'), function (x) { return x._abrirFila && x.getClientRects().length; }); }
+function prepararCamino(tr) {
+  var filas = VISTAS_CON_CAMINO.indexOf(S.vista) >= 0 ? filasDelCamino() : [];
+  camino = filas.indexOf(tr) >= 0 ? { filas: filas, i: filas.indexOf(tr) } : null;
+}
+function paginaVecina(paso) {               // ¿hay otra página de la lista por ese lado?
+  var d = S.datos; if (!d || ['facturas', 'albaranes'].indexOf(S.vista) < 0 || !d.tamano) return false;
+  return paso < 0 ? d.pagina > 1 : d.pagina * d.tamano < d.total;
+}
+function hayVecino(paso) { return !!camino && (!!camino.filas[camino.i + paso] || paginaVecina(paso)); }
+function abrirDelCamino(i) {
+  camino.i = i; var tr = camino.filas[i], boton = tr.querySelector('.abrir-fila');
+  if (boton) { focoAntesModal = boton; claveAntesModal = claveFoco(boton); claveVecinaModal = claveFilaVecina(boton); }   // al cerrar, el foco va a la fila del último visto
+  tr._abrirFila();
+}
+async function pasarDocumento(paso) {
+  if (!hayVecino(paso) || guardandoFicha) return;
+  if (fichaSucia && fichaSucia() && !await confirmar('Hay cambios sin guardar en esta ficha. ¿Pasar al otro documento sin guardarlos?', { si: 'Seguir sin guardar', peligro: true })) return;
+  if (!hayVecino(paso) || guardandoFicha) return;
+  fichaSucia = null; S.focoFlecha = paso;
+  if (camino.filas[camino.i + paso]) { abrirDelCamino(camino.i + paso); return; }
+  // Fin de la página: se carga la de al lado por debajo y se abre su primer (o último) documento
+  var mio = camino; document.querySelectorAll('#caja .flecha-ficha').forEach(function (b) { b.disabled = true; });
+  S.alPintar = function () {
+    if (camino !== mio) return;
+    camino = { filas: filasDelCamino(), i: 0 };
+    if (camino.filas.length) abrirDelCamino(paso > 0 ? 0 : camino.filas.length - 1); else cerrarModal();
+  };
+  S.pagina = S.datos.pagina + paso; cargar(true, true);
+}
+// (25-nov-2026, petición de la persona) Tras «Guardar y marcar revisado» o «Descartar» no se cierra: se pasa al siguiente
+// documento POR REVISAR de la lista, hasta que no queda ninguno. Si la ficha no se abrió desde una lista, se cierra como siempre.
+function trasRevisar(dicho) {
+  if (!camino || historialFichas.length || comparacion) { cerrarModal(); avisoBreve(dicho); return; }
+  var actual = camino.filas[camino.i], clave = actual._claveDoc;
+  // se quita de la lista (en Por revisar un documento puede salir dos veces: se quitan las dos)
+  var antes = camino.filas.slice(0, camino.i).filter(function (x) { return x._claveDoc !== clave; });
+  var despues = camino.filas.slice(camino.i + 1).filter(function (x) { return x._claveDoc !== clave; });
+  function pendiente(x) { return S.vista === 'revision' || x._porRevisar; }
+  var filas = antes.concat(despues), orden = despues.filter(pendiente).concat(antes.filter(pendiente));      // primero los de abajo y luego los que se saltaron
+  // En Facturas, Albaranes o Tickets: si lo corregido no estaba por revisar, o ya no queda otro en la lista, se cierra como siempre
+  if (S.vista !== 'revision' && (!actual._porRevisar || !orden.length)) { cerrarModal(); avisoBreve(dicho + (actual._porRevisar ? '. No queda nada más por revisar en esta lista' : '')); return; }
+  if (!orden.length) { todoRevisado(dicho); return; }
+  camino = { filas: filas, i: filas.indexOf(orden[0]) }; S.focoFlecha = 0;
+  avisoBreve(dicho); abrirDelCamino(camino.i);
+}
+function todoRevisado(dicho) {
+  camino = null; cerrarModal(); avisoBreve(dicho);
+  function mostrar(titulo, textos, boton) {
+    abrirModal(titulo, h('div', { class: 'todo-revisado' }, textos.map(function (x) { return h('p', {}, x); }).concat(boton ? [boton] : [])));
+    var b = document.querySelector('#caja .todo-revisado button'); if (b) b.focus();
+  }
+  rpc('panel_revision').then(function (quedan) {
+    if (S.vista !== 'revision' || document.getElementById('modal').classList.contains('abierto')) return;
+    if (!quedan.length) { mostrar('¡Ya está todo revisado!', ['Gracias por tu trabajo.']); return; }
+    mostrar('Esta lista ya está revisada', [quedan.length === 1 ? 'Queda 1 documento por revisar.' : 'Quedan ' + quedan.length + ' documentos por revisar.'],
+      h('button', { type: 'button', class: 'boton principal', onclick: function () {
+        S.filtro = ''; cerrarModal();
+        S.alPintar = function () { var f = document.querySelector('#vista tr.abrible'); if (f) f.click(); };
+        cargar(true);
+      } }, 'Seguir con lo que queda'));
+  }).catch(function () { /* la lista se ve igual por detrás */ });
+}
+function flechasDelCamino() {
+  if (!camino || historialFichas.length) return null;      // en un documento abierto desde otro, lo que toca es «Volver»
+  function flecha(paso, signo, nombre) {
+    var b = h('button', { type: 'button', class: 'boton flecha-ficha', 'aria-label': nombre, title: nombre + ' (tecla ' + (paso < 0 ? '←' : '→') + ')', onclick: function () { pasarDocumento(paso); } }, signo);
+    b.disabled = !hayVecino(paso); return b;
+  }
+  var total = camino.filas.length, base = 0, d = S.datos;
+  if (d && d.tamano && ['facturas', 'albaranes'].indexOf(S.vista) >= 0) { base = (d.pagina - 1) * d.tamano; total = d.total; }
+  return h('div', { class: 'flechas-ficha', role: 'group', 'aria-label': 'Pasar de documento' }, [flecha(-1, '←', 'Documento anterior'),
+    h('span', { class: 'sub' }, (base + camino.i + 1) + ' de ' + total), flecha(1, '→', 'Documento siguiente')]);
+}
 // (23-nov-2026) «← Volver a …»: al abrir otro documento desde un enlace de la ficha (un pack, una propuesta), antes se
 // perdía la ficha de partida y había que buscarla otra vez. Ahora se apunta y la cabecera ofrece volver a ella.
 var historialFichas = [], fichaActual = null, abriendoDesdeFicha = false;
@@ -3841,9 +4033,10 @@ function irAOtraFicha(titulo, empresa, hoja, id) {
   if (fichaActual && fichaActual.id !== id) historialFichas.push(fichaActual);
   abriendoDesdeFicha = true; abrirFichaPorId(titulo, empresa, hoja, id);
 }
-function volverAFichaAnterior() {
+async function volverAFichaAnterior() {
+  if (!historialFichas.length) return;
+  if (fichaSucia && fichaSucia() && !await confirmar('Hay cambios sin guardar en esta ficha. ¿Volver sin guardarlos?', { si: 'Seguir sin guardar', peligro: true })) return;
   var anterior = historialFichas.pop(); if (!anterior) return;
-  if (fichaSucia && fichaSucia() && !confirm('Hay cambios sin guardar en esta ficha. ¿Volver sin guardarlos?')) { historialFichas.push(anterior); return; }
   fichaSucia = null; abriendoDesdeFicha = true; abrirFichaPorId(anterior.titulo, anterior.empresa, anterior.hoja, anterior.id);
 }
 // pestana (opcional): lo que se pone en el título de la pestaña del navegador (si no, el tipo y el ID del documento)
@@ -3862,18 +4055,24 @@ function abrirModal(titulo, contenido, extra, pestana) {
   var anterior = historialFichas[historialFichas.length - 1];
   var atras = anterior ? h('button', { type: 'button', class: 'boton volver-ficha', 'aria-label': 'Volver a la ficha anterior: ' + anterior.id, onclick: volverAFichaAnterior }, '← Volver a ' + anterior.id) : null;
   // (23-nov-2026, accesibilidad) el título de la ficha es un h2 (dentro hay h3); se ve igual
-  caja.appendChild(h('div', { class: 'cab' }, [atras, h('h2', { id: 'tituloModal' }, titulo), extra || null, cerrar]));
+  caja.appendChild(h('div', { class: 'cab' }, [atras, h('h2', { id: 'tituloModal' }, titulo), flechasDelCamino(), extra || null, cerrar]));
   caja.appendChild(contenido);
   document.getElementById('modal').classList.add('abierto'); document.body.style.overflow = 'hidden';
   fondoInerte(true);                           // (23-nov-2026, accesibilidad) lo de detrás queda inerte mientras la ficha está abierta
   // (23-nov-2026, accesibilidad) la pestaña del navegador dice qué ficha está abierta: solo el tipo y el ID, nunca el nombre
   tituloPagina(pestana || (titulo && titulo.getAttribute ? titulo.getAttribute('data-pestana') : null) || (typeof titulo === 'string' ? titulo : 'Ficha'));
-  cerrar.focus();
+  // Pasando con las flechas, el foco se queda en la flecha (o en la otra, al llegar al final): se puede seguir pulsando
+  var flechas = caja.querySelectorAll('.flecha-ficha'), mia = S.focoFlecha && flechas.length ? flechas[S.focoFlecha < 0 ? 0 : 1] : null;
+  if (mia && mia.disabled) mia = flechas[S.focoFlecha < 0 ? 1 : 0];
+  (mia && !mia.disabled ? mia : cerrar).focus();
 }
 function cerrarModal() {
   if (guardandoFicha) return;
-  if (fichaSucia && fichaSucia() && !confirm('Hay cambios sin guardar. ¿Cerrar sin guardarlos?')) return;
-  ++secuenciaFicha; fichaSucia = null; cerrarVisor(); soltarComparacion(); historialFichas = []; fichaActual = null;
+  if (fichaSucia && fichaSucia()) {
+    confirmar('Hay cambios sin guardar. ¿Cerrar sin guardarlos?', { si: 'Cerrar sin guardar', peligro: true }).then(function (ok) { if (ok) { fichaSucia = null; cerrarModal(); } });
+    return;
+  }
+  ++secuenciaFicha; fichaSucia = null; cerrarVisor(); soltarComparacion(); historialFichas = []; fichaActual = null; camino = null;
   document.getElementById('modal').classList.remove('abierto'); document.body.style.overflow = '';
   fondoInerte(false); tituloPagina();          // (23-nov-2026, accesibilidad) el fondo vuelve a funcionar y la pestaña dice otra vez la sección
   // (23-nov-2026, accesibilidad) El foco vuelve a donde estaba. Si esa fila ya no existe (se repintó mientras tanto), a la
@@ -3890,7 +4089,12 @@ var pulsadoEnElFondo = false;
 document.getElementById('modal').addEventListener('pointerdown', function (e) { pulsadoEnElFondo = e.target.id === 'modal'; });
 document.getElementById('modal').addEventListener('click', function (e) { if (e.target.id === 'modal' && pulsadoEnElFondo) cerrarModal(); pulsadoEnElFondo = false; });
 document.addEventListener('keydown', function (e) {
-  if (!document.getElementById('modal').classList.contains('abierto')) return;
+  if (preguntaAbierta || !document.getElementById('modal').classList.contains('abierto')) return;
+  // Flechas del teclado: documento anterior o siguiente (no al escribir, ni dentro del visor, ni comparando)
+  if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && camino && !comparacion && !historialFichas.length
+      && !(e.target.closest && e.target.closest('input,textarea,select,summary,[contenteditable],.visor-documento,.vista-documento,canvas'))) {
+    e.preventDefault(); pasarDocumento(e.key === 'ArrowLeft' ? -1 : 1); return;
+  }
   if (e.key === 'Escape') { e.preventDefault(); if (comparacion) volverDeLaComparacion(); else cerrarModal(); }   // comparando: Escape vuelve a la ficha
   if (e.key === 'Tab') {
     var el = [].slice.call(document.getElementById('caja').querySelectorAll('button,input,select,textarea,a[href],summary,iframe,[tabindex="0"]')).filter(function (x) { return !x.disabled && x.getClientRects().length; });
@@ -3943,7 +4147,7 @@ if (errorEnlace !== null) {
   // Se sigue con la sesión que ya había y se explica por qué no se ha usado el enlace
   arrancar();
   setTimeout(function () {
-    alert('Ese enlace es de otra cuenta' + (CORREO_DEL_ENLACE ? ' (' + CORREO_DEL_ENLACE + ')' : '') + ' y en este navegador ya hay una sesión abierta. ' +
+    avisar('Ese enlace es de otra cuenta' + (CORREO_DEL_ENLACE ? ' (' + CORREO_DEL_ENLACE + ')' : '') + ' y en este navegador ya hay una sesión abierta. ' +
       'Por seguridad no se ha usado. Si el enlace es tuyo, pulsa «Salir» y vuelve a abrirlo desde el correo.');
   }, 300);
 } else if (ENLACE === 'contrasena') {
