@@ -5,6 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MCD · Gestión documental</title>
 <meta name="robots" content="noindex">
+<!-- SEGURIDAD (26-nov-2026): al salir hacia otra web no se dice de dónde se viene -->
+<meta name="referrer" content="no-referrer">
+<!-- SEGURIDAD (26-nov-2026): lista cerrada de lo que el navegador puede cargar y con quién puede hablar esta página.
+     Programas: solo los del propio panel y las cuatro librerías, cada una en su versión exacta. Datos: solo Supabase.
+     Nada de programas escritos dentro de la página ni de "eval". Si un día se colara un texto malicioso, el navegador
+     no lo ejecutaría ni le dejaría mandar los datos a otro sitio.
+     Si cambias la versión de una librería (aquí o en app.js), cambia también su carpeta en esta lista.
+     Si Supabase se usa con dominio propio, añádelo en img-src y connect-src. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/ https://cdn.jsdelivr.net/npm/exceljs@4.4.0/ https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/ https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.supabase.co; font-src 'self' data: blob:; connect-src 'self' data: blob: https://*.supabase.co wss://*.supabase.co https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/; worker-src blob:; child-src blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <link rel="icon" type="image/svg+xml" href="icono.svg">
 <meta name="theme-color" content="#14171C">
 <link rel="preload" href="fuentes/barlow-400.woff2" as="font" type="font/woff2" crossorigin>
@@ -577,9 +586,11 @@
 <div id="anuncio" class="solo-lector" role="status" aria-live="polite"></div>
 <div id="anuncioUrgente" class="solo-lector" role="alert"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<!-- SEGURIDAD (26-nov-2026): cada librería lleva su huella (integrity). Si alguien cambiara el archivo en el servidor
+     de donde se descarga, el navegador no lo ejecutaría. Al cambiar de versión hay que cambiar también la huella. -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js" integrity="sha384-GFr3yTh5lJznCbZfpTtXnwboFsxqtTQoeTZCRHhE0579KrRmlCzen5AA8ohaB5ug" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" integrity="sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG" crossorigin="anonymous"></script>
 <script src="config.js"></script>
-<script src="app.js?v=v5368003"></script>
+<script src="app.js?v=vb368525"></script>
 </body>
 </html>

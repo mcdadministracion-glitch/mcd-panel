@@ -58,12 +58,19 @@ function correoDelToken(token) {
   try {
     var parte = String(token || '').split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
     var datos = JSON.parse(decodeURIComponent(escape(atob(parte + '==='.slice((parte.length + 3) % 4)))));
-    return String(datos.email || '').toLowerCase();
+    // SEGURIDAD (26-nov-2026): solo vale si tiene forma de correo corto. Este texto lo pone quien prepara el enlace (aquí
+    // todavía no se ha comprobado con nadie) y se enseña en un aviso: con frases o saltos de línea servía para engañar.
+    var correo = String(datos.email || '').toLowerCase();
+    return /^[^\s@()<>,;:"'\\]{1,64}@[a-z0-9.-]{1,100}$/.test(correo) ? correo : '';
   } catch (e) { return ''; }
+}
+// Dónde guarda supabase-js la sesión en este navegador
+function claveSesionGuardada() {
+  try { return 'sb-' + new URL(CFG.SUPABASE_URL).hostname.split('.')[0] + '-auth-token'; } catch (e) { return ''; }
 }
 function correoDeLaSesionGuardada() {
   try {
-    var clave = 'sb-' + new URL(CFG.SUPABASE_URL).hostname.split('.')[0] + '-auth-token', guardada = JSON.parse(localStorage.getItem(clave) || 'null');
+    var guardada = JSON.parse(localStorage.getItem(claveSesionGuardada()) || 'null');
     return guardada && guardada.user && guardada.user.email ? String(guardada.user.email).toLowerCase() : '';
   } catch (e) { return ''; }
 }
@@ -81,9 +88,18 @@ function revisarEnlace(almohadilla, correoGuardado, consulta) {
 }
 var ENLACE = revisarEnlace(location.hash, correoDeLaSesionGuardada(), location.search);
 var CORREO_DEL_ENLACE = ENLACE === 'otra-cuenta' ? correoDelToken(parametrosEnlace(location.hash, location.search).get('access_token')) : '';
-// Se borra de la dirección (la almohadilla y los datos de sesión de la consulta) antes de que supabase-js la lea
-if (ENLACE === 'quitar' || ENLACE === 'otra-cuenta') history.replaceState(null, '', location.pathname + consultaSinSesion(location.search));
-var sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true } });
+// SEGURIDAD (26-nov-2026): la sesión del enlace bueno (invitación o recuperación) se saca de la dirección AQUÍ y la
+// dirección se limpia SIEMPRE antes de crear el cliente. supabase-js ya no la lee (detectSessionInUrl: false) porque:
+//  - al leerla dejaba el enlace entero, con la sesión dentro, en el historial del navegador (botón Atrás);
+//  - si el enlace era falso (cualquiera puede escribir uno con el correo de otra persona), le cerraba la sesión a quien
+//    lo abría. Ahora el panel lo comprueba primero con el servidor (más abajo, en el arranque) y, si no vale, no toca nada.
+var SESION_DEL_ENLACE = null;
+if (ENLACE === 'contrasena') {
+  var datosEnlace = parametrosEnlace(location.hash, '');
+  SESION_DEL_ENLACE = { access_token: datosEnlace.get('access_token') || '', refresh_token: datosEnlace.get('refresh_token') || '' };
+}
+if (ENLACE !== 'nada') history.replaceState(null, '', location.pathname + consultaSinSesion(location.search));
+var sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } });
 
 // ---------------------------------------------------------------------
 // Utilidades
@@ -787,9 +803,16 @@ function pantallaAcceso(modo, aviso) {
     p.then(function (r) {
       if (r.error) throw r.error;
       if (modo === 'olvido') { pantallaAcceso('entrar', { tipo: 'ok', texto: 'Si el correo existe, recibirás un enlace para cambiar la contraseña.' }); return; }
+      apuntarUso(true);                          // empieza a contar el tiempo sin uso desde esta entrada
       if (modo === 'nueva') { history.replaceState(null, '', location.pathname); arrancar(); return; }
       arrancar();
     }).catch(function (err) {
+      // SEGURIDAD (26-nov-2026): al pedir el correo de recuperación la respuesta es SIEMPRE la misma. Supabase contesta
+      // «espera 60 segundos» solo cuando el correo existe: enseñarlo servía para saber quién tiene cuenta. Solo se
+      // distingue no tener conexión (ahí no se ha pedido nada).
+      if (modo === 'olvido' && !/Failed to fetch|NetworkError|Load failed/i.test(String(err && err.message || ''))) {
+        pantallaAcceso('entrar', { tipo: 'ok', texto: 'Si el correo existe, recibirás un enlace para cambiar la contraseña.' }); return;
+      }
       boton.disabled = false; mensaje.className = 'mensaje error'; mensaje.textContent = mensajeError(err);
       if (mensaje.scrollIntoView) mensaje.scrollIntoView({ block: 'nearest' });   // en un móvil pequeño quedaba por debajo de la pantalla
       if (modo === 'entrar' && /Invalid login credentials/i.test(String(err && err.message || ''))) sb.rpc('panel_registrar_fallo', { p_email: correo }).then(null, function () {});
@@ -816,15 +839,74 @@ function pantallaAcceso(modo, aviso) {
 }
 // SEGURIDAD (19-nov-2026): al salir se recarga la página entera. Así no queda en la pestaña nada de la persona
 // anterior (lista de subidas, enlaces de miniaturas, la última ficha...) para quien entre después.
-function salir() {
-  // Sin almohadilla ni datos de sesión en la consulta: un enlace viejo no vuelve a meter otra sesión al recargar
-  function recargar() { location.replace(location.pathname + consultaSinSesion(location.search)); }
-  function noSalio() { avisar('No se ha podido cerrar la sesión. Comprueba la conexión a internet y vuelve a pulsar «Salir».'); }
-  sb.auth.signOut().then(function (r) {
-    if (r && r.error) { noSalio(); return; }
-    ++secuenciaCarga; S.rol = null; S.datos = null; S.denegado = false; recargar();
-  }, noSalio);
+// Sin almohadilla ni datos de sesión en la consulta: un enlace viejo no vuelve a meter otra sesión al recargar
+function recargarSinSesion() { location.replace(location.pathname + consultaSinSesion(location.search)); }
+function quitarSesionDeEsteNavegador() { try { localStorage.removeItem(claveSesionGuardada()); } catch (e) { /* sin almacenamiento: no hay nada guardado */ } }
+// Un aviso para la pantalla de entrada que sobrevive a la recarga (solo en esta pestaña, y se lee una vez)
+var CLAVE_AVISO_ENTRADA = 'mcd-aviso-entrada';
+var AVISOS_ENTRADA = {
+  inactividad: 'Por seguridad, la sesión se ha cerrado sola por llevar mucho tiempo sin usar el panel. Vuelve a entrar.',
+  caducada: 'Tu sesión ha caducado. Vuelve a entrar.',
+  sinconexion: 'Sesión cerrada en este navegador. No había conexión para avisar al servidor: si era un ordenador compartido, entra otra vez cuando vuelva internet y pulsa «Salir».'
+};
+function dejarAvisoEntrada(cual) { try { sessionStorage.setItem(CLAVE_AVISO_ENTRADA, cual); } catch (e) { /* sin almacenamiento: no se avisa */ } }
+function avisoEntradaPendiente() {
+  var cual = '';
+  try { cual = sessionStorage.getItem(CLAVE_AVISO_ENTRADA) || ''; sessionStorage.removeItem(CLAVE_AVISO_ENTRADA); } catch (e) { cual = ''; }
+  return propia(AVISOS_ENTRADA, cual, '') ? { tipo: cual === 'sinconexion' ? 'ok' : 'error', texto: AVISOS_ENTRADA[cual] } : null;
 }
+// SEGURIDAD (26-nov-2026): «Salir» cierra SIEMPRE la sesión de este navegador. Antes, sin conexión, la sesión se quedaba
+// abierta (solo salía un aviso) y la persona podía irse creyendo que había salido.
+function cerrarSesion(aviso) {
+  function fuera(avisoFinal) {
+    ++secuenciaCarga; S.rol = null; S.datos = null; S.denegado = false;
+    try { localStorage.removeItem(CLAVE_ULTIMO_USO); } catch (e) { /* sin almacenamiento */ }
+    if (avisoFinal) dejarAvisoEntrada(avisoFinal);
+    recargarSinSesion();
+  }
+  function sinServidor() { quitarSesionDeEsteNavegador(); fuera(aviso || 'sinconexion'); }
+  var hecho = false, limite = setTimeout(function () { if (!hecho) { hecho = true; sinServidor(); } }, 8000);
+  sb.auth.signOut().then(function (r) {
+    if (hecho) return; hecho = true; clearTimeout(limite);
+    if (r && r.error) sinServidor(); else fuera(aviso);
+  }, function () { if (hecho) return; hecho = true; clearTimeout(limite); sinServidor(); });
+}
+function salir() { cerrarSesion(''); }
+function recargarPorSesionCaducada() {
+  try {
+    var ultima = Number(sessionStorage.getItem('mcd-recarga-caducada')) || 0;
+    if (Date.now() - ultima < 120000) return false;
+    sessionStorage.setItem('mcd-recarga-caducada', String(Date.now()));
+  } catch (e) { return false; }
+  dejarAvisoEntrada('caducada'); recargarSinSesion(); return true;
+}
+// SEGURIDAD (26-nov-2026): cierre por inactividad. Si nadie toca el panel (tecla, ratón o dedo; el refresco automático no
+// cuenta) durante CERRAR_SESION_TRAS_HORAS (config.js; 12 si no se dice; 0 = nunca), la sesión se cierra sola. Antes
+// duraba para siempre: bastaba abrir el panel en un ordenador o un móvil donde alguien entró hace semanas.
+// La hora del último uso se comparte entre pestañas (localStorage): usar una mantiene abiertas las demás.
+var HORAS_SIN_USO = CFG.CERRAR_SESION_TRAS_HORAS === undefined ? 12 : (Number(CFG.CERRAR_SESION_TRAS_HORAS) > 0 ? Number(CFG.CERRAR_SESION_TRAS_HORAS) : 0);
+var CLAVE_ULTIMO_USO = 'mcd-ultimo-uso', ultimoUsoApuntado = 0;
+function apuntarUso(ya) {
+  var ahora = Date.now();
+  if (!ya && ahora - ultimoUsoApuntado < 60000) return;      // como mucho una vez por minuto
+  ultimoUsoApuntado = ahora;
+  try { localStorage.setItem(CLAVE_ULTIMO_USO, String(ahora)); } catch (e) { /* sin almacenamiento: no se puede medir */ }
+}
+function demasiadoSinUso() {
+  if (!HORAS_SIN_USO) return false;
+  var t = 0; try { t = Number(localStorage.getItem(CLAVE_ULTIMO_USO)) || 0; } catch (e) { t = 0; }
+  if (!t) { apuntarUso(true); return false; }                // primera vez (o sin apunte): empieza a contar ahora
+  return Date.now() - t > HORAS_SIN_USO * 3600000;
+}
+['keydown', 'pointerdown', 'touchstart', 'wheel'].forEach(function (evento) {
+  document.addEventListener(evento, function () { if (S.rol) apuntarUso(false); }, { capture: true, passive: true });
+});
+setInterval(function () { if (S.rol && demasiadoSinUso()) cerrarSesion('inactividad'); }, 60000);
+// SEGURIDAD (26-nov-2026): si la sesión se cierra en OTRA pestaña (o caduca allí), esta se recarga: no se queda enseñando
+// los datos de quien ya salió.
+window.addEventListener('storage', function (e) {
+  if (e.key && e.key === claveSesionGuardada() && e.oldValue && !e.newValue && S.rol) recargarSinSesion();
+});
 
 // ---------------------------------------------------------------------
 // Carga de datos
@@ -928,6 +1010,9 @@ function mostrarError(e) {
         h('button', { class: 'boton', onclick: salir }, 'Salir')]));
     });
   } else if (/JWT|token|session|Auth session missing/i.test(msg)) {
+    // SEGURIDAD (26-nov-2026): se recarga la página para que no quede en memoria nada de la sesión caducada (igual que
+    // al salir). Solo una vez cada dos minutos: si el error sigue tras recargar, se pinta la entrada como antes.
+    if (recargarPorSesionCaducada()) return;
     pantallaAcceso('entrar', { tipo: 'error', texto: 'Tu sesión ha caducado. Vuelve a entrar.' });
   } else {
     vista.appendChild(h('div', { class: 'tarjeta aviso-total' }, [h('h3', {}, 'No se han podido cargar los datos'), h('p', {}, msg),
@@ -1200,7 +1285,13 @@ async function subirArchivos(ficheros) {
         if (/\.zip$/i.test(nombre)) { s.clase = 'exito'; s.texto = 'ZIP enviado: sus documentos aparecerán en Últimos documentos en un par de minutos.'; pintarSubidas(); continue; }
         s.texto = 'Subido. Esperando a que el servicio lo recoja…'; pintarSubidas();
         seguirSubida(s);
-      } catch (e) { s.clase = 'fallo'; s.texto = 'No se ha subido: ' + mensajeError(e); pintarSubidas(); }
+      } catch (e) {
+        // (26-nov-2026) El servidor admite como mucho 500 archivos esperando a que el ordenador los recoja; al pasarse contesta con su
+        // frase de «política de filas», que no dice nada a una persona
+        s.clase = 'fallo'; s.texto = 'No se ha subido: ' + (/row-level security/i.test(String(e && e.message || ''))
+          ? 'hay demasiados archivos esperando a que el ordenador los recoja (o tu usuario no puede subir). Espera unos minutos y vuelve a intentarlo.' : mensajeError(e));
+        pintarSubidas();
+      }
     }
 }
 // Subir desde cualquier sección: botón "Subir" del menú y arrastrar archivos encima de la página
@@ -2164,13 +2255,29 @@ function sinVistaPrevia(visor) {
 }
 // aparte (23-nov-2026): para «Comparar» hacen falta dos visores a la vez. Uno «aparte» no cierra el de la ficha ni lo
 // cierra el de la ficha: lo cierra quien lo pidió con el objeto que se devuelve (su .cerrar()).
+// SEGURIDAD (26-nov-2026): el giro de cada documento se recuerda en el navegador con una clave que NO lleva el nombre
+// del archivo (un nombre puede traer el de una persona o un DNI, y se quedaba ahí tras «Salir»): va un resumen del
+// nombre, del que no se puede volver al nombre. Las claves antiguas, con el nombre a la vista, se borran al cargar.
+function claveDelGiro(nombre) {
+  var a = 0xdeadbeef, b = 0x41c6ce57, t = String(nombre || '');
+  for (var i = 0; i < t.length; i++) { var c = t.charCodeAt(i); a = Math.imul(a ^ c, 2654435761); b = Math.imul(b ^ c, 1597334677); }
+  a = Math.imul(a ^ (a >>> 16), 2246822507) ^ Math.imul(b ^ (b >>> 13), 3266489909); b = Math.imul(b ^ (b >>> 16), 2246822507) ^ Math.imul(a ^ (a >>> 13), 3266489909);
+  return 'mcd-giro:h' + ('00000000' + (b >>> 0).toString(16)).slice(-8) + ('00000000' + (a >>> 0).toString(16)).slice(-8);
+}
+(function borrarGirosAntiguos() {
+  try {
+    var viejas = [];
+    for (var i = 0; i < localStorage.length; i++) { var k = localStorage.key(i); if (k && k.indexOf('mcd-giro:') === 0 && !/^mcd-giro:h[0-9a-f]{16}$/.test(k)) viejas.push(k); }
+    viejas.forEach(function (k) { localStorage.removeItem(k); });
+  } catch (e) { /* sin almacenamiento: nada que borrar */ }
+})();
 function crearVisor(visor, url, nombre, aparte) {
   if (!aparte) cerrarVisor();
   var esImagen = /\.(jpe?g|png|webp|gif|bmp)$/i.test(nombre), esPdf = /\.pdf$/i.test(nombre);
   visor.textContent = '';
   if (!esImagen && !esPdf) { if (TIPOS_TEXTO_VISOR.test(nombre)) vistaComoTexto(visor, url, nombre); else sinVistaPrevia(visor); return null; }
   var zoom = 1, vivo = true, hojas = [], pdf = null, turno = 0, temporizador = null, arrastre = null, pellizco = null;
-  var claveGiro = 'mcd-giro:' + nombre, giro = 0;
+  var claveGiro = claveDelGiro(nombre), giro = 0;
   try { giro = (Number(localStorage.getItem(claveGiro)) || 0) % 360; } catch (e) { giro = 0; }      // sin almacenamiento: derecho
   var etiqueta = h('span', { class: 'visor-zoom', role: 'status', 'aria-live': 'polite' }, '100 %');
   function boton(letra, titulo, accion) { return h('button', { type: 'button', class: 'boton', title: titulo, 'aria-label': titulo, onclick: accion }, letra); }
@@ -2465,6 +2572,7 @@ function vUsuarios(v, usuarios) {
   var email = h('input', { type: 'email', placeholder: 'correo@empresa.com', required: 'required' }), nombre = h('input', { type: 'text', placeholder: 'Nombre' });
   var rol = h('select', {}, ['Lector', 'Revisor', 'Administrador'].map(function (r) { return h('option', { value: r }, r); }));
   var activo = h('input', { type: 'checkbox' }); activo.checked = true; var msg = h('div', { class: 'mensaje', id: 'msgUsuario', role: 'status' });
+  var usuarioElegido = null;                    // a quién se pulsó en la lista (para avisar si después se le cambia el correo)
   // Qué secciones ve (Inicio siempre; un administrador lo ve todo)
   var casillasSeccion = VISTAS.filter(function (x) { return x[0] !== 'inicio'; }).map(function (x) {
     var c = h('input', { type: 'checkbox', value: x[0], 'data-seccion': x[0] }); c.checked = true;
@@ -2501,9 +2609,21 @@ function vUsuarios(v, usuarios) {
       h('li', {}, [h('b', {}, 'Administrador: '), 'además gestiona usuarios y reglas.'])]),
     h('div', { class: 'formulario-usuario' }, [h('label', {}, ['Correo (obligatorio)', email]), h('label', {}, ['Nombre', nombre]), h('label', {}, ['Rol', rol]),
       h('label', { class: 'casilla' }, [activo, 'Puede entrar (desmarca para quitarle el acceso)']), cajaSecciones,
-      h('div', { class: 'en-linea' }, [h('button', { class: 'boton principal', 'data-foco': 'usu-guardar', onclick: function () {
+      h('div', { class: 'en-linea' }, [h('button', { class: 'boton principal', 'data-foco': 'usu-guardar', onclick: async function () {
         if (!email.value.trim()) { mensajeEn(msg, 'Escribe el correo de la persona.', 'error'); campoConError(email, 'msgUsuario'); return; }
         var suCorreo = email.value.trim(), susSecciones = rol.value === 'Administrador' ? null : leerSecciones();
+        // SEGURIDAD (26-nov-2026): el correo no se cambia, se crea OTRO usuario. Antes, al corregir un correo mal escrito, el
+        // equivocado se quedaba activo, con su rol y su invitación válida, sin que la pantalla dijera nada.
+        var anterior = usuarioElegido;
+        if (anterior && anterior.activo && suCorreo.toLowerCase() !== String(anterior.email).toLowerCase()) {
+          var quitar = await confirmar('Has cambiado el correo: se va a crear OTRO usuario (' + suCorreo + ').' + '\n\n' +
+            'El de antes (' + anterior.email + ') sigue existiendo y puede entrar. Si era un correo mal escrito, quítale el acceso ahora.',
+            { si: 'Quitar el acceso al de antes', no: 'Dejar los dos', focoEnNo: true });
+          if (quitar) {
+            try { await rpc('panel_guardar_usuario', { p_email: anterior.email, p_nombre: anterior.nombre || '', p_rol: anterior.rol, p_activo: false }); }
+            catch (e) { mensajeEn(msg, 'No se ha podido quitar el acceso a ' + anterior.email + ': ' + mensajeError(e), 'error'); return; }
+          }
+        }
         rpc('panel_guardar_usuario', { p_email: suCorreo, p_nombre: nombre.value.trim(), p_rol: rol.value, p_activo: activo.checked })
           .then(function () { return rpc('panel_secciones_usuario', { p_email: suCorreo, p_secciones: susSecciones }); })
           .then(function () { cargar(true); avisoBreve('Usuario guardado. Si no ha entrado nunca, le llegará la invitación en menos de un minuto.'); })
@@ -2525,7 +2645,7 @@ function vUsuarios(v, usuarios) {
   }
   tabla(v, ['Correo', 'Nombre', 'Rol', 'Ve', 'Activo', 'Invitación', 'Último acceso'], usuarios.map(function (u) {
     // (23-nov-2026, accesibilidad) el botón de la fila dice lo que hace: «Abrir usuario para editarlo: correo»
-    return { clave: 'usu-' + u.email, tituloFicha: 'usuario para editarlo', celdas: [u.email, u.nombre, u.rol, nombreSecciones(u), u.activo ? 'Sí' : 'No', estadoInvitacion(u), u.ultimo_acceso ? fechaHora(u.ultimo_acceso) : 'Nunca'], abrir: function () { email.value = u.email; nombre.value = u.nombre || ''; rol.value = u.rol; activo.checked = !!u.activo; ponerSecciones(u.secciones); segunRol(); campoSinError(email); email.focus();
+    return { clave: 'usu-' + u.email, tituloFicha: 'usuario para editarlo', celdas: [u.email, u.nombre, u.rol, nombreSecciones(u), u.activo ? 'Sí' : 'No', estadoInvitacion(u), u.ultimo_acceso ? fechaHora(u.ultimo_acceso) : 'Nunca'], abrir: function () { usuarioElegido = u; email.value = u.email; nombre.value = u.nombre || ''; rol.value = u.rol; activo.checked = !!u.activo; ponerSecciones(u.secciones); segunRol(); campoSinError(email); email.focus();
       // Al elegir a alguien se dice por qué no le llegó la invitación (si es el caso)
       var motivo = u.activo ? String(u.invitacion_error || '') : '';
       mensajeEn(msg, !motivo ? '' : (yaTieneCuenta(u) ? motivo : 'No se pudo enviar la invitación: ' + motivo), motivo && !yaTieneCuenta(u) ? 'error' : ''); } };
@@ -2552,7 +2672,7 @@ var AUTORES_ESPECIALES = { 'Sistema': 'El programa', 'Supabase (a mano)': 'Supab
 var CONSULTAS_HISTORIAL = ['Ver documento', 'Descargar documento'];
 var TIPOS_HISTORIAL = [['cambios', 'Cambios de personas'], ['programa', 'Lo que hace el programa'], ['accesos', 'Entradas al panel'], ['consultas', 'Aperturas y descargas'], ['', 'Todo']];
 var TAMANO_HISTORIAL = 100;
-function nombreAccion(a) { return ACCIONES[a] || a || '—'; }
+function nombreAccion(a) { return propia(ACCIONES, a, '') || a || '—'; }
 function inicioDiaLocal(iso) { return new Date(iso + 'T00:00:00').toISOString(); }   // medianoche de España, no de Londres
 function consultaHistorial(f) {
   var q = sb.from('auditoria').select('*', { count: 'exact' });
@@ -2575,7 +2695,7 @@ function cargarHistorial(s) {
     .then(function (r) { return { filtros: f, pagina: s.pagina, tamano: TAMANO_HISTORIAL, total: r[0].count || 0, filas: r[0].data || [], usuarios: r[1].data || [] }; });
 }
 function nombresUsuarios(lista) {
-  var m = {}; Object.keys(AUTORES_ESPECIALES).forEach(function (k) { m[k.toLowerCase()] = AUTORES_ESPECIALES[k]; });
+  var m = Object.create(null); Object.keys(AUTORES_ESPECIALES).forEach(function (k) { m[k.toLowerCase()] = AUTORES_ESPECIALES[k]; });   // sin «constructor» ni «__proto__» heredados
   (lista || []).forEach(function (u) { m[String(u.email || '').toLowerCase()] = u.nombre || ''; }); return m;
 }
 // Columna "Cambio": antes → después; en altas solo lo nuevo y en borrados solo lo que había
@@ -2602,7 +2722,7 @@ function etiquetaCampo(x) {
   if (x.accion === 'Regla periodica') return 'NIF ' + texto(x.campo);
   if (ACCESOS_HISTORIAL.indexOf(x.accion) >= 0) return texto(x.campo) || '—';
   if (CONSULTAS_HISTORIAL.indexOf(x.accion) >= 0) return x.campo === 'tachado' ? 'Copia tachada' : x.campo === 'zip' ? 'ZIP de originales' : x.campo === 'original' ? 'Original' : texto(x.campo);
-  return ETIQUETAS[x.campo] || texto(x.campo) || '—';
+  return propia(ETIQUETAS, x.campo, '') || texto(x.campo) || '—';
 }
 function textoDocumento(x) {
   if (!x.id_doc) return '—';
@@ -2915,6 +3035,9 @@ var DUDOSO_CASILLA = { 'tipo de documento': ['#tipo'], 'numero': ['#numero'], 'f
   'quien lo recibe': ['nombre', 'nif'], 'importes': ['base_imponible', 'cuota_iva', 'total', 'importe'], 'vencimiento': ['fecha_vencimiento'],
   'matricula': ['matricula'], 'origen o destino': ['origen', 'destino'] };
 function sinTildes(t) { return texto(t).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); }
+// SEGURIDAD (26-nov-2026): buscar en una tabla del programa con una palabra que viene de un documento o de la base de
+// datos. Solo valen las entradas escritas en la tabla: \u00abconstructor\u00bb o \u00ab__proto__\u00bb no son ninguna.
+function propia(tabla, clave, siNo) { return Object.prototype.hasOwnProperty.call(tabla, clave) ? tabla[clave] : siNo; }
 // (25-nov-2026, petición de la persona) Documento sin fecha: se SUGIERE la de subida. No se pone sola (podría no ser la buena):
 // se pulsa, se mira y se guarda.
 function sugerirFecha(fila, entrada, alCambiar) {
@@ -2935,9 +3058,14 @@ function casillasARevisar(hoja, fila) {
     var t = sinTildes(aviso);
     AVISOS_CASILLA.forEach(function (r) { if (r[0].test(t)) (hoja === 'facturas' ? r[1] : r[2]).forEach(function (c) { poner(c, r[3]); }); });
     var dudosos = /^lectura dudosa \(([^)]*)\)/.exec(t);
-    if (dudosos) dudosos[1].split(/,\s*/).forEach(function (n) { (DUDOSO_CASILLA[n.trim()] || []).forEach(function (c) { poner(c, 'La IA no lo ve claro'); }); });
+    if (dudosos) dudosos[1].split(/,\s*/).forEach(function (n) { propia(DUDOSO_CASILLA, n.trim(), []).forEach(function (c) { poner(c, 'La IA no lo ve claro'); }); });
   });
   return marcas;
+}
+// SEGURIDAD (26-nov-2026): las casillas en rojo son una ayuda. Si un texto raro de un documento las hace fallar, la ficha
+// se abre igual (sin rojo): antes un documento así no se podía ni abrir ni descartar desde el panel.
+function casillasARevisarSeguro(hoja, fila) {
+  try { return casillasARevisar(hoja, fila); } catch (e) { return {}; }
 }
 
 // ---------------------------------------------------------------------
@@ -3451,7 +3579,7 @@ function ficha(titulo, fila, contexto) {
       resumen.textContent = Number.isFinite(diferencia) ? 'Base + IVA − retención + otros = ' + euros(calculado) + (Math.abs(diferencia) > 0.02 ? ' · Diferencia con el total: ' + euros(diferencia) : ' · Coincide con el total') : 'Comprueba los importes introducidos.';
     }
   }
-  var marcas = casillasARevisar(hoja, fila), hayMarcas = Object.keys(marcas).some(function (c) { return conocidos.indexOf(c) >= 0; });
+  var marcas = casillasARevisarSeguro(hoja, fila), hayMarcas = Object.keys(marcas).some(function (c) { return conocidos.indexOf(c) >= 0; });
   if (hayMarcas) formulario.appendChild(h('p', { class: 'aviso-revisar', role: 'note' }, 'En rojo, lo que hay que mirar. Debajo de cada casilla, por qué.'));
   function marcar(c, caja) {
     if (!marcas[c]) return caja;
@@ -3536,7 +3664,8 @@ function ficha(titulo, fila, contexto) {
   }
   if (editable) {
     guardar = h('button', { type: 'button', class: 'boton principal', onclick: function () { guardarCambios(false); } }, 'Guardar cambios');
-    marcar = h('button', { type: 'button', class: 'boton revisar', onclick: function () { guardarCambios(true); } }, 'Guardar y marcar revisado');
+    // (26-nov-2026) recienAbierta(): un doble clic en la ficha anterior no da por revisada esta sin haberla mirado
+    marcar = h('button', { type: 'button', class: 'boton revisar', onclick: function () { if (recienAbierta()) return; guardarCambios(true); } }, 'Guardar y marcar revisado');
     descartar = h('button', { type: 'button', class: 'boton peligro', onclick: async function () {
       if (guardandoFicha || !await confirmar('¿Descartar ' + titulo.toLowerCase() + ' ' + id + quienEs() + '?\n\nDeja de contar. Queda apuntado en el historial y se puede recuperar. Los cambios sin guardar no se aplicarán.', { si: 'Descartar', peligro: true }) || guardandoFicha) return;
       ocupado(true); mensaje.textContent = 'Descartando documento…';
@@ -3555,7 +3684,7 @@ function ficha(titulo, fila, contexto) {
       // (25-nov-2026) Tabla de precios cuyo remitente Gmail no ha podido comprobar: solo entra si una persona la da por buena
       var esTabla = /^Tabla de precios (en un correo|de un remitente)/.test(texto(base.motivo));
       releer = h('button', { type: 'button', class: 'boton' + (esTabla ? ' principal' : ''), title: esTabla ? 'La da por buena y usa sus precios' : 'El programa lo lee otra vez tal como llegó, con el mismo tachado automático', onclick: async function () {
-        if (guardandoFicha || !await confirmar(esTabla ? '¿Usar los precios de esta tabla?\n\nEl programa no ha podido comprobar quién la mandó. Mira arriba que el remitente, la fecha y los precios son los de vuestra gasolinera: con ellos se comprueban los repostajes. Queda apuntado quién la dio por buena.' : '¿Volver a leer este documento tal como llegó?\n\nÚsalo si crees que ahora el programa lo leerá bien (por ejemplo, tras una mejora o si falló por un corte). Tarda uno o dos minutos. Si lo que falta es tapar datos personales, usa «Tachar y enviar a la IA».', { si: esTabla ? 'Es correcta: usarla' : 'Volver a leer' }) || guardandoFicha) return;
+        if (guardandoFicha || !await confirmar(esTabla ? '¿Usar los precios de esta tabla?\n\nEl programa no ha podido comprobar quién la mandó. Mira arriba que el remitente, la fecha y los precios son los de vuestra gasolinera: con ellos se comprueban los repostajes. Queda apuntado quién la dio por buena.' : '¿Volver a leer este documento tal como llegó?\n\nÚsalo si crees que ahora el programa lo leerá bien (por ejemplo, tras una mejora o si falló por un corte). Tarda uno o dos minutos. Si lo que falta es tapar datos personales, usa «Tachar y enviar a la IA».', { si: esTabla ? 'Es correcta: usarla' : 'Volver a leer', focoEnNo: esTabla }) || guardandoFicha) return;
         ocupado(true); releer.disabled = true; mensaje.className = 'mensaje-ficha'; mensaje.textContent = 'Pidiendo que se vuelva a leer…';
         rpc('panel_reintentar_revision', { p_rev: id }).then(function () { pendientes = 0; fichaSucia = null; guardandoFicha = false; cerrarModal(); avisoBreve(esTabla ? 'Tabla aceptada: sus precios entran en uno o dos minutos' : titulo + ' ' + id + ': se volverá a leer en uno o dos minutos'); cargar(true); })
           .catch(function (e) { mensaje.textContent = mensajeError(e); mensaje.className = 'mensaje-ficha fallo'; ocupado(false); releer.disabled = false; });
@@ -3840,7 +3969,9 @@ function abrirTachado(revId, archivo) {
   document.getElementById('caja').classList.add('revision-amplia');
   fichaSucia = function () { return total() > 0; };
   var numero = secuenciaFicha;
-  urlFirmada(archivo.ruta).then(function (url) { return paginasComoImagen(url, archivo.nombre); }).then(function (lienzos) {
+  // SEGURIDAD (26-nov-2026): abrir el original para tacharlo también queda apuntado en el Historial, como al verlo en la ficha
+  rpc('panel_registrar_acceso_archivo', { p_id: revId, p_tipo: 'original', p_accion: 'Ver documento' }).then(function () { return urlFirmada(archivo.ruta); })
+    .then(function (url) { return paginasComoImagen(url, archivo.nombre); }).then(function (lienzos) {
     if (numero !== secuenciaFicha) return;
     zona.textContent = '';
     lienzos.forEach(function (base, i) {
@@ -3943,7 +4074,7 @@ function confirmar(textoPregunta, op) {
     preguntaAbierta = capa; document.body.appendChild(capa); document.addEventListener('keydown', teclas, true);
     var modal = document.getElementById('modal');              // la ficha de detrás queda inerte mientras se contesta
     if (modal && !modal.inert) { modal.inert = true; modal.setAttribute('data-inerte-pregunta', ''); }
-    (op.peligro && no ? no : si).focus();
+    ((op.peligro || op.focoEnNo) && no ? no : si).focus();   // focoEnNo: decisiones de confianza (26-nov-2026): un Intro repetido no las acepta sin leer
   });
 }
 function avisar(textoAviso) { return confirmar(textoAviso, { soloAviso: true, si: 'Entendido' }); }
@@ -3996,8 +4127,13 @@ function trasRevisar(dicho) {
   if (S.vista !== 'revision' && (!actual._porRevisar || !orden.length)) { cerrarModal(); avisoBreve(dicho + (actual._porRevisar ? '. No queda nada más por revisar en esta lista' : '')); return; }
   if (!orden.length) { todoRevisado(dicho); return; }
   camino = { filas: filas, i: filas.indexOf(orden[0]) }; S.focoFlecha = 0;
+  siguienteAbiertaEn = Date.now();
   avisoBreve(dicho); abrirDelCamino(camino.i);
 }
+// SEGURIDAD (26-nov-2026): al marcar revisado se abre el siguiente documento con el mismo botón en el mismo sitio. Un clic
+// repetido (doble clic, ratón que rebota) lo daba por revisado sin haberlo mirado. Durante 7 décimas ese botón no hace nada.
+var siguienteAbiertaEn = 0;
+function recienAbierta() { return Date.now() - siguienteAbiertaEn < 700; }
 function todoRevisado(dicho) {
   camino = null; cerrarModal(); avisoBreve(dicho);
   function mostrar(titulo, textos, boton) {
@@ -4126,8 +4262,11 @@ prepararSubidaGlobal();
 function arrancar() {
   ++secuenciaCarga;
   S.denegado = false; S.vista = 'inicio'; S.rol = null;
+  var avisoPendiente = avisoEntradaPendiente();
   sb.auth.getSession().then(function (r) {
-    if (!r.data || !r.data.session) { pantallaAcceso('entrar'); return; }
+    if (!r.data || !r.data.session) { pantallaAcceso('entrar', avisoPendiente); return; }
+    // SEGURIDAD (26-nov-2026): hay sesión guardada pero el panel lleva demasiado tiempo sin usarse: se cierra sin enseñar nada
+    if (demasiadoSinUso()) { cerrarSesion('inactividad'); return; }
     document.getElementById('vista').textContent = ''; document.getElementById('vista').appendChild(h('div', { class: 'cargando' }, 'Cargando…'));
     rpc('panel_registrar_entrada').catch(function () {});   // queda en el Historial (una vez por sesión y día); si falla, el panel sigue
     cargar(true);
@@ -4151,11 +4290,32 @@ if (errorEnlace !== null) {
       'Por seguridad no se ha usado. Si el enlace es tuyo, pulsa «Salir» y vuelve a abrirlo desde el correo.');
   }, 300);
 } else if (ENLACE === 'contrasena') {
-  var mostrada = false;
-  sb.auth.onAuthStateChange(function (evento, sesion) {
-    if (!mostrada && sesion && (evento === 'PASSWORD_RECOVERY' || evento === 'SIGNED_IN' || evento === 'INITIAL_SESSION')) { mostrada = true; pantallaAcceso('nueva'); }
-  });
-  setTimeout(function () { if (!mostrada) pantallaAcceso('entrar', { tipo: 'error', texto: 'El enlace no es válido o ha caducado.' }); }, 8000);
+  // SEGURIDAD (26-nov-2026): el enlace se comprueba con el servidor ANTES de usarlo (getUser con su sesión). Solo si
+  // vale se guarda esa sesión y se pide la contraseña. Si no vale (caducado, ya usado o escrito por otra persona con el
+  // correo de la víctima), no se toca nada: quien tenía la sesión abierta sigue con ella.
+  var enlaceResuelto = false;
+  var enlaceNoVale = function () {
+    if (enlaceResuelto) return; enlaceResuelto = true;
+    sb.auth.getSession().then(function (r) {
+      if (r.data && r.data.session) {
+        arrancar();
+        setTimeout(function () { avisar('El enlace del correo no es válido o ha caducado, y no se ha usado.\n\nSigues con la sesión que ya tenías abierta.'); }, 300);
+      } else pantallaAcceso('entrar', { tipo: 'error', texto: 'El enlace no es válido o ha caducado.' });
+    }, function () { pantallaAcceso('entrar', { tipo: 'error', texto: 'El enlace no es válido o ha caducado.' }); });
+  };
+  if (!SESION_DEL_ENLACE || !SESION_DEL_ENLACE.access_token || !SESION_DEL_ENLACE.refresh_token) enlaceNoVale();
+  else {
+    setTimeout(enlaceNoVale, 15000);              // si el servidor no contesta
+    sb.auth.getUser(SESION_DEL_ENLACE.access_token).then(function (r) {
+      if (enlaceResuelto) return null;
+      if (r.error || !r.data || !r.data.user) throw new Error('enlace');
+      return sb.auth.setSession(SESION_DEL_ENLACE);
+    }).then(function (r) {
+      if (enlaceResuelto || !r) return;
+      if (r.error || !r.data || !r.data.session) throw new Error('enlace');
+      enlaceResuelto = true; SESION_DEL_ENLACE = null; pantallaAcceso('nueva');
+    }).catch(enlaceNoVale);
+  }
 } else arrancar();
 function ocupadoConExcel() {
   return [].some.call(document.querySelectorAll('.boton.descarga'), function (b) { return b.disabled; }) ||
