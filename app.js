@@ -250,7 +250,7 @@ function fondoInerte(si, exceptoMas) {
 }
 // (23-nov-2026, accesibilidad) El título de la pestaña del navegador dice en qué sección (o ficha) se está.
 // Nunca lleva el nombre de un documento (puede tener datos personales): como mucho el tipo y el ID.
-var NOMBRES_VISTA = { inicio: 'Inicio', facturas: 'Facturas', albaranes: 'Albaranes', revision: 'Por revisar', combustible: 'Combustible', tickets: 'Tickets',
+var NOMBRES_VISTA = { inicio: 'Inicio', facturas: 'Facturas', albaranes: 'Albaranes', revision: 'Por revisar', todo: 'Todo por días', combustible: 'Combustible', tickets: 'Tickets',
   documentos: 'Archivos', negocio: 'Vencimientos y costes', usuarios: 'Usuarios', historial: 'Historial' };
 function tituloPagina(t) { document.title = (t || NOMBRES_VISTA[S.vista] || 'Panel') + ' · MCD'; }
 // (23-nov-2026, accesibilidad) Mensajes debajo de un formulario: un error se anuncia en el momento (role="alert");
@@ -365,9 +365,9 @@ async function consultaTodo(crear, maximo) {
 // Estado de la pantalla
 // ---------------------------------------------------------------------
 var EMPRESAS = [];
-var S = { vista: 'inicio', empresa: null, todasEmpresas: true, buscar: '', filtro: 'Activos', periodo: '', periodoComb: 'mes', periodoTck: '', estadoTck: '', catTck: 'comidas', gasTck: 'nieves', tablaComb: '', sentido: 'recibidos', pagina: 1, carpeta: '', mes: mesActual(), datos: null, pendientes: 0, rol: null, usuario: null, denegado: false,
+var S = { vista: 'inicio', todoPor: 'subida', todoDias: 7, empresa: null, todasEmpresas: true, buscar: '', filtro: 'Activos', periodo: '', periodoComb: 'mes', periodoTck: '', estadoTck: '', catTck: 'comidas', gasTck: 'nieves', tablaComb: '', sentido: 'recibidos', pagina: 1, carpeta: '', mes: mesActual(), datos: null, pendientes: 0, rol: null, usuario: null, denegado: false,
   periodoHis: 'mes', tipoHis: 'cambios', usuarioHis: '', empresaHis: '' };
-var VISTAS = [['inicio', 'Inicio'], ['facturas', 'Facturas'], ['albaranes', 'Albaranes'], ['revision', 'Por revisar'], ['combustible', 'Combustible'], ['tickets', 'Tickets'], ['documentos', 'Archivos'], ['negocio', 'Vencimientos']];
+var VISTAS = [['inicio', 'Inicio'], ['facturas', 'Facturas'], ['albaranes', 'Albaranes'], ['revision', 'Por revisar'], ['todo', 'Todo por días'], ['combustible', 'Combustible'], ['tickets', 'Tickets'], ['documentos', 'Archivos'], ['negocio', 'Vencimientos']];
 var temporizadorBusqueda = null, secuenciaCarga = 0;
 
 // ---------------------------------------------------------------------
@@ -659,6 +659,7 @@ function tarjetaExcelGestoria() {
 function iconoPanel(vista) {
   var trazos = {
     inicio:'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
+    todo:'M4 5h16 M4 10h16 M4 15h16 M4 20h10',
     facturas:'M6 3h12v18l-3-2-3 2-3-2-3 2z M9 8h6 M9 12h6',
     albaranes:'M2 6h12v10H2z M14 10h4l4 4v2h-8 M8 18a2 2 0 1 1-4 0 2 2 0 1 1 4 0 M20 18a2 2 0 1 1-4 0 2 2 0 1 1 4 0',
     revision:'M12 3 2 20h20z M12 9v5 M12 17h.01',
@@ -688,7 +689,7 @@ function seccionesDelMenu() {
 // "Más" (móvil y ventanas estrechas): una hoja que sube desde la barra de abajo con el resto de secciones, con el
 // mismo aspecto que el panel. Antes era el desplegable del sistema, que cada teléfono pinta a su manera (18-nov-2026).
 var EN_LA_BARRA = ['inicio', 'revision'];
-var AYUDA_SECCION = { facturas: 'Emitidas y recibidas', albaranes: 'Y sus packs', combustible: 'Precios y repostajes', tickets: 'Comidas, peajes, gasolina',
+var AYUDA_SECCION = { facturas: 'Emitidas y recibidas', albaranes: 'Y sus packs', todo: 'Todo lo que entra, día a día', combustible: 'Precios y repostajes', tickets: 'Comidas, peajes, gasolina',
   documentos: 'Los archivos guardados', negocio: 'Cobros y pagos', usuarios: 'Quién puede entrar', historial: 'Quién hizo qué' };
 function cerrarHojaMas(conFoco) {
   var hoja = document.getElementById('hojaMas'); if (!hoja) return;
@@ -914,7 +915,7 @@ window.addEventListener('storage', function (e) {
 function cargar(mostrarCargando, conservarBarra) {
   if (S.denegado || !S.rol && S.vista !== 'inicio') return;
   var solicitud = { numero: ++secuenciaCarga, vista: S.vista, empresa: S.empresa, todasEmpresas: !!S.todasEmpresas, sentido: S.sentido, carpeta: S.carpeta, mes: S.mes, pagina: S.pagina, buscar: S.buscar, filtro: S.filtro, periodo: S.periodo, periodoComb: S.periodoComb, periodoTck: S.periodoTck, estadoTck: S.estadoTck,
-    periodoHis: S.periodoHis, tipoHis: S.tipoHis, usuarioHis: S.usuarioHis, empresaHis: S.empresaHis };
+    periodoHis: S.periodoHis, tipoHis: S.tipoHis, usuarioHis: S.usuarioHis, empresaHis: S.empresaHis, todoPor: S.todoPor, todoDias: S.todoDias };
   var vista = document.getElementById('vista');
   if (mostrarCargando) {
     // (23-nov-2026, accesibilidad) «Cargando…» borra lo de debajo: se apunta antes qué control tenía el foco para
@@ -929,6 +930,7 @@ function cargar(mostrarCargando, conservarBarra) {
   });
   else if (solicitud.vista === 'facturas' || solicitud.vista === 'albaranes') promesa = cargarTabla(solicitud);
   else if (solicitud.vista === 'revision') promesa = rpc('panel_revision');
+  else if (solicitud.vista === 'todo') promesa = cargarTodo(solicitud);
   else if (solicitud.vista === 'combustible') promesa = cargarCombustible(solicitud);
   else if (solicitud.vista === 'tickets') promesa = cargarTickets(solicitud);
   else if (solicitud.vista === 'usuarios') promesa = consulta(sb.from('usuarios').select('*').order('email')).then(function (r) { return r.data; });
@@ -1026,16 +1028,17 @@ function pintar() {
   try { if (clave && activo && typeof activo.selectionStart === 'number') cursor = [activo.selectionStart, activo.selectionEnd]; } catch (e) { cursor = null; }
   var vista = document.getElementById('vista'); vista.textContent = ''; formularioTocado = false;
   var titulos = { inicio: 'Hola' + (S.usuario && S.usuario.nombre ? ', ' + S.usuario.nombre.split(' ')[0] : ''), facturas: 'Facturas', albaranes: 'Albaranes',
-    revision: 'Por revisar', combustible: 'Combustible', tickets: 'Tickets', documentos: 'Archivos', negocio: 'Vencimientos y costes', usuarios: 'Usuarios del panel', historial: 'Historial de cambios' };
+    revision: 'Por revisar', todo: 'Todo por días', combustible: 'Combustible', tickets: 'Tickets', documentos: 'Archivos', negocio: 'Vencimientos y costes', usuarios: 'Usuarios del panel', historial: 'Historial de cambios' };
   var ayudas = { inicio: 'Esto es lo que hay hoy en el sistema.', facturas: 'Recibidas: las de proveedores. Emitidas: las que hacéis a vuestros clientes. Pulsa una para verla o corregirla.',
     albaranes: 'Recibidos: los de proveedores. Emitidos: los que hacéis vosotros. Pulsa uno para verlo.', revision: 'Lo que el programa no ha podido dar por bueno. Ábrelo, corrige lo que haga falta y márcalo como revisado.',
     combustible: 'Cada repostaje de las facturas de gasolinera comparado con el precio de ese día en la tabla que llega por correo.',
     tickets: 'Comidas, peajes, gasolina y otros gastos, por año y mes. Sube la foto y se lee sola. La gasolina de ' + NOMBRE_GASOLINERA_TABLA + ' y la de otras gasolineras van por separado.',
+    todo: 'Todos los documentos que han entrado (facturas, albaranes, tickets y lo que está por clasificar), juntos y separados solo por días.',
     documentos: 'Los originales y las copias tachadas que se enviaron a la IA.', negocio: 'Pagos y cobros vencidos, coste por camión y movimientos del mes.',
     usuarios: 'Quién puede entrar al panel. El acceso es solo por invitación.',
     historial: 'Quién ha cambiado qué y cuándo: lo que hacen las personas en el panel y lo que hace el programa solo. Nadie puede borrarlo ni modificarlo; se guarda 2 años (protección de datos).' };
   if (S.vista !== 'inicio') vista.appendChild(h('div', { class: 'cab-vista' }, [h('div', {}, [h('h1', {}, titulos[S.vista]), h('p', { class: 'sub' }, ayudas[S.vista])])]));
-  ({ inicio: vInicio, facturas: vFacturas, albaranes: vAlbaranes, revision: vRevision, combustible: vCombustible, tickets: vTickets, documentos: vDocumentos, usuarios: vUsuarios, negocio: vNegocio, historial: vHistorial })[S.vista](vista, S.datos);
+  ({ inicio: vInicio, facturas: vFacturas, albaranes: vAlbaranes, revision: vRevision, todo: vTodo, combustible: vCombustible, tickets: vTickets, documentos: vDocumentos, usuarios: vUsuarios, negocio: vNegocio, historial: vHistorial })[S.vista](vista, S.datos);
   // (23-nov-2026, accesibilidad) Después de pintar: el título de la pestaña y el foco donde estaba. Nunca se mueve el foco si
   // hay una ficha (o la hoja «Más») abierta ni si alguien lo tiene en otro sitio (por ejemplo, escribiendo en otro campo).
   if (!hayVentanaAbierta()) {
@@ -1261,6 +1264,65 @@ async function seguirSubida(s) {
 }
 
 // UNA SOLA SUBIDA para todo: facturas, albaranes, tickets y tablas de precios. El servicio decide qué es cada cosa.
+// (27-nov-2026, petición de la persona) Al subir se puede decir de qué CLIENTE son los documentos (a quién se le hace el
+// porte) y que VAN JUNTOS (papeles del mismo porte: un pack). El panel lo apunta en la base de datos con la huella de cada
+// archivo justo antes de subirlo (panel_registrar_subida); el programa del ordenador lo usa al registrarlo y COMPRUEBA el
+// cliente con sus pistas (si no coincide, lo deja en Revisar). Sin tocar nada, subir sigue como siempre.
+var OPCIONES_SUBIDA = { cliente: '', otro: false, juntos: false, lote: '', cuantos: 0, ultimo: 0 };
+var CLIENTES_SUBIDA = null;                 // los nombres para elegir (se piden una vez)
+var MINUTOS_PAQUETE = 15;                   // un paquete que lleva este rato sin recibir nada se da por terminado
+function loteNuevo() {
+  var a = new Uint8Array(8); crypto.getRandomValues(a);
+  return 'p' + Date.now().toString(36) + '-' + Array.prototype.map.call(a, function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+}
+// El paquete en el que entra lo que se sube AHORA ('' si no van juntos)
+function loteDeAhora() {
+  if (!OPCIONES_SUBIDA.juntos) return '';
+  if (!OPCIONES_SUBIDA.lote || (OPCIONES_SUBIDA.ultimo && Date.now() - OPCIONES_SUBIDA.ultimo > MINUTOS_PAQUETE * 60000)) { OPCIONES_SUBIDA.lote = loteNuevo(); OPCIONES_SUBIDA.cuantos = 0; }
+  return OPCIONES_SUBIDA.lote;
+}
+function pedirClientesSubida() {
+  if (CLIENTES_SUBIDA) return Promise.resolve(CLIENTES_SUBIDA);
+  return rpc('panel_clientes_subida').then(function (l) { CLIENTES_SUBIDA = Array.isArray(l) ? l.map(function (c) { return texto(c).trim(); }).filter(Boolean) : []; return CLIENTES_SUBIDA; },
+    function () { return []; });            // sin la función (SQL sin pegar): solo «Otro…»
+}
+function pintarOpcionesSubida() {
+  var e = document.getElementById('estadoPaquete'); if (!e) return;
+  e.textContent = !OPCIONES_SUBIDA.juntos ? '' : OPCIONES_SUBIDA.cuantos
+    ? 'Paquete abierto: ' + OPCIONES_SUBIDA.cuantos + (OPCIONES_SUBIDA.cuantos === 1 ? ' documento' : ' documentos') + '. Cuando acabes, desmarca la casilla.'
+    : 'Lo que subas ahora irá en el mismo paquete. Cuando acabes, desmarca la casilla.';
+}
+function cajaOpcionesSubida() {
+  var sel = h('select', { id: 'clienteSubir', 'data-foco': 'sub-cliente' });
+  var otro = h('input', { type: 'text', id: 'clienteOtro', maxlength: '60', placeholder: 'Nombre del cliente', 'aria-label': 'Nombre del cliente', 'data-foco': 'sub-cliente-otro' });
+  var juntos = h('input', { type: 'checkbox', id: 'juntosSubir', 'data-foco': 'sub-juntos' });
+  function poner(lista) {
+    sel.textContent = '';
+    sel.appendChild(h('option', { value: '' }, 'Lo decide el programa'));
+    lista.forEach(function (c) { sel.appendChild(h('option', { value: c }, c)); });
+    sel.appendChild(h('option', { value: '__otro' }, 'Otro…'));
+    var esta = lista.some(function (c) { return c === OPCIONES_SUBIDA.cliente; });
+    sel.value = OPCIONES_SUBIDA.otro || (OPCIONES_SUBIDA.cliente && !esta) ? '__otro' : OPCIONES_SUBIDA.cliente;
+    otro.hidden = sel.value !== '__otro'; otro.value = sel.value === '__otro' ? OPCIONES_SUBIDA.cliente : '';
+  }
+  poner(CLIENTES_SUBIDA || []);
+  if (!CLIENTES_SUBIDA) pedirClientesSubida().then(function (lista) { if (document.body.contains(sel) && document.activeElement !== sel && document.activeElement !== otro) poner(lista); });
+  sel.addEventListener('change', function () {
+    OPCIONES_SUBIDA.otro = sel.value === '__otro'; OPCIONES_SUBIDA.cliente = OPCIONES_SUBIDA.otro ? otro.value.trim() : sel.value;
+    otro.hidden = !OPCIONES_SUBIDA.otro; if (OPCIONES_SUBIDA.otro) otro.focus();
+  });
+  otro.addEventListener('input', function () { OPCIONES_SUBIDA.cliente = otro.value.replace(/\s+/g, ' ').trim(); });
+  juntos.checked = OPCIONES_SUBIDA.juntos;
+  juntos.addEventListener('change', function () {
+    OPCIONES_SUBIDA.juntos = juntos.checked; OPCIONES_SUBIDA.lote = ''; OPCIONES_SUBIDA.cuantos = 0; OPCIONES_SUBIDA.ultimo = 0; pintarOpcionesSubida();
+  });
+  var caja = h('div', { class: 'opciones-subir' }, [
+    h('label', { class: 'campo-corto' }, ['¿De qué cliente son?', sel]), otro,
+    h('label', { class: 'casilla' }, [juntos, ' Van juntos (papeles del mismo porte)']),
+    h('span', { class: 'estado-paquete', id: 'estadoPaquete', role: 'status' })]);
+  setTimeout(pintarOpcionesSubida, 0);
+  return caja;
+}
 var TIPOS_SUBIDA = '.pdf,.jpg,.jpeg,.png,.webp,.gif,.bmp,.tif,.tiff,.heic,.heif,.doc,.docx,.odt,.rtf,.xls,.xlsx,.ods,.csv,.txt,.xml,.xsig,.zip';
 function puedeSubir() { return S.rol === 'Revisor' || S.rol === 'Administrador'; }
 async function subirArchivos(ficheros) {
@@ -1279,6 +1341,19 @@ async function subirArchivos(ficheros) {
         var ya = await buscarRegistro(s.huella);
         if (ya) { s.registro = ya; s.clase = 'aviso'; s.texto = ya.repetido ? 'REPETIDO: ya se subió antes y ya estaba registrado' + (ya.original ? ' como ' + ya.original + ' de ' + ya.empresa : '') + '. No se vuelve a subir.'
           : 'REPETIDO: ya estaba registrado: ' + textoRegistro(ya) + '. No se vuelve a subir.'; pintarSubidas(); avisoBreve('Ojo: ' + s.nombre + ' ya estaba subido'); continue; }
+        // (27-nov-2026) Lo que se ha dicho de estos documentos (cliente, van juntos) se apunta ANTES de subirlos
+        var loteSubida = loteDeAhora(), clienteSubida = OPCIONES_SUBIDA.cliente;
+        if (loteSubida || clienteSubida) {
+          try {
+            await rpc('panel_registrar_subida', { p_huella: s.huella, p_lote: loteSubida || null, p_cliente: clienteSubida || null });
+            if (loteSubida) { OPCIONES_SUBIDA.cuantos++; OPCIONES_SUBIDA.ultimo = Date.now(); pintarOpcionesSubida(); }
+            if (clienteSubida && CLIENTES_SUBIDA && !CLIENTES_SUBIDA.some(function (c) { return c.toLowerCase() === clienteSubida.toLowerCase(); })) CLIENTES_SUBIDA.push(clienteSubida);
+          } catch (e) {
+            // Si la base de datos aún no tiene esta función, se sube igual (sin apuntar nada). Cualquier otro motivo (un
+            // nombre de cliente que no vale, el paquete lleno...) se dice y el archivo NO se sube, para que se corrija.
+            if (!/Could not find the function/i.test(String(e && e.message || ''))) { s.clase = 'fallo'; s.texto = 'No se ha subido: ' + mensajeError(e); pintarSubidas(); continue; }
+          }
+        }
         s.texto = 'Subiendo…'; pintarSubidas();
         var r = await sb.storage.from('entrada').upload(Date.now() + '_' + nombre, f, { contentType: f.type || 'application/octet-stream', upsert: false });
         if (r.error) throw r.error;
@@ -1343,7 +1418,7 @@ function tarjetaSubir() {
   var tarjeta = h('section', { class: 'banda-subir', 'aria-labelledby': 'tituloSubir' }, [
     h('div', { class: 'fila-subir' }, [h('div', {}, [h('h2', { id: 'tituloSubir' }, 'Subir documentos'),
       h('p', { class: 'sub' }, 'Facturas, albaranes, tickets o tablas de precios. Arrástralos a la página o elige cómo; cada uno va solo a su sección.')]), botones]),
-    archivo, camara, lista,
+    cajaOpcionesSubida(), archivo, camara, lista,
     h('div', { class: 'pie-subir' }, [h('span', {}, 'PDF, fotos, Word, Excel, XML o ZIP, hasta 15 MB. Fotos de frente, con luz y el papel entero.'), procesar, estado])]);
   setTimeout(pintarSubidas, 0);
   return tarjeta;
@@ -1405,13 +1480,73 @@ function paginacion(c, d) {
   c.insertBefore(barra('-arriba'), c.firstChild); c.appendChild(barra(''));
 }
 function contadorTabla(d, tipo) { return !d.total ? '0 ' + tipo : d.total <= d.tamano ? d.total + ' ' + tipo : ((d.pagina - 1) * d.tamano + 1) + '–' + Math.min(d.pagina * d.tamano, d.total) + ' de ' + d.total + ' ' + tipo; }
+// ---------------------------------------------------------------------
+// TODO POR DÍAS (27-nov-2026, petición de la persona): todos los documentos que han entrado, sin separarlos por tipo,
+// divididos solo por días. Se puede mirar por el día en que se SUBIERON o por la FECHA QUE PONE el documento.
+// ---------------------------------------------------------------------
+var MAXIMO_TODO = 400;                      // documentos de cada tipo como mucho (si hay más, se avisa y se acorta el periodo)
+var DIAS_TODO = [[7, 'Últimos 7 días'], [30, 'Últimos 30 días'], [90, 'Últimos 90 días']];
+function cargarTodo(s) {
+  var porDocumento = s.todoPor === 'documento', dias = Number(s.todoDias) || 7;
+  var desde = new Date(); desde.setHours(0, 0, 0, 0); desde.setDate(desde.getDate() - (dias - 1));
+  var iso = fechaLocalIso(desde);
+  function rango(q, columnaFecha) {
+    return porDocumento ? q.gte(columnaFecha, iso).order(columnaFecha, { ascending: false }).limit(MAXIMO_TODO)
+      : q.gte('creado_en', inicioDiaLocal(iso)).order('creado_en', { ascending: false }).limit(MAXIMO_TODO);
+  }
+  return Promise.all([
+    consulta(rango(sb.from('facturas').select('id_doc,empresa,tipo_factura,num_factura,fecha,nombre,total,estado,creado_en'), 'fecha')),
+    consulta(rango(sb.from('albaranes').select(COLUMNAS_NOMBRE_ALBARAN + ',empresa,va_con,creado_en'), 'fecha')),
+    consulta(rango(sb.from('tickets').select('*'), 'fecha')),
+    consulta(rango(sb.from('revision').select('*'), 'fecha_alta'))
+  ]).then(function (rs) {
+    var hojas = ['facturas', 'albaranes', 'tickets', 'revision'], filas = [], recortado = false;
+    rs.forEach(function (r, i) {
+      var lista = r.data || []; if (lista.length >= MAXIMO_TODO) recortado = true;
+      lista.forEach(function (f) {
+        var documento = texto(hojas[i] === 'revision' ? f.fecha_alta : f.fecha).slice(0, 10), subido = texto(f.creado_en);
+        var diaSubida = /^\d{4}-\d{2}-\d{2}/.test(subido) ? fechaLocalIso(new Date(subido)) : '';
+        filas.push({ hoja: hojas[i], f: f, documento: documento, subido: subido, dia: porDocumento ? documento : diaSubida });
+      });
+    });
+    // Lo más nuevo arriba: por el día y, dentro del día, por la hora en que se subió
+    filas.sort(function (a, b) { return a.dia === b.dia ? (a.subido < b.subido ? 1 : a.subido > b.subido ? -1 : 0) : (a.dia < b.dia ? 1 : -1); });
+    return { filas: filas, por: porDocumento ? 'documento' : 'subida', dias: dias, recortado: recortado };
+  });
+}
+function vTodo(v, d) {
+  var porDocumento = d.por === 'documento';
+  function boton(valor, textoBoton) {
+    return h('button', { type: 'button', class: 'boton' + (d.por === valor ? ' principal' : ''), 'aria-pressed': String(d.por === valor), 'data-foco': 'todo-' + valor,
+      onclick: function () { if (S.todoPor === valor) return; S.todoPor = valor; S.focoPendiente = 'todo-' + valor; cargar(true); } }, textoBoton);
+  }
+  var periodo = h('select', { 'aria-label': 'Cuántos días', 'data-foco': 'todo-dias' }, DIAS_TODO.map(function (o) { return h('option', { value: String(o[0]) }, o[1]); }));
+  periodo.value = String(d.dias);
+  periodo.addEventListener('change', function () { S.todoDias = Number(periodo.value) || 7; S.focoPendiente = 'todo-dias'; cargar(true); });
+  var dias = new Set(d.filas.map(function (x) { return x.dia; })).size;
+  v.appendChild(h('div', { class: 'tarjeta herramientas' }, [h('div', { class: 'fila-herramientas' }, [
+    h('div', { class: 'grupo-botones', role: 'group', 'aria-label': 'Ordenar por' }, [boton('subida', 'Por el día en que se subió'), boton('documento', 'Por la fecha que pone el documento')]),
+    h('label', { class: 'campo-corto' }, ['Periodo', periodo]),
+    h('span', { class: 'contador', id: 'contador', role: 'status' }, d.filas.length + (d.filas.length === 1 ? ' documento' : ' documentos') + (dias ? ' en ' + dias + (dias === 1 ? ' día' : ' días') : ''))])]));
+  if (d.recortado) v.appendChild(h('p', { class: 'sub', role: 'note' }, 'Hay más documentos de los que caben aquí: elige un periodo más corto para verlos todos.'));
+  if (porDocumento) v.appendChild(h('p', { class: 'sub', role: 'note' }, 'Los documentos sin fecha no salen aquí: míralos «por el día en que se subió».'));
+  var titulos = { facturas: 'Factura', albaranes: 'Albarán', tickets: 'Ticket', revision: 'Por clasificar' };
+  var caja = h('div', { class: 'tabla' }); v.appendChild(caja);
+  tabla(caja, [{ t: 'Documento', largo: 1 }, 'Tipo', 'Fecha del documento', 'Subido', 'Estado'], d.filas.map(function (x) {
+    var f = x.f, tipo = x.hoja === 'albaranes' ? (esOrdenDeCarga(f) ? 'Orden de carga' : f.estado === 'Anexo' ? 'Albarán (en un pack)' : 'Albarán') : titulos[x.hoja];
+    return { clave: x.hoja + '|' + f.id_doc, mini: { hoja: x.hoja, id: f.id_doc, huella: f.hash_sha256 }, dia: x.dia, porRevisar: porMirar(f),
+      tituloFicha: tipo.toLowerCase(), abrir: function () { abrirDesdeHistorial({ hoja: x.hoja, id_doc: f.id_doc, empresa: f.empresa }); },
+      celdas: [etiquetaDocumento(x.hoja, f, f.id_doc, true), tipo, fecha(x.documento) || '—', x.subido ? fechaHora(x.subido) : '—',
+        pillEstado(f.estado || (x.hoja === 'revision' ? 'Por clasificar' : ''))] };
+  }), 'documento', 'Todos los documentos por días');
+}
 function vFacturas(v, d) {
   barraFiltros(v, d, [['Activos', 'Todas las válidas'], ['Revisar', 'A revisar'], ['Procesado', 'Procesadas'], ['Descartado', 'Descartadas'], ['Duplicado', 'Duplicadas'], ['', 'Todo el historial']]);
   document.getElementById('contador').textContent = contadorTabla(d, S.sentido ? 'facturas ' + nombreSentido('facturas', S.sentido).toLowerCase() : 'facturas');
   var c = document.getElementById('cuerpo'), conTipo = !S.sentido;
   var quien = S.sentido === 'emitidos' ? 'Cliente' : S.sentido === 'recibidos' ? 'Proveedor' : 'Cliente / proveedor';
   tabla(c, ['Nº factura', 'Fecha', { t: quien, largo: 1 }, 'Empresa'].concat(conTipo ? ['Tipo'] : [], [{ t: 'Total', num: 1 }, 'Vence', 'Estado']), d.filas.map(function (f) {
-    return { clave: f.empresa + '|' + f.id_doc, mini: { hoja: 'facturas', id: f.id_doc }, porRevisar: porMirar(f), abrir: function () { ficha('Factura', f, { empresa: f.empresa, hoja: 'facturas' }); },
+    return { clave: f.empresa + '|' + f.id_doc, mini: { hoja: 'facturas', id: f.id_doc }, porRevisar: porMirar(f), dia: texto(f.fecha).slice(0, 10), abrir: function () { ficha('Factura', f, { empresa: f.empresa, hoja: 'facturas' }); },
       celdas: [numeroOSinNumero(f.num_factura, f.id_doc), fecha(f.fecha), f.nombre, f.empresa].concat(conTipo ? [f.tipo_factura || 'Sin indicar'] : [],
         [{ t: euros(f.total), num: 1 }, vence(f.fecha_vencimiento), pillEstado(f.estado)]) };
   }), 'Factura');
@@ -1453,7 +1588,7 @@ function vAlbaranes(v, d) {
     }));
   }
   tabla(c, ['Nº albarán', 'Fecha', { t: quien, largo: 1 }, 'Empresa'].concat(conTipo ? ['Tipo'] : [], ['Ruta', { t: 'Importe', num: 1 }, 'Factura']), d.filas.map(function (f) {
-    return { clave: f.empresa + '|' + f.id_doc, mini: { hoja: 'albaranes', id: f.id_doc }, porRevisar: porMirar(f), abrir: function () { ficha('Albarán', f, { empresa: f.empresa, hoja: 'albaranes' }); },
+    return { clave: f.empresa + '|' + f.id_doc, mini: { hoja: 'albaranes', id: f.id_doc }, porRevisar: porMirar(f), dia: texto(f.fecha).slice(0, 10), abrir: function () { ficha('Albarán', f, { empresa: f.empresa, hoja: 'albaranes' }); },
       celdas: [numeroConPack(f, (d.anexos || {})[f.empresa + '|' + f.id_doc]), fecha(f.fecha), f.nombre, f.empresa].concat(conTipo ? [f.tipo_albaran || 'Sin indicar'] : [],
         [[f.origen, f.destino].filter(Boolean).join(' → '), { t: euros(f.importe), num: 1 },
         f.factura_vinculada ? pillFactura(f) : f.estado_factura === 'PENDIENTE DE FACTURA' ? pillEsperaFactura(f) : pillVaCon(f)]) };
@@ -1843,7 +1978,7 @@ function vTickets(v, d) {
       var caja = h('details', { class: 'mes-tickets' }, [h('summary', {}, [h('span', { class: 'mes-nombre' }, nombreMes(k)),
         h('span', { class: 'mes-dato' }, delMes.length + ' ticket' + (delMes.length === 1 ? '' : 's') + ' · ' + euros(sumaTotal(delMes)))])]);
       if (ia === 0 && im === 0) caja.open = true;
-      tabla(caja, columnas, delMes.map(fila), 'Ticket', 'Tickets de ' + nombreMes(k));
+      tabla(caja, columnas, delMes.map(function (t) { var f = fila(t); f.dia = texto(t.fecha).slice(0, 10); return f; }), 'Ticket', 'Tickets de ' + nombreMes(k));
       bloque.appendChild(caja);
     });
     v.appendChild(bloque);
@@ -2933,6 +3068,15 @@ function textoVisible(el) {
 // nombre (opcional): cómo se llama la tabla para el lector de pantalla. Si no se da, se usa el título que va justo
 // antes (h2/h3) o, si no hay, el nombre de la sección.
 function porMirar(f) { return f.estado === 'Revisar' || f.estado === 'Duplicado'; }
+// «viernes, 27 de noviembre» (con «Hoy» o «Ayer» delante si toca, y el año si no es este). Sin día: «Sin fecha».
+function nombreDelDia(iso) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(texto(iso));
+  if (!m) return 'Sin fecha';
+  var d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])), hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  var dias = Math.round((hoy - d) / 86400000);
+  var t = d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }) + (d.getFullYear() !== hoy.getFullYear() ? ' de ' + d.getFullYear() : '');
+  return (dias === 0 ? 'Hoy, ' : dias === 1 ? 'Ayer, ' : '') + t;
+}
 function tabla(contenedor, columnas, filas, tituloFicha, nombre) {
   if (!filas.length) { contenedor.appendChild(h('div', { class: 'tarjeta vacio' }, 'No hay datos que mostrar.')); return; }
   function clases(c) { return [c.num ? 'num' : '', c.largo ? 'largo' : ''].join(' ').trim(); }
@@ -2940,12 +3084,19 @@ function tabla(contenedor, columnas, filas, tituloFicha, nombre) {
   // pinta como una tarjeta (display:block) y Safari/VoiceOver dejaba de ver la tabla; las cabeceras ya no se quitan
   // (antes display:none), solo se esconden a la vista.
   var cab = h('tr', { role: 'row' }, columnas.map(function (c) { return h('th', { class: clases(c), scope: 'col', role: 'columnheader' }, c.t !== undefined ? c.t : c); }));
+  var diaAnterior = null;
   var cuerpo = h('tbody', { role: 'rowgroup' }, filas.map(function (f) {
     var tr = h('tr', { class: f.abrir ? 'abrible' : '', role: 'row' }, f.celdas.map(function (c, i) {
       var obj = c && c.t !== undefined && !(c instanceof Node);
       var col = columnas[i] || {};
       return h('td', { class: clases(col), role: 'cell', 'data-etiqueta': col.t !== undefined ? col.t : String(col) }, obj ? c.t : c);
     }));
+    // (27-nov-2026, petición de la persona) Raya por días: la primera fila de cada día lleva una raya fina y el día encima.
+    // No se añaden filas: va como una marca de esa fila (así las flechas, los recuentos y el lector de pantalla siguen igual).
+    if (f.dia !== undefined) {
+      if (f.dia !== diaAnterior && tr.cells[0]) { tr.classList.add('nuevo-dia'); tr.cells[0].setAttribute('data-dia', nombreDelDia(f.dia)); }
+      diaAnterior = f.dia;
+    }
     var mini = f.mini ? cajaMiniatura(f.mini.hoja, f.mini.id, f.mini.huella) : null;      // la miniatura va delante, en la primera celda
     if (f.abrir) {
       var abrirFila = function () { prepararCamino(tr); f.abrir(); };
@@ -2981,7 +3132,7 @@ var CAMPOS_FICHA = {
              ['Cobro o pago', ['estado_cobro_pago', 'importe_cobrado_pagado', 'fecha_cobro_pago']],
              ['Notas de revisión', ['observaciones']]],
   albaranes: [['Datos del albarán', ['tipo_albaran', 'num_albaran', 'fecha', 'nif', 'nombre', 'matricula']],
-              ['Servicio y vinculación', ['origen', 'destino', 'concepto', 'importe', 'num_factura', 'codigo_conductor', 'referencia_facturacion']],
+              ['Servicio y vinculación', ['origen', 'destino', 'concepto', 'importe', 'num_factura', 'cliente', 'codigo_conductor', 'referencia_facturacion']],
               ['Notas de revisión', ['observaciones']]],
   revision: [['Motivo de revisión', ['motivo']]]
 };
@@ -2992,7 +3143,7 @@ var ETIQUETAS = { num_factura: 'Número de factura', num_albaran: 'Número de al
   observaciones: 'Observaciones', motivo: 'Motivo de revisión', id_doc: 'ID', empresa: 'Empresa', tipo_factura: 'Tipo (emitida o recibida)', tipo_albaran: 'Tipo (emitido o recibido)', estado: 'Estado', albaranes: 'Albaranes citados',
   comprobacion_albaranes: 'Comprobación de albaranes', estado_factura: 'Estado de facturación', factura_vinculada: 'Factura vinculada', dias_sin_factura: 'Días sin factura',
   posible_factura: 'Posible factura', categoria_gasto: 'Categoría de gasto', creado_en: 'Registrado', actualizado_en: 'Última modificación', fecha_alta: 'Fecha de alta',
-  clase: 'Clase (orden_carga = orden de carga)', va_con: 'Va con (pack)', referencias: 'Otras referencias (pedido, CMR…)', codigo_conductor: 'Código del conductor (3 cifras)', referencia_facturacion: 'Referencia de facturación del cliente', propuesta_pack: 'Pack propuesto por el programa', pack_rechazado: 'Packs rechazados', archivo_original: 'Archivo original', hash_sha256: 'Huella del archivo', tokens_entrada: 'Tokens de entrada', tokens_salida: 'Tokens de salida', coste_eur: 'Coste IA (€)' };
+  clase: 'Clase (orden_carga = orden de carga)', va_con: 'Va con (pack)', referencias: 'Otras referencias (pedido, CMR…)', codigo_conductor: 'Código del conductor (3 cifras)', referencia_facturacion: 'Referencia de facturación del cliente', cliente: 'Cliente del porte (a quién se le hace)', propuesta_pack: 'Pack propuesto por el programa', pack_rechazado: 'Packs rechazados', archivo_original: 'Archivo original', hash_sha256: 'Huella del archivo', tokens_entrada: 'Tokens de entrada', tokens_salida: 'Tokens de salida', coste_eur: 'Coste IA (€)' };
 var fichaSucia = null, guardandoFicha = false, focoAntesModal = null, secuenciaFicha = 0;
 
 // Qué casillas hay que mirar (20-nov-2026): sale de los avisos que el programa escribe en Observaciones.
@@ -3028,7 +3179,9 @@ var AVISOS_CASILLA = [
   [/vence antes de la fecha/, ['fecha_vencimiento'], [], 'Vence antes de la fecha de la factura'],
   [/emitida o recibida/, ['tipo_factura'], [], '¿Emitida o recibida?'],
   [/emitido o recibido/, [], ['tipo_albaran'], '¿Emitido o recibido?'],
-  [/comprobante de un surtidor/, [], ['nombre', 'concepto'], 'Parece un ticket de surtidor, no un albarán']
+  [/comprobante de un surtidor/, [], ['nombre', 'concepto'], 'Parece un ticket de surtidor, no un albarán'],
+  // (27-nov-2026) clientes_portes.py: al subirlo se dijo un cliente y por los datos del albarán parece de otro
+  [/cliente por comprobar/, [], ['cliente'], 'No coincide con lo que se dijo: mira de qué cliente es']
 ];
 // "Lectura dudosa (fecha, importes)": cada dato dudoso con su casilla (nombres de duda.py)
 var DUDOSO_CASILLA = { 'tipo de documento': ['#tipo'], 'numero': ['#numero'], 'fecha': ['fecha'], 'quien lo emite': ['nombre', 'nif'],
@@ -4081,7 +4234,7 @@ function avisar(textoAviso) { return confirmar(textoAviso, { soloAviso: true, si
 // (25-nov-2026, petición de la persona) Flechas ‹ › en la ficha: pasan al documento anterior o siguiente de la lista desde
 // la que se abrió (Facturas, Albaranes, Por revisar, Tickets...), sin cerrar. Al llegar al final de una página se sigue
 // con la siguiente. También con las flechas del teclado, si no se está escribiendo ni moviendo el documento.
-var VISTAS_CON_CAMINO = ['facturas', 'albaranes', 'revision', 'tickets', 'combustible', 'negocio'];
+var VISTAS_CON_CAMINO = ['facturas', 'albaranes', 'revision', 'tickets', 'combustible', 'negocio', 'todo'];
 var camino = null;                          // { filas: [tr], i } de la lista desde la que se abrió la ficha
 function filasDelCamino() { return [].filter.call(document.querySelectorAll('#vista tr.abrible'), function (x) { return x._abrirFila && x.getClientRects().length; }); }
 function prepararCamino(tr) {

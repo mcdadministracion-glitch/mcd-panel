@@ -317,6 +317,16 @@
   td.largo { min-width:180px; } td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; } td.num { font-weight:600; white-space:nowrap; }
   td .pill { white-space:nowrap; }
   tbody tr.abrible { cursor:pointer; } tbody tr.abrible:hover { background:var(--marca-suave); }
+  /* (27-nov-2026) Raya por días en las listas: la primera fila de cada día lleva una raya fina y el día encima */
+  tbody tr.nuevo-dia > td { border-top:2px solid var(--suave); }
+  tbody tr.nuevo-dia > td:first-child { position:relative; padding-top:calc(var(--e15) + 18px); }
+  .tabla tbody tr.nuevo-dia > td:first-child::before { content:attr(data-dia); position:absolute; top:4px; left:10px; right:auto; max-width:none; font-size:var(--t-xs); font-weight:700;
+    color:var(--suave); white-space:nowrap; text-align:left; letter-spacing:.02em; }
+  /* (27-nov-2026) Al subir: de qué cliente son y si van juntos */
+  .opciones-subir { display:flex; flex-wrap:wrap; align-items:center; gap:var(--e1) var(--e2); margin:var(--e1) 0 0; }
+  .opciones-subir select, .opciones-subir input[type=text] { min-height:36px; }
+  .opciones-subir .estado-paquete { color:var(--suave); font-size:var(--t-s); }
+  .grupo-botones { display:inline-flex; flex-wrap:wrap; gap:var(--e05); }
   .abrir-fila { color:var(--marca); background:none; border:0; padding:0; font:inherit; font-weight:700; text-align:left; cursor:pointer; font-variant-numeric:tabular-nums; }
   .abrir-fila:hover { text-decoration:underline; text-underline-offset:3px; }
   .paginacion { display:flex; gap:var(--e15); align-items:center; justify-content:center; margin-top:var(--e2); color:var(--suave); font-size:var(--t-s); }
@@ -591,6 +601,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js" integrity="sha384-GFr3yTh5lJznCbZfpTtXnwboFsxqtTQoeTZCRHhE0579KrRmlCzen5AA8ohaB5ug" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" integrity="sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG" crossorigin="anonymous"></script>
 <script src="config.js"></script>
-<script src="app.js?v=vb368525"></script>
+<script src="app.js?v=v763ea61"></script>
 </body>
 </html>
