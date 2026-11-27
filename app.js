@@ -758,7 +758,7 @@ function irA(vista) {
   clearTimeout(temporizadorBusqueda);
   // (23-nov-2026, accesibilidad) al llegar a la sección nueva, el foco va a su título (el lector dice dónde se está)
   S.focoPendiente = null; S.enfocarTitulo = true; S.firmaDatos = null;
-  S.vista = vista; S.buscar = ''; S.filtro = ['facturas', 'albaranes'].indexOf(vista) >= 0 ? 'Activos' : ''; S.pagina = 1; pintarMenu(); cargar(true);
+  S.vista = vista; S.buscar = ''; S.filtro = ['facturas', 'albaranes'].indexOf(vista) >= 0 ? 'Activos' : ''; S.pagina = 1; S.motivo = ''; S.marcados = {}; pintarMenu(); cargar(true);
   window.scrollTo(0, 0);
 }
 function pintarCabecera(ini) {
@@ -2063,15 +2063,238 @@ function fichaTicket(t) {
 // ---------------------------------------------------------------------
 // REVISIÓN
 // ---------------------------------------------------------------------
+// (27-nov-2026, plan de autonomía, fase 1; la persona: «tiene aún muchas revisiones») POR REVISAR EN LOTE.
+// Mirado el panel real ese día: casi todo lo parado se repite (primera factura de cada proveedor, papeles que no son factura
+// ni albarán, propuestas de pack de dos en dos) y había que abrir los documentos uno a uno. Ahora se pueden marcar varios y
+// decidir de una vez. NO cambia ningún control: cada documento se guarda con la MISMA función del servidor que su botón de
+// la ficha (queda en el historial uno a uno) y lo que mueve dinero o puede ser un engaño (cuenta bancaria, repetidos,
+// importes que no cuadran) no se puede dar por bueno en lote: hay que abrirlo.
+// Grupos de motivo para el filtro: [texto del aviso (sin tildes, en minúsculas), nombre que se enseña]
+var MOTIVOS_REVISION = [
+  [/proveedor nuevo/, 'Proveedor nuevo'], [/a quien no se le ha facturado antes/, 'Cliente nuevo'],
+  [/no es ni factura ni albaran|dice que no es una factura/, 'No es factura ni albarán'],
+  [/sin numero de documento|no tiene numero/, 'Sin número'], [/lectura dudosa/, 'Lectura dudosa'],
+  [/fecha no legible|fecha futura|no tiene fecha/, 'Fecha'],
+  [/no cuadra|no coincide con el total|falta la base o el total|no se lee el total/, 'Importes'],
+  [/sin nif|nif del cliente\/proveedor no valido|falta el nif|el nif no es valido|falta quien emite o recibe/, 'NIF o nombre'],
+  [/datos bancarios|cuenta bancaria|pagar por transferencia/, 'Cuenta bancaria'],
+  [/mismo numero que|mismo nif y numero|posible repetido/, 'Repetido'],
+  [/lectura ocr poco fiable/, 'Foto que no se lee'], [/paginas \(maximo/, 'Demasiadas páginas'], [/tabla de precios/, 'Tabla de precios'],
+  [/no aparece el cif ni el nombre/, 'No es de ninguna empresa'], [/orden de carga/, 'Orden de carga']
+];
+function motivosDe(x) {
+  if (x.tipo === 'Pack por confirmar' || x.tipo === 'Albarán sin factura') return [];
+  var t = sinTildes(x.motivo);
+  return MOTIVOS_REVISION.filter(function (r) { return r[0].test(t); }).map(function (r) { return r[1]; });
+}
+// Avisos que NUNCA se dan por buenos en lote (hay que abrir el documento): dinero y posibles engaños
+var NO_EN_LOTE = /datos bancarios|cuenta bancaria|pagar por transferencia|mismo numero que|mismo nif y numero|posible repetido|no cuadra|no coincide con el total|falta la base o el total/;
+// «Empresa nueva»: la primera factura de un proveedor (o la primera que se hace a un cliente) se para a propósito, para que
+// nadie cuele una factura falsa. Una factura se puede soltar desde la pantalla «Empresas nuevas» SOLO si ese es su único
+// aviso: el resto de lo que lleve tienen que ser notas de esta lista. Cualquier otra cosa (también un texto que no se
+// conozca) la deja en Por revisar. Si cambia el texto de una nota en leer_documentos.py, cambia aquí también.
+var AVISO_EMPRESA_NUEVA = /^proveedor nuevo|a quien no se le ha facturado antes/;
+var NOTAS_SIN_RIESGO = /^(vencimiento: |plazo de pago de \d+ dias|sin linea aparte de revision por gasoleo|subida de precio|nif de la otra parte leido en el ordenador|empresa identificada por el nombre(?!: la factura no muestra)|su cif aparece en el documento|detalles poco legibles que no cambian|entre empresas del grupo)/;
+function avisosDe(motivo) {
+  return texto(motivo).replace(/Líneas: [^()]*\(base, IVA y total sí cuadran\)/g, '').split(/;\s*/).map(function (p) { return p.trim(); }).filter(Boolean);
+}
+function empresaNueva(x) {                    // null si no es de una empresa nueva; si lo es, { otros: avisos que la dejan parada }
+  if (x.tipo !== 'Factura a revisar') return null;
+  var avisos = avisosDe(x.motivo);
+  if (!avisos.some(function (p) { return AVISO_EMPRESA_NUEVA.test(sinTildes(p)); })) return null;
+  return { otros: avisos.filter(function (p) { var t = sinTildes(p); return !AVISO_EMPRESA_NUEVA.test(t) && !NOTAS_SIN_RIESGO.test(t); }) };
+}
+// Hace lo mismo con cada elemento, uno detrás de otro (no a la vez: el historial queda en orden y un fallo no para los demás)
+function enCadena(lista, hacer, alAvanzar) {
+  var bien = [], mal = [];
+  return lista.reduce(function (cadena, e, i) {
+    return cadena.then(function () {
+      if (alAvanzar) alAvanzar(i + 1, lista.length);
+      return hacer(e).then(function () { bien.push(e); }, function (err) { mal.push([e, mensajeError(err)]); });
+    });
+  }, Promise.resolve()).then(function () { return { bien: bien, mal: mal }; });
+}
+function claveRevision(x) { return x.hoja + '|' + x.empresa + '|' + x.id + '|' + x.tipo; }
+// Propuestas de pack: «¿Va con VTX-0069 · motivo?». Fuerza de cada una, por lo que dice el motivo (packs.py):
+// fuerte = el mismo número; media = la misma referencia o un número citado; floja = solo el destino o un número parecido;
+// copia = parece el mismo papel repetido (eso se decide en la ficha, con «Es el mismo papel repetido»).
+var PROPUESTA_PACK_RE = /^¿Va con (\S+)(?: · ([\s\S]*?))?\?$/;
+function fuerzaPack(motivo) {
+  var t = sinTildes(motivo);
+  if (/casi igual/.test(t)) return 'floja';
+  if (/parece una copia/.test(t)) return 'copia';
+  if (/mismo numero/.test(t)) return 'fuerte';
+  if (/misma referencia|trae dentro este numero/.test(t)) return 'media';
+  return 'floja';
+}
+var NOMBRE_FUERZA = { fuerte: ['Mismo número', 'ok'], media: ['Misma referencia', 'marca'], floja: ['Indicio flojo', 'aviso'], copia: ['Posible copia', 'aviso'] };
+function propuestasDePack(lista) {            // 'empresa|id' -> { x, id, empresa, a (con quién iría), motivo, fuerza }
+  var p = {};
+  lista.forEach(function (x) {
+    var m = x.tipo === 'Pack por confirmar' && PROPUESTA_PACK_RE.exec(texto(x.motivo));
+    if (m) p[x.empresa + '|' + x.id] = { x: x, id: x.id, empresa: x.empresa, a: m[1], motivo: m[2] || '', fuerza: fuerzaPack(m[2] || '') };
+  });
+  return p;
+}
+// Las propuestas van de dos en dos (cada papel dice con cuál iría). Aquí se juntan en grupos: todos los papeles que, de
+// uno en otro, acaban en el mismo albarán (la raíz). Un grupo sin raíz (A iría con B y B con A) no sale: se queda en la tabla.
+function gruposDePacks(propuestas) {
+  var grupos = {};
+  Object.keys(propuestas).forEach(function (k) {
+    var p = propuestas[k], raiz = p.a, pasos = 0;
+    while (propuestas[p.empresa + '|' + raiz] && pasos++ < 60) raiz = propuestas[p.empresa + '|' + raiz].a;
+    if (pasos >= 60 || raiz === p.id) return;
+    var g = grupos[p.empresa + '|' + raiz] = grupos[p.empresa + '|' + raiz] || { empresa: p.empresa, raiz: raiz, papeles: [] };
+    g.papeles.push(p);
+  });
+  return Object.keys(grupos).map(function (k) { return grupos[k]; }).sort(function (a, b) { return b.papeles.length - a.papeles.length || (a.raiz < b.raiz ? -1 : 1); });
+}
+// Junta varios papeles. Si el albarán con el que iría uno TAMBIÉN se está juntando, los dos acaban en el de más arriba
+// (un anexo no puede tener anexos).
+function juntarPapeles(papeles, propuestas, alAvanzar) {
+  var juntando = {};
+  papeles.forEach(function (p) { juntando[p.empresa + '|' + p.id] = true; });
+  return enCadena(papeles, function (p) {
+    var destino = p.a, pasos = 0;
+    while (juntando[p.empresa + '|' + destino] && propuestas[p.empresa + '|' + destino] && pasos++ < 60) destino = propuestas[p.empresa + '|' + destino].a;
+    if (pasos >= 60 || destino === p.id) return Promise.reject(new Error('Las propuestas se cruzan: ábrelo y decide a mano'));
+    return rpc('panel_juntar_albaran', { p_empresa: p.empresa, p_id: p.id, p_principal: destino });
+  }, alAvanzar);
+}
+// Tras una acción en lote: se dice cuántos se han hecho, se vuelve a pedir la lista y, si alguno ha fallado, se explica
+function finDelLote(r, hecho) {
+  S.marcados = {};
+  avisoBreve(r.bien.length + ' ' + hecho);
+  cargar(false);
+  if (r.mal.length) return avisar((r.mal.length === 1 ? 'Uno no se ha podido hacer' : r.mal.length + ' no se han podido hacer') + '\n\n' +
+    r.mal.map(function (e) { return e[0].id + ': ' + e[1]; }).join(' · '));
+}
+
+// «Empresas nuevas»: todas las facturas paradas por ser de un proveedor o cliente nuevo, juntas por empresa. Se marcan las
+// que se conocen y sus facturas se dan por revisadas a la vez. Solo las que no llevan ningún otro aviso.
+function tarjetaEmpresasNuevas(v, lista) {
+  var empresas = {}, orden = [];
+  lista.forEach(function (x) {
+    var e = empresaNueva(x); if (!e) return;
+    var k = sinTildes(x.nombre).replace(/[^a-z0-9]/g, '') || 'sin-nombre-' + x.id;
+    if (!empresas[k]) { empresas[k] = { nombre: texto(x.nombre) || 'Sin nombre', facturas: [] }; orden.push(k); }
+    empresas[k].facturas.push({ x: x, otros: e.otros });
+  });
+  if (!orden.length) return;
+  var total = orden.reduce(function (n, k) { return n + empresas[k].facturas.length; }, 0);
+  function abrir() {
+    var casillas = [];
+    var listaEmpresas = h('ul', { class: 'lista-lote' }, orden.map(function (k, i) {
+      var e = empresas[k], sueltas = e.facturas.filter(function (f) { return !f.otros.length; });
+      var casilla = h('input', { type: 'checkbox', id: 'empresaNueva' + i, disabled: sueltas.length ? null : 'disabled' });
+      casillas.push([casilla, sueltas]);
+      return h('li', {}, [
+        h('label', { class: 'empresa-nueva', for: 'empresaNueva' + i }, [casilla, h('b', {}, e.nombre), ' · ' + (e.facturas.length === 1 ? '1 factura' : e.facturas.length + ' facturas')]),
+        h('ul', {}, e.facturas.map(function (f) {
+          var x = f.x;
+          return h('li', {}, [
+            h('span', { class: 'nombre-doc' }, ['factura ' + (x.numero || 'sin número') + ' · ' + (fecha(x.fecha) || 'sin fecha') + (x.total === null || x.total === undefined ? '' : ' · ' + euros(x.total)) + ' · ' + x.empresa,
+              h('small', { class: 'id-doc' }, x.id)]), ' ',
+            f.otros.length ? h('span', { class: 'pill aviso' }, 'Se queda por revisar') : h('span', { class: 'pill ok' }, 'Se da por revisada'),
+            f.otros.length ? h('span', { class: 'nota-lote' }, ' Lleva además: ' + f.otros.join('; ')) : null]);
+        }))]);
+    }));
+    var estado = h('span', { class: 'lote-estado', role: 'status' });
+    var hacer = h('button', { type: 'button', class: 'boton revisar', id: 'aceptarEmpresasNuevas', onclick: function () {
+      var facturas = [];
+      casillas.forEach(function (c) { if (c[0].checked) facturas = facturas.concat(c[1]); });
+      if (!facturas.length) { estado.textContent = 'Marca primero las empresas que conoces.'; return; }
+      hacer.disabled = true; casillas.forEach(function (c) { c[0].disabled = true; });
+      enCadena(facturas, function (f) {
+        return rpc('panel_guardar_ficha', { p_empresa: f.x.empresa, p_hoja: 'facturas', p_id: f.x.id, p_cambios: {}, p_esperados: { estado: 'Revisar' }, p_revisar: true });
+      }, function (i, n) { estado.textContent = 'Guardando ' + i + ' de ' + n + '…'; }).then(function (r) {
+        cerrarModal();
+        return finDelLote(r, r.bien.length === 1 ? 'factura dada por revisada' : 'facturas dadas por revisadas');
+      });
+    } }, 'Conozco las marcadas: dar por revisadas sus facturas');
+    abrirModal('Empresas nuevas', h('div', { class: 'empresas-nuevas-lista' }, [
+      h('p', {}, 'El programa para la primera factura de cada proveedor o cliente nuevo, para que nadie cuele una factura falsa. Marca SOLO las empresas que conoces: sus facturas se dan por revisadas y las siguientes de esa empresa ya no se pararán por este motivo.'),
+      h('p', { class: 'sub' }, 'Las facturas que llevan además otro aviso (cuenta bancaria, importes, NIF…) no se tocan: siguen en Por revisar.'),
+      listaEmpresas, h('div', { class: 'barra' }, [hacer, estado])]));
+  }
+  v.appendChild(h('section', { class: 'tarjeta empresas-nuevas' }, [
+    h('h2', { class: 'subtitulo' }, orden.length === 1 ? '1 empresa nueva' : orden.length + ' empresas nuevas'),
+    h('p', { class: 'sub' }, (total === 1 ? 'Hay 1 factura parada' : 'Hay ' + total + ' facturas paradas') + ' por ser de un proveedor o un cliente con el que el programa no había trabajado. Si las conoces, puedes darlas por buenas todas a la vez.'),
+    h('button', { type: 'button', class: 'boton principal', id: 'verEmpresasNuevas', 'data-foco': 'empresas-nuevas', onclick: abrir }, 'Ver las empresas nuevas')]));
+}
+// «Pack por confirmar», por grupos: cada tarjeta es un albarán con todos los papeles que el programa cree que van con él.
+function tarjetasDePacks(v, propuestas) {
+  var grupos = gruposDePacks(propuestas); if (!grupos.length) return;
+  var fuertes = Object.keys(propuestas).map(function (k) { return propuestas[k]; }).filter(function (p) { return p.fuerza === 'fuerte'; });
+  var caja = h('section', { class: 'grupos-pack' }), ids = [];
+  function enlace(id, empresa) {
+    ids.push(id);
+    return h('button', { type: 'button', class: 'boton enlace', 'data-doc': id, title: 'Abrir ese albarán', onclick: function () { abrirDocumento(id, 'albaranes', empresa); } }, id);
+  }
+  caja.appendChild(h('h2', { class: 'subtitulo' }, 'Por grupos'));
+  caja.appendChild(h('p', { class: 'sub' }, 'Cada tarjeta reúne los papeles que el programa cree que van con un mismo albarán. Vienen marcados los que comparten número o referencia; los de indicio flojo (solo el mismo destino, o un número parecido) vienen sin marcar. Mira los nombres, cambia las marcas si hace falta y pulsa «Van juntos».'));
+  if (fuertes.length > 1) caja.appendChild(h('div', { class: 'barra' }, h('button', { type: 'button', class: 'boton principal', id: 'juntarMismoNumero', onclick: async function (e) {
+    if (!await confirmar('¿Juntar de una vez los ' + fuertes.length + ' papeles que tienen el mismo número que su albarán?\n\nCada uno queda como anexo de ese albarán (otra hoja o una copia del mismo). Se puede deshacer en la ficha con «Soltar del pack».', { si: 'Juntarlos' })) return;
+    e.target.disabled = true;
+    juntarPapeles(fuertes, propuestas).then(function (r) { return finDelLote(r, r.bien.length === 1 ? 'papel juntado con su albarán' : 'papeles juntados con su albarán'); });
+  } }, 'Juntar de una vez los ' + fuertes.length + ' que tienen el mismo número')));
+  grupos.forEach(function (g) {
+    var casillas = [];
+    var papeles = h('ul', { class: 'lista-lote' }, g.papeles.map(function (p) {
+      var casilla = h('input', { type: 'checkbox', 'aria-label': 'Juntar ' + p.id });
+      casilla.checked = p.fuerza === 'fuerte' || p.fuerza === 'media';
+      casillas.push([casilla, p]);
+      var razon = p.motivo.split(p.a).join('ese albarán');
+      return h('li', {}, [casilla, ' ', enlace(p.id, p.empresa), ' ', h('span', { class: 'pill ' + NOMBRE_FUERZA[p.fuerza][1] }, NOMBRE_FUERZA[p.fuerza][0]),
+        h('span', { class: 'nota-lote' }, ' ' + razon + (p.a === g.raiz ? '' : ' (iría con ' + p.a + ')'))]);
+    }));
+    function marcados() { return casillas.filter(function (c) { return c[0].checked; }).map(function (c) { return c[1]; }); }
+    var estado = h('span', { class: 'lote-estado', role: 'status' });
+    function ocupar(b) { b.disabled = true; casillas.forEach(function (c) { c[0].disabled = true; }); }
+    caja.appendChild(h('section', { class: 'tarjeta grupo-pack' }, [
+      h('h3', {}, [(g.papeles.length === 1 ? '1 papel que iría con ' : g.papeles.length + ' papeles que irían con '), enlace(g.raiz, g.empresa)]),
+      papeles,
+      h('div', { class: 'barra' }, [
+        h('button', { type: 'button', class: 'boton principal juntar-grupo', onclick: function (e) {
+          var m = marcados(); if (!m.length) { estado.textContent = 'Marca primero los papeles que van juntos.'; return; }
+          ocupar(e.target);
+          juntarPapeles(m, propuestas, function (i, n) { estado.textContent = 'Juntando ' + i + ' de ' + n + '…'; })
+            .then(function (r) { return finDelLote(r, r.bien.length === 1 ? 'papel juntado con su albarán' : 'papeles juntados con su albarán'); });
+        } }, 'Van juntos'),
+        h('button', { type: 'button', class: 'boton rechazar-grupo', onclick: async function (e) {
+          var m = marcados(); if (!m.length) { estado.textContent = 'Marca primero los papeles que no tienen que ver.'; return; }
+          if (!await confirmar('¿Anotar que ' + (m.length === 1 ? 'el papel marcado no va' : 'los ' + m.length + ' papeles marcados no van') + ' con ese albarán?\n\nEl programa no lo volverá a proponer.', { si: 'No tienen que ver' })) return;
+          ocupar(e.target);
+          enCadena(m, function (p) { return rpc('panel_rechazar_pack', { p_empresa: p.empresa, p_id: p.id }); })
+            .then(function (r) { return finDelLote(r, r.bien.length === 1 ? 'propuesta rechazada' : 'propuestas rechazadas'); });
+        } }, 'No tienen que ver'), estado])]));
+  });
+  v.appendChild(caja);
+  // Los papeles se nombran como en el resto del panel (quién · número · fecha · destino), con el ID al lado
+  buscarDocumentos(ids, ['albaranes']).then(function (vistos) {
+    [].forEach.call(caja.querySelectorAll('[data-doc]'), function (e) {
+      var d = vistos[e.getAttribute('data-doc')]; if (!d) return;
+      e.textContent = ''; e.appendChild(etiquetaDocumento('albaranes', d.fila, d.fila.id_doc));
+    });
+  });
+}
+
 function vRevision(v, lista) {
   var tipos = ['', 'Factura a revisar', 'Albarán a revisar', 'Albarán sin factura', 'Pack por confirmar', 'Ticket a revisar', 'Revisión manual'];
   if (S.filtro && !lista.some(function (x) { return x.tipo === S.filtro; })) S.filtro = '';   // se vació ese grupo: volver a "Todo"
+  var puede = puedeSubir(), propuestas = propuestasDePack(lista);
+  S.marcados = S.marcados || {};
+  // Un albarán con avisos Y con una propuesta de pack salía dos veces en «Todo». Ahora sale una, con la propuesta detrás
+  // del motivo (en «Pack por confirmar» sigue saliendo: allí se decide el pack).
+  var conAviso = {};
+  lista.forEach(function (x) { if (x.tipo === 'Albarán a revisar') conAviso[x.empresa + '|' + x.id] = true; });
+  function repetida(x) { return x.tipo === 'Pack por confirmar' && !!conAviso[x.empresa + '|' + x.id]; }
   // (23-nov-2026, accesibilidad) los chips dicen cuál está elegido (aria-pressed; antes solo se veía por el color) y el
   // foco se queda en el pulsado al repintar (data-foco)
   v.appendChild(h('div', { class: 'barra' }, h('div', { class: 'chips', role: 'group', 'aria-label': 'Qué tipo de pendiente' }, tipos.map(function (t) {
-    var n = lista.filter(function (x) { return !t || x.tipo === t; }).length;
+    var n = lista.filter(function (x) { return t ? x.tipo === t : !repetida(x); }).length;
     return t && !n ? null : h('button', { type: 'button', class: S.filtro === t ? 'activo' : '', 'aria-pressed': S.filtro === t ? 'true' : 'false', 'data-foco': 'chip-' + (t || 'todo'),
-      onclick: function () { S.filtro = t; pintar(); } }, (t || 'Todo') + ' (' + n + ')');
+      onclick: function () { S.filtro = t; S.motivo = ''; pintar(); } }, (t || 'Todo') + ' (' + n + ')');
   }))));
   var enviados = SUBIDAS.filter(function (s) { return /^tachado_/.test(s.nombre); });
   if (enviados.length) {
@@ -2080,10 +2303,87 @@ function vRevision(v, lista) {
       h('ul', { id: 'listaSubidas', class: 'lista-subidas' })]));
     setTimeout(pintarSubidas, 0);
   }
-  var filas = lista.filter(function (x) { return !S.filtro || x.tipo === S.filtro; });
+  var delTipo = lista.filter(function (x) { return S.filtro ? x.tipo === S.filtro : !repetida(x); });
+  // Filtro por motivo (27-nov-2026): los grupos salen de lo que hay en la lista, con cuántos tiene cada uno
+  var cuantos = {};
+  delTipo.forEach(function (x) { motivosDe(x).forEach(function (m) { cuantos[m] = (cuantos[m] || 0) + 1; }); });
+  if (S.motivo && !cuantos[S.motivo]) S.motivo = '';
+  var filas = delTipo.filter(function (x) { return !S.motivo || motivosDe(x).indexOf(S.motivo) >= 0; });
   v.appendChild(h('p', { class: 'sub' }, 'Un albarán solo aparece aquí si lleva más de ' + DIAS_AVISO_ALBARAN + ' días sin su factura: es normal que el albarán llegue antes. ' +
     'Para quitar un documento de esta lista pulsa "Guardar y marcar revisado" o "Descartar".'));
   if (!filas.length) { v.appendChild(h('div', { class: 'tarjeta vacio' }, 'No hay nada pendiente de revisar.')); return; }
+  var nombresMotivo = Object.keys(cuantos).sort(function (a, b) { return cuantos[b] - cuantos[a] || (a < b ? -1 : 1); });
+  if (nombresMotivo.length > 1) {
+    var selMotivo = h('select', { id: 'motivoRevision', 'data-foco': 'sel-motivo' }, [h('option', { value: '' }, 'Todos los motivos')].concat(
+      nombresMotivo.map(function (m) { return h('option', { value: m }, m + ' (' + cuantos[m] + ')'); })));
+    selMotivo.value = S.motivo || '';
+    selMotivo.addEventListener('change', function () { S.motivo = selMotivo.value; S.focoPendiente = 'sel-motivo'; pintar(); });
+    v.appendChild(h('div', { class: 'barra' }, h('label', { class: 'campo-lote' }, ['Ver solo los de un motivo: ', selMotivo])));
+  }
+  if (puede && !S.motivo && (!S.filtro || S.filtro === 'Factura a revisar')) tarjetaEmpresasNuevas(v, lista);
+  if (puede && S.filtro === 'Pack por confirmar') tarjetasDePacks(v, propuestas);
+
+  // ---- Marcar varios y decidir de una vez ----
+  function marcable(x) { return puede && x.tipo !== 'Albarán sin factura' && !(ENVIADOS_TACHADO[x.id] && x.tipo === 'Revisión manual'); }
+  var marcables = filas.filter(marcable), ocupado = false, barras = [];
+  function elegidos() { return marcables.filter(function (x) { return S.marcados[claveRevision(x)]; }); }
+  function pintarBarras() {
+    var e = elegidos(), n = e.length;
+    var revisables = e.filter(function (x) { return x.tipo === 'Factura a revisar' || x.tipo === 'Albarán a revisar'; });
+    var seguros = revisables.filter(function (x) { return !NO_EN_LOTE.test(sinTildes(x.motivo)); });
+    var descartables = e.filter(function (x) { return x.tipo !== 'Pack por confirmar'; });
+    var packsMarcados = e.filter(function (x) { return x.tipo === 'Pack por confirmar' && propuestas[x.empresa + '|' + x.id]; });
+    function boton(textoBoton, clase, hacer) { return h('button', { type: 'button', class: 'boton ' + clase, disabled: ocupado ? 'disabled' : null, onclick: hacer }, textoBoton); }
+    function lanzar(nombre, cosas, hacer, hecho) {
+      ocupado = true; pintarBarras();
+      return enCadena(cosas, hacer, function (i, total) { barras.forEach(function (b) { var s = b.querySelector('.lote-estado'); if (s) s.textContent = nombre + ' ' + i + ' de ' + total + '…'; }); })
+        .then(function (r) { return finDelLote(r, hecho); });
+    }
+    barras.forEach(function (b) {
+      b.textContent = '';
+      b.appendChild(boton(n === marcables.length && n ? 'Quitar las marcas' : 'Marcar todos (' + marcables.length + ')', 'marcar-todos', function () {
+        var quitar = n === marcables.length;
+        marcables.forEach(function (x) { if (quitar) delete S.marcados[claveRevision(x)]; else S.marcados[claveRevision(x)] = true; });
+        v.querySelectorAll('input.marca-fila').forEach(function (c) { c.checked = !quitar; });
+        pintarBarras();
+      }));
+      if (!n) { b.appendChild(h('span', { class: 'lote-estado' }, 'Marca varios documentos para decidir sobre todos a la vez.')); return; }
+      b.appendChild(h('span', { class: 'lote-estado', role: 'status' }, n === 1 ? '1 marcado:' : n + ' marcados:'));
+      if (revisables.length) b.appendChild(boton('Dar por revisados (' + seguros.length + ')', 'revisar lote-revisar', async function () {
+        var fuera = revisables.length - seguros.length;
+        if (!seguros.length) { await avisar('Estos documentos hay que abrirlos uno a uno\n\nLlevan un aviso de cuenta bancaria, de documento repetido o de importes que no cuadran: eso no se da por bueno sin mirarlo.'); return; }
+        if (!await confirmar('¿Dar por revisados ' + (seguros.length === 1 ? 'este documento' : 'estos ' + seguros.length + ' documentos') + ' sin abrirlos?\n\nQuedan como Procesado, con los datos que tienen ahora.' +
+          (fuera ? ' ' + fuera + ' no se toca' + (fuera === 1 ? '' : 'n') + ': lleva' + (fuera === 1 ? '' : 'n') + ' un aviso de cuenta bancaria, de repetido o de importes y hay que abrirlo' + (fuera === 1 ? '' : 's') + '.' : ''),
+          { si: 'Dar por revisados', focoEnNo: true })) return;
+        lanzar('Guardando', seguros, function (x) {
+          return rpc('panel_guardar_ficha', { p_empresa: x.empresa, p_hoja: x.hoja, p_id: x.id, p_cambios: {}, p_esperados: { estado: 'Revisar' }, p_revisar: true });
+        }, seguros.length === 1 ? 'documento dado por revisado' : 'documentos dados por revisados');
+      }));
+      if (descartables.length) b.appendChild(boton('Descartar (' + descartables.length + ')', 'peligro lote-descartar', async function () {
+        if (!await confirmar('¿Descartar ' + (descartables.length === 1 ? 'este documento' : 'estos ' + descartables.length + ' documentos') + '?\n\nNo se borran: quedan como Descartado y se pueden volver a ver en «Descartados».',
+          { si: 'Descartar', peligro: true })) return;
+        lanzar('Descartando', descartables, function (x) {
+          return x.hoja === 'tickets' ? rpc('panel_descartar_ticket', { p_id: x.id }) : rpc('panel_descartar', { p_empresa: x.empresa, p_hoja: x.hoja, p_id: x.id });
+        }, descartables.length === 1 ? 'documento descartado' : 'documentos descartados');
+      }));
+      if (packsMarcados.length) {
+        var papeles = packsMarcados.map(function (x) { return propuestas[x.empresa + '|' + x.id]; });
+        b.appendChild(boton('Van juntos (' + papeles.length + ')', 'principal lote-juntar', async function () {
+          if (!await confirmar('¿Juntar ' + (papeles.length === 1 ? 'este papel' : 'estos ' + papeles.length + ' papeles') + ' con el albarán que propone el programa?\n\nCada uno queda como anexo del albarán que dice su fila. Se puede deshacer en la ficha con «Soltar del pack».',
+            { si: 'Van juntos' })) return;
+          ocupado = true; pintarBarras();
+          juntarPapeles(papeles, propuestas).then(function (r) { return finDelLote(r, r.bien.length === 1 ? 'papel juntado con su albarán' : 'papeles juntados con su albarán'); });
+        }));
+        b.appendChild(boton('No van juntos (' + papeles.length + ')', 'lote-rechazar', async function () {
+          if (!await confirmar('¿Anotar que ' + (papeles.length === 1 ? 'este papel no va' : 'estos ' + papeles.length + ' papeles no van') + ' con el albarán propuesto?\n\nEl programa no lo volverá a proponer.', { si: 'No van juntos' })) return;
+          lanzar('Anotando', papeles, function (p) { return rpc('panel_rechazar_pack', { p_empresa: p.empresa, p_id: p.id }); }, papeles.length === 1 ? 'propuesta rechazada' : 'propuestas rechazadas');
+        }));
+      }
+    });
+  }
+  function barraLote() { var b = h('div', { class: 'barra lote', role: 'group', 'aria-label': 'Acciones sobre los documentos marcados' }); barras.push(b); return b; }
+  if (marcables.length) v.appendChild(barraLote());
+
   // Primera columna: lo que se reconoce (número, "Ticket" o el nombre del archivo) y el ID en pequeño
   function celdaDocumento(x) {
     var que = x.hoja === 'tickets' ? 'Ticket' : x.hoja === 'revision' ? (x.numero || 'Sin leer') : (x.numero || 'sin número');
@@ -2092,8 +2392,12 @@ function vRevision(v, lista) {
   // "Pack por confirmar": el programa escribe "¿Va con VTX-0069 · motivo?". Se enseña con el nombre de ese albarán.
   var packs = [];
   function celdaMotivo(x) {
-    var m = x.tipo === 'Pack por confirmar' && /^¿Va con (\S+)(?: · ([\s\S]*?))?\?$/.exec(texto(x.motivo));
-    if (!m) return x.motivo;
+    var m = x.tipo === 'Pack por confirmar' && PROPUESTA_PACK_RE.exec(texto(x.motivo));
+    if (!m) {
+      // En «Todo», el albarán con avisos que además tiene una propuesta de pack la lleva detrás (ya no sale dos veces)
+      var suya = !S.filtro && x.tipo === 'Albarán a revisar' && propuestas[x.empresa + '|' + x.id];
+      return suya ? h('span', {}, [texto(x.motivo), h('br'), h('span', { class: 'ademas-pack' }, ['Además: ', celdaMotivo(suya.x)])]) : x.motivo;
+    }
     var hueco = h('span', {}, x.motivo); packs.push([hueco, m[1], m[2] || '', x.empresa]);
     return hueco;
   }
@@ -2104,6 +2408,21 @@ function vRevision(v, lista) {
         x.empresa === '_revision' || !x.empresa ? '—' : x.empresa, fecha(x.fecha), x.nombre, { t: x.total === null || x.total === undefined ? '' : euros(x.total), num: 1 },
         ENVIADOS_TACHADO[x.id] && x.tipo === 'Revisión manual' ? 'Copia tachada enviada: se está leyendo (tarda un minuto)' : celdaMotivo(x)] };
   }), 'Revisión');
+  // Casilla para marcar, delante del nombre de cada fila (no es una fila ni una columna nueva: las flechas y los recuentos
+  // siguen igual). Pulsar la casilla no abre la ficha.
+  if (marcables.length) {
+    [].forEach.call(v.querySelectorAll('.tabla tbody tr'), function (tr, i) {
+      var x = filas[i]; if (!x || !marcable(x) || !tr.cells[0]) return;
+      var clave = claveRevision(x);
+      var casilla = h('input', { type: 'checkbox', class: 'marca-fila', 'aria-label': 'Marcar ' + x.id + ' (' + x.tipo + ')', 'data-foco': 'marca-' + clave });
+      casilla.checked = !!S.marcados[clave];
+      casilla.addEventListener('click', function (e) { e.stopPropagation(); });
+      casilla.addEventListener('change', function () { if (casilla.checked) S.marcados[clave] = true; else delete S.marcados[clave]; pintarBarras(); });
+      tr.cells[0].insertBefore(casilla, tr.cells[0].firstChild);
+    });
+    if (filas.length > 12) v.appendChild(barraLote());         // en una lista larga, los botones también al final
+    pintarBarras();
+  }
   if (packs.length) buscarDocumentos(packs.map(function (x) { return x[1]; }), ['albaranes']).then(function (vistos) {
     packs.forEach(function (x) {
       var p = vistos[x[1]]; if (!p) return;

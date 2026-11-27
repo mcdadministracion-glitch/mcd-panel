@@ -327,6 +327,18 @@
   .opciones-subir select, .opciones-subir input[type=text] { min-height:36px; }
   .opciones-subir .estado-paquete { color:var(--suave); font-size:var(--t-s); }
   .grupo-botones { display:inline-flex; flex-wrap:wrap; gap:var(--e05); }
+  /* (27-nov-2026, plan de autonomía) Por revisar en lote: casilla de cada fila, barra de acciones y tarjetas de grupos */
+  input.marca-fila { width:24px; height:24px; margin:0 var(--e1) 0 0; vertical-align:middle; cursor:pointer; accent-color:var(--marca); flex-shrink:0; }
+  .barra.lote { background:var(--panel); border:1px solid var(--borde); border-radius:var(--radio-s); padding:var(--e1) var(--e15); }
+  .lote-estado { color:var(--suave); font-size:var(--t-s); }
+  .campo-lote { display:inline-flex; flex-wrap:wrap; align-items:center; gap:var(--e1); font-size:var(--t-s); color:var(--suave); } .campo-lote select { min-height:40px; }
+  .ademas-pack { color:var(--suave); }
+  .tarjeta.empresas-nuevas, .grupos-pack { margin-bottom:var(--e2); } .tarjeta.empresas-nuevas .boton { margin-top:var(--e15); }
+  .tarjeta.grupo-pack { margin-top:var(--e15); } .tarjeta.grupo-pack .barra { margin:var(--e15) 0 0; }
+  .lista-lote { list-style:none; margin:var(--e15) 0; padding:0; display:grid; gap:var(--e1); }
+  .lista-lote > li { overflow-wrap:anywhere; } .lista-lote ul { margin:var(--e05) 0 0 34px; padding:0; list-style:none; display:grid; gap:var(--e05); font-size:var(--t-s); }
+  .lista-lote input[type=checkbox] { width:24px; height:24px; margin:0 var(--e1) 0 0; vertical-align:middle; accent-color:var(--marca); }
+  .empresa-nueva { cursor:pointer; } .nota-lote { color:var(--suave); font-size:var(--t-s); }
   .abrir-fila { color:var(--marca); background:none; border:0; padding:0; font:inherit; font-weight:700; text-align:left; cursor:pointer; font-variant-numeric:tabular-nums; }
   .abrir-fila:hover { text-decoration:underline; text-underline-offset:3px; }
   .paginacion { display:flex; gap:var(--e15); align-items:center; justify-content:center; margin-top:var(--e2); color:var(--suave); font-size:var(--t-s); }
@@ -601,6 +613,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js" integrity="sha384-GFr3yTh5lJznCbZfpTtXnwboFsxqtTQoeTZCRHhE0579KrRmlCzen5AA8ohaB5ug" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" integrity="sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG" crossorigin="anonymous"></script>
 <script src="config.js"></script>
-<script src="app.js?v=v763ea61"></script>
+<script src="app.js?v=vf2eaa25"></script>
 </body>
 </html>
