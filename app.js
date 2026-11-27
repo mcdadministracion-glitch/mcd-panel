@@ -2080,7 +2080,8 @@ var MOTIVOS_REVISION = [
   [/datos bancarios|cuenta bancaria|pagar por transferencia/, 'Cuenta bancaria'],
   [/mismo numero que|mismo nif y numero|posible repetido/, 'Repetido'],
   [/lectura ocr poco fiable/, 'Foto que no se lee'], [/paginas \(maximo/, 'Demasiadas páginas'], [/tabla de precios/, 'Tabla de precios'],
-  [/no aparece el cif ni el nombre/, 'No es de ninguna empresa'], [/orden de carga/, 'Orden de carga']
+  [/no aparece el cif ni el nombre/, 'No es de ninguna empresa'], [/orden de carga/, 'Orden de carga'],
+  [/no se pudo leer tras|error interno del programa/, 'El programa no pudo leerlo']
 ];
 function motivosDe(x) {
   if (x.tipo === 'Pack por confirmar' || x.tipo === 'Albarán sin factura') return [];
@@ -2365,6 +2366,15 @@ function vRevision(v, lista) {
         lanzar('Descartando', descartables, function (x) {
           return x.hoja === 'tickets' ? rpc('panel_descartar_ticket', { p_id: x.id }) : rpc('panel_descartar', { p_empresa: x.empresa, p_hoja: x.hoja, p_id: x.id });
         }, descartables.length === 1 ? 'documento descartado' : 'documentos descartados');
+      }));
+      // «Volver a leer» varios de revisión manual (27-nov-2026: una tarde con la clave de la IA mal dejó 21 sin leer).
+      // Una tabla de precios sin remitente comprobado no entra aquí: darla por buena se decide una a una, en su ficha.
+      var releibles = e.filter(function (x) { return x.tipo === 'Revisión manual' && !/^Tabla de precios (en un correo|de un remitente)/.test(texto(x.motivo)); });
+      if (releibles.length) b.appendChild(boton('Volver a leer (' + releibles.length + ')', 'lote-releer', async function () {
+        if (!await confirmar('¿Volver a leer ' + (releibles.length === 1 ? 'este documento' : 'estos ' + releibles.length + ' documentos') + '?\n\nEl programa los lee otra vez tal como llegaron, con el mismo tachado automático. Tarda uno o dos minutos y cada lectura cuesta unos céntimos de IA.',
+          { si: 'Volver a leer' })) return;
+        lanzar('Pidiendo', releibles, function (x) { return rpc('panel_reintentar_revision', { p_rev: x.id }); },
+          releibles.length === 1 ? 'documento se volverá a leer en uno o dos minutos' : 'documentos se volverán a leer en uno o dos minutos');
       }));
       if (packsMarcados.length) {
         var papeles = packsMarcados.map(function (x) { return propuestas[x.empresa + '|' + x.id]; });
